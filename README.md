@@ -194,3 +194,115 @@ BACKUP_ID
 - 后端任务模块补充 WebSocket 任务进度通道 /api/v1/tasks/{task_id}/ws?token=...，同时保留 SSE 事件流。
 
 仍需在真实部署环境中配置 MySQL、Redis、MinIO、Milvus、GROBID、BGE、LLM 和 Celery Worker 后进行完整联调。
+
+## 9. 本版迭代变更（2026-06-29）
+
+### 9.1 模型缓存路径跨平台修复
+
+**问题**：`bge_embedding.py` / `bge_reranker.py` 中 `cache_dir` 硬编码为容器路径 `/app/hf_cache`，Windows 本地开发时无法识别，抛出 `FileNotFoundError`。
+
+**修复**：
+- `config.py` 新增 `hf_cache_dir: str = './runtime/hf_cache'` 配置项，提供跨平台默认相对路径。
+- `bge_embedding.py` / `bge_reranker.py` 改为从 `settings.hf_cache_dir` 读取；`_resolve_local_path()` 先查本地缓存再尝试 ModelScope 下载，避免每次启动都联网。
+- 新增 `_is_valid_model_dir()` 函数校验模型目录完整性（检查 `config.json`），过滤 HuggingFace / ModelScope 下载中途的临时目录。
+- `.env.docker` 新增 `HF_CACHE_DIR=/app/hf_cache`，Docker 环境下走 `/app/hf_cache` volume。
+- `.env`（本地）：新增 `HF_CACHE_DIR=./runtime/hf_cache`，模型下载到项目 `runtime/` 目录。
+
+### 9.2 Docker 环境模型卷挂载修复
+
+**问题**：`docker-compose.yml` 中仅 Worker 容器挂载了 `hf_cache` volume，Backend API 容器未挂载，导致 RAG 问答时找不到已下载的模型。
+
+**修复**：
+- Backend 服务新增 `- hf_cache:/app/hf_cache` volume 挂载，与 Worker 共享同一模型缓存卷。
+
+### 9.3 RAG 问答流式端点 Session 生命周期修复
+
+**问题**：`ask_stream` 端点使用 FastAPI `Depends(get_db)` 注入 `AsyncSession`，但生成器函数中 `yield` 后 session 可能已被 FastAPI 依赖注入清理，导致 `db.commit()` 时 session 已失效。
+
+**修复**：
+- `ask_stream` 不再接收注入的 `db`，改为在生成器内部用 `async with AsyncSessionLocal() as db` 自建 session，生命周期与生成器完全一致。
+
+### 9.4 问答来源外键完整性修复
+
+**问题**：Milvus 向量库中 `chunk_id` 可能在 MySQL `text_chunks` 表中已不存在（论文重新处理时旧 chunks 被删但向量未同步），插入 `qa_message_sources` 时触发外键约束失败（IntegrityError 1452）。
+
+**修复**：
+- `RAGService` 新增 `_add_message_sources()` 统一方法：插入 source 前批量 `SELECT id FROM text_chunks WHERE id IN (...)` 校验 chunk_id 有效性；不存在的设 `chunk_id=None`（FK 允许 NULL，`ON DELETE SET NULL`）。
+
+### 9.5 PDF 阅读器连续滚动 + 按需渲染重构
+
+**问题**：旧版 `PdfReader.vue` 使用单 Canvas 翻页模式，长文档（75+ 页）操作不直观，且不支持连续浏览。
+
+**重构内容**：
+
+**9.5.1 连续滚动 + 骨架屏**
+- 外层滚动容器 `overflow-y: auto`，内部按 `totalPages` 生成骨架 `<div>` 撑开滚动条高度。
+- 首页 viewport 尺寸用于估算骨架高/宽，确保滚动条长度与实际内容一致。
+- 未渲染页显示脉冲动画骨架（Skeleton Loading）。
+
+**9.5.2 IntersectionObserver 按需渲染**
+- 以滚动容器为 `root`，`rootMargin: 300px` 提前预渲染。
+- 每页骨架带 `data-page` 属性，Observer 监听可见性。
+- 页面进入 rootMargin → 调用 `page.render()` 渲染到对应 `<canvas>`。
+- 维护滑动渲染窗口（`[firstVisible - 2, lastVisible + 3]`），窗口外的 Canvas 置零尺寸释放 GPU 内存。
+
+**9.5.3 文本层对齐修复**
+- 引入 `pdfjs-dist/web/pdf_viewer.css` 官方样式。
+- 文本层改用 `new pdfjsLib.TextLayer()` API 替代手动 `<span>` 创建 + `Util.transform`。
+- 设置 `--scale-factor` CSS 变量确保缩放时文字坐标正确。
+- HTML 结构改为汉堡包定位：`.page-inner (relative)` → `canvas + .textLayer + .annotationLayer`（均为 absolute）。
+
+**9.5.4 Zotero-style 悬浮菜单 + 划词高亮**
+- `MouseUp` → 计算选区百分比坐标（缩放无关）→ 暂存 `pendingHighlight` → 弹出悬浮菜单（Teleport 到 body）。
+- 菜单提供 4 种颜色圆按钮（黄/绿/红/蓝） + 复制按钮。
+- 点击颜色 → `confirmHighlight(color)` 将 pending 转为正式高亮，渲染到 `.annotationLayer`。
+- 点击菜单外 → `dismissMenu()` 丢弃 pending，取消选中。
+- 高亮坐标使用页面容器百分比（0~1），缩放 Canvas 后位置自动复原。
+
+**9.5.5 高亮删除**
+- 每个 `.highlight-box` 内嵌 `×` 删除按钮，默认隐藏，hover 高亮框时显示。
+- 点击删除 → `deleteHighlight(id)` 移除并重渲染对应页标注层。
+
+### 9.6 本地开发环境文件
+
+- 新建 `.env`（本地开发配置）：所有 host 指向 `127.0.0.1`，路径使用 `./runtime/...` 相对路径。
+- `.env.docker` 保持 Docker 容器内 host 名和 `/app/...` 路径不变。
+
+### 9.7 数据流水线元数据增强（Chunk Enrichment）
+
+**问题**：旧流水线将 GROBID 提取的散乱纯文本直接按字符数切片 → BGE 向量化 → Milvus，chunk 丢失文献级上下文。用户提问时检索出的片段无法分辨"该模型"指代什么，大模型回答质量严重下降。
+
+**修复**：在 `_build_vector_index` 向量化阶段前，插入"元数据增强"环节：
+
+**9.7.1 上下文前缀注入（`_build_context_prefix`）**
+
+`pipeline_service.py` 新增方法，从 `paper_extracted_info` 表中读取 LLM 已抽取的结构化信息，构建如下格式的上下文前缀：
+
+```
+[文献：基于边缘信息增强的超声图像去噪算法研究]
+[核心方法：Canny边缘检测、VGG16特征提取]
+```
+
+注入后，每个 chunk 在向量化时实际送入 BGE 的文本变为：
+
+```
+[文献：XXX]
+[核心方法：YYY]
+{原始 chunk 文本}
+```
+
+**9.7.2 section_title 填充**
+
+- `_load_content_for_chunks` 新增章节标题查找逻辑：遍历 ContentItem 时维护"当前章节标题"变量，遇 `item_type='heading'` 则更新，后续段落继承该标题。
+- `semantic_chunks` 透传 `section_title` 到每个 chunk。
+- `_insert_text_chunks` 将 `section_title`（截取前 300 字符）写入 Milvus 的 `section_title` 字段（此前固定为空字符串）。
+
+**9.7.3 双写策略**
+
+| 存储 | 内容 | 用途 |
+|------|------|------|
+| MySQL `text_chunks.chunk_text` | 原始文本（无前缀） | 前端展示、来源引用 |
+| Milvus `text` 字段 | 富文本（上下文前缀 + 原始文本） | 向量检索时展示 |
+| BGE 向量化输入 | 富文本 | 提升语义检索精度 |
+
+**效果**：用户提问时，Milvus 返回的检索片段自带文献来源信息，BGE 向量能通过元数据前缀捕捉到"这篇文章做什么"与查询的语义相关性，大模型生成回答时不再面对无头文本片段。

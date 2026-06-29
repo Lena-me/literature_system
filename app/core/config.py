@@ -80,8 +80,8 @@ class Settings(BaseSettings):
 
     # LLM
     llm_base_url: str
-    llm_api_key: str = 'EMPTY'
-    llm_model: str = 'qwen2.5-7b-instruct'
+    llm_api_key: str = 'sk-24745623d5bb4b21bd9d85374627bbe6'
+    llm_model: str = 'deepseek-v4-pro'
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
 

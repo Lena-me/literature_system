@@ -1,64 +1,187 @@
 <script setup lang="ts">
+
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import BrandMark from '@/components/common/BrandMark.vue'
 import { useAuthStore } from '@/stores/auth'
 import { authApi } from '@/api/auth'
-const router = useRouter(); const auth = useAuthStore(); const mode = ref<'login'|'register'|'reset'>('login')
-const form = reactive({ account: 'admin', username: '', password: 'admin123456', confirm: '', name: '', email: '', phone: '', code: '' })
-const title = computed(() => mode.value === 'login' ? '登录科研知识平台' : mode.value === 'register' ? '创建科研账户' : '重置密码')
-const codeAccount = computed(() => mode.value === 'register' ? (form.email || form.phone || form.username) : form.account)
+
+
+const router = useRouter();
+const auth = useAuthStore();
+const mode = ref<'login'|'register'|'reset'>('login')
+const form = reactive({
+  account: 'admin',
+  username: '',
+  password: 'admin123456',
+  confirm_password: '',
+  name: '',
+  email: '',
+  phone: '',
+  code: ''
+})
+// 根据 mode 切换标题
+const title = computed(() => {
+  if(mode.value === 'login'){
+    return '登录科研知识平台'
+  }
+  else if(mode.value === 'register'){
+    return '创建科研账户'
+  }
+  else {
+    return '重置密码'
+  }
+})
+
+// 验证码机制，根据手机号获取验证码
+const codeAccount = computed(() => {return form.phone})
+
+// 获取验证码
 async function getCode() {
-  if (!codeAccount.value) return ElMessage.warning('请先填写邮箱、手机号或账号')
-  const res = await authApi.sendCode(codeAccount.value, mode.value === 'reset' ? 'reset_password' : 'register')
-  if (res.dev_code) form.code = res.dev_code
+  if (!codeAccount.value) {
+    return ElMessage.warning('请先填写手机号')
+  }
+  let scene: 'register' | 'reset_password'
+  if (mode.value === 'reset'){
+    scene = 'reset_password'
+  }
+  else {
+    scene = 'register'
+  }
+  // 调用发送短信接口
+  const res = await authApi.sendCode(codeAccount.value, scene)
+  if (res.dev_code) {
+    form.code = res.dev_code
+  }
   ElMessage.success(res.dev_code ? `验证码已生成：${res.dev_code}` : res.message)
 }
+
+
 async function submit() {
+  // 登录功能
   if (mode.value === 'login') {
-    const user = await auth.login(form.account, form.password)
+    const user = await auth.login(form.phone, form.password)
     router.push(user.role === 'admin' ? '/admin' : '/research')
-  } else if (mode.value === 'register') {
-    if (form.password !== form.confirm) return ElMessage.warning('两次密码不一致')
+  }
+
+  // 注册功能
+  else if (mode.value === 'register') {
+    if (form.password !== form.confirm_password) return ElMessage.warning('两次密码不一致')
     if (!form.code) return ElMessage.warning('请输入验证码')
-    const user = await auth.register({ username: form.username, password: form.password, name: form.name, email: form.email, phone: form.phone, verification_code: form.code })
+    const user = await auth.register({
+      username: form.username,
+      password: form.password,
+      confirm_password: form.confirm_password,
+      email: form.email,
+      phone: form.phone,
+      code: form.code
+    })
     router.push(user.role === 'admin' ? '/admin' : '/research')
-  } else {
-    if (!form.code) return ElMessage.warning('请输入验证码')
-    await authApi.resetPassword({ account: form.account, new_password: form.password, verification_code: form.code })
-    ElMessage.success('密码已重置，请重新登录'); mode.value = 'login'
+  }
+
+  // 修改密码功能
+  else {
+    if (!form.code) {
+      return ElMessage.warning('请输入验证码')
+    }
+    await authApi.resetPassword({
+      phone: form.phone,
+      password: form.password,
+      confirm_password: form.confirm_password,
+      code: form.code
+    })
+    ElMessage.success('密码已重置，请重新登录');
+    mode.value = 'login'
   }
 }
 </script>
 <template>
   <main class="login-page page-shell">
-    <div class="aurora a1" /><div class="aurora a2" /><div class="grid" />
+    <!-- 背景 -->
+    <div class="aurora a1" />
+    <div class="aurora a2" />
+    <div class="grid" />
+
+    <!-- 左侧区域 -->
     <section class="hero fade-slide">
       <BrandMark />
       <h1 class="gradient-title">把论文变成可问、可比、可复现的知识系统</h1>
-      <p>文献上传、结构化解析、RAG溯源问答、研读报告、多文献对比、知识图谱与复现实验建议的一体化科研工作台。</p>
-      <div class="hero-cards"><div><b>RAG</b><span>检索增强生成</span></div><div><b>Graph</b><span>主题实体网络</span></div><div><b>Agent</b><span>报告与复现推导</span></div></div>
+      <p>文献上传、结构化解析、RAG溯源问答、研读报告、多文献对比、知识图谱与复现实验建议的一体化科研工作台。</p >
+      <div class="hero-cards">
+        <div>
+          <b>RAG</b>
+          <span>检索增强生成</span>
+        </div>
+        <div>
+          <b>Graph</b>
+          <span>主题实体网络</span>
+        </div>
+        <div>
+          <b>Agent</b>
+          <span>报告与复现推导</span>
+        </div>
+      </div>
     </section>
+
+    <!-- 右侧表单 -->
     <section class="login-card glass fade-slide">
-      <h2>{{ title }}</h2><p class="subtitle">默认管理员：admin / admin123456</p>
+      <h2>{{ title }}</h2>
+      <!-- 注意删除 -->
+      <p class="subtitle">默认管理员：13800138000 / admin123456</p >
+
       <el-form label-position="top" @submit.prevent>
-        <el-form-item v-if="mode !== 'register'" label="账号 / 邮箱 / 手机号"><el-input v-model="form.account" size="large" /></el-form-item>
+        <!-- 只有登录和重置密码显示这个 -->
+        <el-form-item v-if="mode !== 'register'" label="手机号">
+          <el-input v-model="form.phone" size="large"/>
+        </el-form-item>
+
+        <!-- 注册表单 -->
         <template v-if="mode === 'register'">
-          <el-form-item label="用户名"><el-input v-model="form.username" size="large" /></el-form-item>
-          <el-form-item label="真实姓名"><el-input v-model="form.name" size="large" /></el-form-item>
-          <el-form-item label="邮箱"><el-input v-model="form.email" size="large" /></el-form-item>
-          <el-form-item label="手机号"><el-input v-model="form.phone" size="large" /></el-form-item>
+          <el-form-item label="用户名">
+            <el-input v-model="form.username" size="large"/>
+          </el-form-item>
+
+          <el-form-item label="邮箱">
+            <el-input v-model="form.email" size="large"/>
+          </el-form-item>
+
+          <el-form-item label="手机号">
+            <el-input v-model="form.phone" size="large"/>
+          </el-form-item>
         </template>
-        <el-form-item label="密码"><el-input v-model="form.password" size="large" show-password /></el-form-item>
-        <el-form-item v-if="mode === 'register'" label="确认密码"><el-input v-model="form.confirm" size="large" show-password /></el-form-item>
-        <el-form-item v-if="mode !== 'login'" label="验证码"><el-input v-model="form.code" size="large"><template #append><el-button @click="getCode">获取验证码</el-button></template></el-input></el-form-item>
-        <el-button class="submit is-glow" size="large" :loading="auth.loading" @click="submit">{{ mode === 'login' ? '登录' : mode === 'register' ? '注册并进入' : '重置密码' }}</el-button>
+
+        <el-form-item label="密码">
+          <el-input v-model="form.password" size="large" show-password/>
+        </el-form-item>
+
+        <el-form-item v-if="mode !== 'login'" label="确认密码">
+          <el-input v-model="form.confirm_password" size="large" show-password/>
+        </el-form-item>
+
+        <el-form-item v-if="mode !== 'login'" label="验证码">
+          <el-input v-model="form.code" size="large">
+            <template #append>
+              <el-button @click="getCode">获取验证码</el-button>
+            </template>
+          </el-input>
+        </el-form-item>
+
+        <el-button class="submit is-glow" size="large" :loading="auth.loading" @click="submit">
+          {{ mode === 'login' ? '登录' : mode === 'register' ? '注册并进入' : '重置密码' }}
+        </el-button>
       </el-form>
-      <div class="switches"><button @click="mode='login'">登录</button><button @click="mode='register'">注册</button><button @click="mode='reset'">忘记密码</button></div>
+
+      <!-- 底部按钮 -->
+      <div class="switches">
+        <button v-if="mode !== 'login'" @click="mode='login'">登录</button>
+        <button v-if="mode !== 'register'" @click="mode='register'">注册</button>
+        <button v-if="mode !== 'reset'" @click="mode='reset'">忘记密码</button>
+      </div>
     </section>
   </main>
 </template>
+
 <style scoped>
 .login-page { position:relative; overflow:hidden; display:grid; grid-template-columns: 1.1fr 460px; gap: 48px; align-items:center; padding: 70px 8vw; }
 .grid { position:absolute; inset:0; background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 48px 48px; mask-image: radial-gradient(circle at center, #000, transparent 72%); }

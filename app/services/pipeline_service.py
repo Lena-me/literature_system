@@ -222,37 +222,92 @@ main_results, innovations, limitations, future_work。
             paper.keywords = info.keywords
             db.commit()
 
+    def _build_context_prefix(self, paper_id: int) -> str:
+        """从已提取的结构化信息构建元数据上下文前缀，注入到每个 chunk 用于提升检索质量"""
+        with celery_db() as db:
+            info = db.execute(
+                select(PaperExtractedInfo).where(PaperExtractedInfo.paper_id == paper_id)
+            ).scalar_one_or_none()
+            paper = db.get(Paper, paper_id)
+
+        parts: list[str] = []
+
+        # 1. 文献标题（核心锚点）
+        title = (info.title if info else None) or (paper.title if paper else None) or ''
+        if title:
+            parts.append(f'[文献：{title.strip()[:200]}]')
+
+        # 2. 核心方法 / 技术（提升"该模型"、"该方法"等指代消解）
+        if info:
+            method = info.method
+            if method:
+                method_str = ''
+                try:
+                    parsed = loads(method)
+                    if isinstance(parsed, list):
+                        method_str = '、'.join([str(m).strip()[:80] for m in parsed[:3] if m])
+                    elif isinstance(parsed, str) and parsed.strip():
+                        method_str = parsed.strip()[:120]
+                except Exception:
+                    if isinstance(method, str) and method.strip():
+                        method_str = method.strip()[:120]
+                if method_str:
+                    parts.append(f'[核心方法：{method_str}]')
+
+        return '\n'.join(parts) + '\n' if parts else ''
+
     # ========================================================================
     # 向量化 + Milvus
     # ========================================================================
 
     def _load_content_for_chunks(self, paper_id: int) -> list[dict]:
+        """加载 ContentItem 列表，同时为每个段落找到最近的章节标题"""
         with celery_db() as db:
             result = db.execute(
                 select(ContentItem)
                 .where(ContentItem.paper_id == paper_id)
                 .order_by(ContentItem.order_index.asc())
             )
-            return [
-                {'section_id': x.id, 'content': x.content, 'page_number': x.page_number}
-                for x in result.scalars().all()
-            ]
+            items = result.scalars().all()
 
-    def _insert_text_chunks(self, paper_id: int, chunks: list[dict]) -> list[dict]:
+        # 构建 section_title 映射：每个段落继承其之前最近的 heading
+        current_section_title = ''
+        section_map: dict[int, str] = {}
+        for item in items:
+            if item.item_type == 'heading':
+                current_section_title = (item.content or '')[:200]
+            section_map[item.id] = current_section_title
+
+        return [
+            {
+                'section_id': x.id,
+                'content': x.content,
+                'page_number': x.page_number,
+                'section_title': section_map.get(x.id, ''),
+            }
+            for x in items
+        ]
+
+    def _insert_text_chunks(self, paper_id: int, chunks: list[dict], context_prefix: str = '') -> list[dict]:
+        """
+        MySQL 存储原始文本（不含上下文前缀），供前端展示。
+        Milvus 存储富文本（含上下文前缀 + section_title），供向量检索。
+        """
         if not chunks:
             return []
         with celery_db() as db:
             db.execute(delete(TextChunk).where(TextChunk.paper_id == paper_id))
             rows: list[dict] = []
             for c in chunks:
+                raw_text = c['text']
                 m = TextChunk(
                     paper_id=paper_id,
                     section_id=c.get('section_id'),
-                    chunk_text=c['text'],
+                    chunk_text=raw_text,              # MySQL 存原始文本
                     page_number=c.get('page_number'),
                     start_position=c.get('start_position', 0),
                     end_position=c.get('end_position', 0),
-                    chunk_size=len(c['text']),
+                    chunk_size=len(raw_text),
                     overlap_length=settings.chunk_overlap,
                     vector_dim=settings.milvus_vector_dim,
                     vectorization_status='pending',
@@ -260,10 +315,17 @@ main_results, innovations, limitations, future_work。
                 db.add(m)
                 rows.append({'model': m, 'chunk': c})
             db.flush()
+
+            # 构建 Milvus 写入行：text 字段使用富文本（上下文前缀 + 原始文本）
+            # section_title 从 chunk 元数据中获取（最近的章节标题）
             output = [
-                {'chunk_id': item['model'].id, 'paper_id': paper_id,
-                 'page_number': item['model'].page_number, 'section_title': '',
-                 'text': item['model'].chunk_text}
+                {
+                    'chunk_id': item['model'].id,
+                    'paper_id': paper_id,
+                    'page_number': item['model'].page_number,
+                    'section_title': (item['chunk'].get('section_title') or '')[:300],
+                    'text': ((context_prefix or '') + item['model'].chunk_text)[:6000],
+                }
                 for item in rows
             ]
             db.commit()
@@ -291,12 +353,19 @@ main_results, innovations, limitations, future_work。
             db.commit()
 
     def _build_vector_index(self, paper_id: int) -> None:
+        # 1. 构建元数据上下文前缀（文献标题 + 核心方法）
+        context_prefix = self._build_context_prefix(paper_id)
+
+        # 2. 加载 ContentItem（含 section_title），按语义边界分块
         items = self._load_content_for_chunks(paper_id)
         chunks = semantic_chunks(items, settings.chunk_size, settings.chunk_overlap)
-        texts = [c['text'] for c in chunks]
+
+        # 3. 向量化：使用富文本（上下文前缀 + 原始 chunk），提升语义检索质量
+        texts = [(context_prefix or '') + c['text'] for c in chunks]
         vectors = self.embedding.encode_documents(texts) if texts else []
 
-        db_rows = self._insert_text_chunks(paper_id, chunks)
+        # 4. 双写：MySQL 存原始文本，Milvus 存富文本（含上下文前缀）
+        db_rows = self._insert_text_chunks(paper_id, chunks, context_prefix)
         if not db_rows or not vectors:
             return
 

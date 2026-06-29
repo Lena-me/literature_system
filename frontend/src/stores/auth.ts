@@ -15,7 +15,16 @@ export const useAuthStore = defineStore('auth', {
         return res.user
       } finally { this.loading = false }
     },
-    async register(payload: { username: string; password: string; name?: string; email?: string; phone?: string; verification_code: string }) {
+    async register(
+        payload: {
+          username: string;
+          password: string;
+          confirm_password: string;
+          email?: string;
+          phone?: string;
+          code: string
+        })
+    {
       const res = await authApi.register(payload)
       this.token = res.access_token; this.user = res.user
       localStorage.setItem('access_token', res.access_token)

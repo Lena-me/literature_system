@@ -15,24 +15,25 @@ class TokenOut(BaseModel):
 
 class RegisterIn(BaseModel):
     username: str = Field(min_length=3, max_length=50)
-    password: str = Field(min_length=6, max_length=128)
-    name: str | None = None
+    password: str = Field(min_length=6, max_length=18)
+    confirm_password: str = Field(min_length=6, max_length=18)
     email: str | None = None
-    phone: str | None = None
-    verification_code: str = Field(min_length=4, max_length=8)
+    phone: str
+    code: str = Field(min_length=4, max_length=8)
 
 class LoginIn(BaseModel):
-    account: str
+    phone: str
     password: str
 
 class VerificationCodeIn(BaseModel):
-    account: str
+    phone: str
     purpose: Literal['register', 'reset_password'] = 'register'
 
 class ResetPasswordIn(BaseModel):
-    account: str
-    verification_code: str = Field(min_length=4, max_length=8)
-    new_password: str = Field(min_length=6, max_length=128)
+    phone: str
+    code: str = Field(min_length=4, max_length=8)
+    password: str = Field(min_length=6, max_length=18)
+    confirm_password: str = Field(min_length=6, max_length=18)
 
 class UserOut(BaseModel):
     id: int
@@ -160,7 +161,8 @@ class UserCreateIn(BaseModel):
     password: str = Field(min_length=6, max_length=128)
     name: str | None = None
     email: str | None = None
-    phone: str | None = None
+    phone: str
     role: Literal['researcher', 'admin'] = 'researcher'
     status: Literal['active', 'disabled'] = 'active'
     quota: dict[str, Any] | None = None
+

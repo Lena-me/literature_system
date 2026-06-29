@@ -14,43 +14,35 @@ router = APIRouter(prefix='/auth', tags=['认证'])
 
 @router.post('/verification-code')
 async def verification_code(data: VerificationCodeIn, db: AsyncSession = Depends(get_db)):
-    account = data.account.strip()
+    phone = data.phone.strip()
     if data.purpose == 'reset_password':
         user = (
             await db.execute(
-                select(User).where(
-                    or_(User.username == account, User.email == account, User.phone == account)
-                )
-            )
-        ).scalar_one_or_none()
+                select(User).where(User.phone == phone))).scalar_one_or_none()
         if not user:
             raise HTTPException(404, '该账号未注册')
-    return await VerificationCodeService().issue(account, data.purpose)
+    return await VerificationCodeService().issue(phone, data.purpose)
 
 
 @router.post('/register', response_model=TokenOut)
 async def register(data: RegisterIn, request: Request, db: AsyncSession = Depends(get_db)):
-    account_for_code = data.email or data.phone or data.username
-    await VerificationCodeService().verify(account_for_code, 'register', data.verification_code)
+    await VerificationCodeService().verify(data.phone, 'register', data.code)
 
     exists = (
         await db.execute(
             select(User).where(
-                or_(
-                    User.username == data.username,
-                    User.email == data.email if data.email else False,
-                    User.phone == data.phone if data.phone else False,
-                )
+                User.phone == data.phone,
             )
         )
     ).scalar_one_or_none()
+
+
     if exists:
         raise HTTPException(400, '账号、邮箱或手机号已存在')
 
     user = User(
         username=data.username,
         password_hash=hash_password(data.password),
-        name=data.name,
         email=data.email,
         phone=data.phone,
         role='researcher',
@@ -78,28 +70,22 @@ async def register(data: RegisterIn, request: Request, db: AsyncSession = Depend
 @router.post('/login', response_model=TokenOut)
 async def login(data: LoginIn, request: Request, db: AsyncSession = Depends(get_db)):
     guard = LoginGuard()
-    await guard.assert_not_locked(data.account)
+    await guard.assert_not_locked(data.phone)
 
     user = (
         await db.execute(
-            select(User).where(
-                or_(
-                    User.username == data.account,
-                    User.email == data.account,
-                    User.phone == data.account,
-                )
-            )
+            select(User).where(User.phone == data.phone)
         )
     ).scalar_one_or_none()
 
     if not user or not verify_password(data.password, user.password_hash):
-        await guard.record_failure(data.account)
+        await guard.record_failure(data.phone)
         raise HTTPException(401, '账号或密码错误')
 
     if user.status != 'active':
         raise HTTPException(403, '账号已被禁用')
 
-    await guard.clear(data.account)
+    await guard.clear(data.phone)
     token = create_access_token(str(user.id), user.role)
 
     # last_login_at / audit 不是核心登录路径。失败不能导致登录失败。
@@ -121,16 +107,12 @@ async def login(data: LoginIn, request: Request, db: AsyncSession = Depends(get_
 
 @router.post('/reset-password')
 async def reset_password(data: ResetPasswordIn, db: AsyncSession = Depends(get_db)):
-    await VerificationCodeService().verify(data.account, 'reset_password', data.verification_code)
+    await VerificationCodeService().verify(data.phone, 'reset_password', data.code)
     user = (
         await db.execute(
-            select(User).where(
-                or_(User.username == data.account, User.email == data.account, User.phone == data.account)
-            )
-        )
-    ).scalar_one_or_none()
+            select(User).where(User.phone == data.phone))).scalar_one_or_none()
     if not user:
         raise HTTPException(404, '账号不存在')
-    user.password_hash = hash_password(data.new_password)
+    user.password_hash = hash_password(data.password)
     await db.commit()
     return {'message': '密码已重置'}
