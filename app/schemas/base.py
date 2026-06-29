@@ -94,6 +94,15 @@ class QAAskIn(BaseModel):
     session_id: int | None = None
     top_k: int | None = None
 
+class SessionCreateIn(BaseModel):
+    title: str | None = None
+    paper_ids: list[int] | None = None
+
+class SessionUpdateIn(BaseModel):
+    title: str | None = None
+    add_paper_ids: list[int] | None = None
+    remove_paper_ids: list[int] | None = None
+
 class ReportCreateIn(BaseModel):
     paper_id: int
     modules: list[str] | None = None

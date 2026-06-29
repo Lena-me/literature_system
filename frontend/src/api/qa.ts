@@ -1,5 +1,5 @@
 import { API_PREFIX, http } from './client'
-import type { ChatMessage } from '@/types/domain'
+import type { ChatMessage, SessionDetail, SessionSummary, SuggestedQuestions } from '@/types/domain'
 export const qaApi = {
   ask: (payload: { question: string; paper_ids?: number[]; session_id?: number; top_k?: number }) => http.post<any, { session_id: number; answer: string; sources: any[] }>('/qa/ask', payload),
   async askStream(payload: { question: string; paper_ids?: number[]; session_id?: number; top_k?: number }, onEvent: (event: any) => void) {
@@ -17,6 +17,18 @@ export const qaApi = {
       }
     }
   },
-  sessions: () => http.get('/qa/sessions'),
-  messages: (sessionId: number) => http.get<any, ChatMessage[]>(`/qa/sessions/${sessionId}/messages`)
+  // ===== Session CRUD =====
+  sessions: () => http.get<any, SessionSummary[]>('/qa/sessions'),
+  getSession: (id: number, signal?: AbortSignal) => http.get<any, SessionDetail>(`/qa/sessions/${id}`, { signal }),
+  createSession: (payload?: { title?: string; paper_ids?: number[] }) =>
+    http.post<any, SessionDetail>('/qa/sessions', payload || {}),
+  updateSession: (id: number, payload: { title?: string; add_paper_ids?: number[]; remove_paper_ids?: number[] }) =>
+    http.patch<any, SessionDetail>(`/qa/sessions/${id}`, payload),
+  deleteSession: (id: number) => http.delete(`/qa/sessions/${id}`),
+  messages: (sessionId: number, limit?: number, signal?: AbortSignal) => {
+    const params = limit ? `?limit=${limit}` : ''
+    return http.get<any, ChatMessage[]>(`/qa/sessions/${sessionId}/messages${params}`, { signal })
+  },
+  suggestedQuestions: (sessionId: number) => http.get<any, SuggestedQuestions>(`/qa/sessions/${sessionId}/suggested-questions`),
+  generateSessionTitle: (sessionId: number, firstMessage: string) => http.post<any, { title: string }>(`/qa/sessions/${sessionId}/generate-title`, { first_message: firstMessage }),
 }

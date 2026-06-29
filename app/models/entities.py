@@ -210,7 +210,7 @@ class QAMessage(Base):
     session_id: Mapped[int] = mapped_column(ForeignKey('qa_sessions.id'), index=True)
     role: Mapped[str] = mapped_column(String(20), index=True)
     content: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 class QAMessageSource(Base):
     __tablename__ = 'qa_message_sources'

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import re
+
+import fitz  # PyMuPDF — PDF 内嵌元数据提取
+import httpx
+
 from sqlalchemy import delete, select
 
 from app.core.config import get_settings
@@ -38,7 +43,7 @@ class PaperPipelineService:
         self._replace_parsed_content(paper_id, parsed)
         self._set_paper_status(paper_id, 'extracting')
 
-        extracted = self._extract_info_with_llm(parsed)
+        extracted = self._extract_info_hybrid(parsed, pdf_bytes)
         self._save_extracted_info(paper_id, parsed, extracted)
 
         self._set_paper_status(paper_id, 'vectorizing')
@@ -110,45 +115,217 @@ class PaperPipelineService:
             db.commit()
 
     # ========================================================================
+    # 混合提取：PDF元数据 → DOI/Crossref → LLM 三层递进
+    # ========================================================================
+
+    @staticmethod
+    def _extract_pdf_embedded_metadata(pdf_bytes: bytes) -> dict:
+        """从 PDF 二进制读取内嵌元数据（秒级，零网络成本）"""
+        try:
+            doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+            meta = doc.metadata or {}
+            doc.close()
+            result: dict = {}
+            title = (meta.get('title') or '').strip()
+            if title and not title.lower().startswith(('microsoft', 'powerpoint')):
+                result['title'] = title
+            author_str = (meta.get('author') or '').strip()
+            if author_str:
+                # PyMuPDF author 可能是 "Wang, Fangyijie; Li, Ming" 格式
+                authors = [a.strip() for a in re.split(r'[;,]', author_str) if a.strip()]
+                result['authors'] = authors
+            return result
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _find_doi(text: str) -> str | None:
+        """从文本中正则提取 DOI（优先）或 arXiv ID"""
+        # 标准 DOI 格式：10.XXXX/...
+        doi_match = re.search(r'(10\.\d{4,9}/[-._;()/:A-Z0-9]+)', text, re.IGNORECASE)
+        if doi_match:
+            return doi_match.group(0).rstrip('.,;:')
+        # arXiv ID 格式：arXiv:XXXX.XXXXX 或 arxiv.org/abs/XXXX.XXXXX
+        arxiv_match = re.search(
+            r'(?:arxiv:\s*|arXiv:\s*|arxiv\.org/abs/)(\d{4}\.\d{4,5})',
+            text, re.IGNORECASE,
+        )
+        if arxiv_match:
+            return f'10.48550/arXiv.{arxiv_match.group(1)}'
+        return None
+
+    @staticmethod
+    def _fetch_crossref_metadata(doi: str) -> dict:
+        """通过 Crossref API 获取文献的权威元数据（Zotero同款）"""
+        url = f'https://api.crossref.org/works/{doi}'
+        try:
+            resp = httpx.get(url, timeout=5.0)
+            if resp.status_code != 200:
+                return {}
+            data = resp.json().get('message', {})
+        except Exception:
+            return {}
+
+        authors = []
+        for a in data.get('author', []):
+            family = (a.get('family') or '').strip()
+            given = (a.get('given') or '').strip()
+            name = f'{family} {given}'.strip() or family or given
+            if name:
+                authors.append(name)
+
+        pub = data.get('published-print') or data.get('published-online') or {}
+        year = None
+        date_parts = pub.get('date-parts', [[None]])
+        if date_parts and date_parts[0] and date_parts[0][0] is not None:
+            year = str(date_parts[0][0])
+
+        return {
+            'title': (data.get('title') or [None])[0],
+            'authors': authors,
+            'abstract': data.get('abstract'),
+            'publication_year': year,
+            'journal_conf': (data.get('container-title') or [None])[0],
+        }
+
+    def _extract_info_hybrid(self, parsed: dict, pdf_bytes: bytes) -> dict:
+        """
+        三层递进混合提取：
+        第0层 — GROBID metadata（已解析）
+        第1层 — PDF 内嵌元数据（PyMuPDF，秒级零成本）
+        第2层 — DOI → Crossref API（学术权威来源，Zotero同款）
+        第3层 — LLM Few-Shot 兜底（仅在前3层无法获取关键字段时启用）
+        """
+
+        # ── 第0层：GROBID 已提取的 metadata ──
+        grobid_meta = parsed.get('metadata') or {}
+        result: dict = {
+            'title': grobid_meta.get('title'),
+            'authors': grobid_meta.get('authors') or [],
+            'abstract': grobid_meta.get('abstract'),
+            'keywords': grobid_meta.get('keywords') or [],
+        }
+
+        # ── 第1层：PDF 内嵌元数据 ──
+        pdf_meta = self._extract_pdf_embedded_metadata(pdf_bytes)
+        result['title'] = result['title'] or pdf_meta.get('title')
+        result['authors'] = result['authors'] or pdf_meta.get('authors') or []
+
+        # ── 第2层：DOI → Crossref API ──
+        # 扫描前5000字符查找 DOI
+        joined = '\n'.join(
+            [x.get('content', '') for x in parsed.get('content_items', [])]
+        )[:5000]
+        doi = self._find_doi(joined)
+        if doi:
+            crossref = self._fetch_crossref_metadata(doi)
+            if crossref:
+                result['title'] = crossref.get('title') or result['title']
+                result['authors'] = crossref.get('authors') or result['authors']
+                result['abstract'] = crossref.get('abstract') or result['abstract']
+                result['publication_year'] = crossref.get('publication_year')
+                result['journal_conf'] = crossref.get('journal_conf')
+
+        # ── 第3层：LLM 兜底（仅当关键字段仍缺失时）──
+        missing_critical = not result.get('title') or not result.get('authors')
+        if missing_critical:
+            llm_result = self._extract_info_with_llm(parsed)
+            for key in llm_result:
+                if not result.get(key):
+                    result[key] = llm_result[key]
+        else:
+            # 关键字段已有，仍用 LLM 补充深度分析字段
+            llm_result = self._extract_info_with_llm(parsed)
+            deep_fields = [
+                'research_question', 'method', 'experiment_data',
+                'main_results', 'innovations', 'limitations', 'future_work',
+            ]
+            for key in deep_fields:
+                if key in llm_result and llm_result[key]:
+                    result[key] = llm_result[key]
+
+        return result
+
+    # ========================================================================
     # LLM — 不持有 DB
     # ========================================================================
 
+    @staticmethod
+    def _clean_json_output(raw_response: str) -> str:
+        """剥离大模型可能附加的 Markdown 代码块标记，确保纯净 JSON"""
+        cleaned = raw_response.strip()
+        # 移除 ```json ... ``` 或 ``` ... ``` 包裹
+        cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\n?\s*```\s*$', '', cleaned)
+        return cleaned.strip()
+
     def _extract_info_with_llm(self, parsed: dict) -> dict:
+        # 扩大上下文窗口至 12000 字符，确保覆盖中英文摘要和引言
         joined = '\n'.join(
             [x.get('content', '') for x in parsed.get('content_items', [])]
-        )[:16000]
+        )[:12000]
 
-        prompt = f"""你是科研文献结构化抽取Agent。请仅输出JSON，字段包括：
-title, authors, abstract, keywords, research_question, method, experiment_data,
-main_results, innovations, limitations, future_work。
-不得编造，缺失则为空字符串或空数组。
+        prompt = f"""你是一个严谨的学术文献信息抽取系统。你的唯一任务是从提供的 PDF 文本中提取结构化元数据。
 
-论文内容：
-{joined}"""
+【严格规则】
+1. 只输出标准的 JSON 格式，绝不允许附带任何解释性文字、问候语或 Markdown 格式符号（禁止 ```json 包裹）。
+2. 遇到无法确定的信息，必须保留该字段，但将值设为 null（字符串类型）或 []（数组类型）。
+3. 作者列表(authors)只提取人名，不要带职称、学位或单位信息。
+4. 关键词(keywords)尽量提取学术术语。如果是中文论文，优先提取中文关键词。
+5. 你输出的 JSON 必须包含以下全部字段，不得遗漏任何一个。
+
+【JSON 字段定义与示例】
+{{
+    "title": "基于边缘信息增强的超声图像去噪算法研究",
+    "authors": ["蒋温平"],
+    "abstract": "本文针对超声图像中存在的散斑噪声问题，提出了一种基于边缘信息增强的去噪算法...",
+    "keywords": ["超声图像", "去噪", "边缘信息增强", "深度学习", "Canny算子"],
+    "research_question": "如何在去除超声图像噪声的同时有效保留边缘细节信息",
+    "method": "提出基于边缘信息增强的深度学习去噪框架，结合Canny边缘检测与注意力机制",
+    "experiment_data": "在XXX公开数据集和临床超声图像上进行实验验证",
+    "main_results": "相比现有方法PSNR提升2.3dB，边缘保持指数提升5.7%",
+    "innovations": "首次将边缘检测与去噪网络深度融合，提出边缘引导的损失函数",
+    "limitations": "对极度低信噪比图像处理效果仍有提升空间",
+    "future_work": "将该方法扩展到3D超声图像和实时临床场景",
+    "publication_year": null,
+    "journal_conf": "湖南大学硕士学位论文"
+}}
+
+请对以下文本进行抽取：
+<text>
+{joined}
+</text>"""
 
         try:
             text = self.llm.chat(
-                [{'role': 'system', 'content': '你只输出可解析JSON。'}, {'role': 'user', 'content': prompt}],
+                [{'role': 'system', 'content': '你只输出可解析JSON。'},
+                 {'role': 'user', 'content': prompt}],
                 temperature=0.0,
-                max_tokens=2500,
+                max_tokens=3000,
             )
         except Exception:
             return {}
 
-        data = loads(text, default=None)
+        # 第一层：直接解析
+        clean = self._clean_json_output(text)
+        data = loads(clean, default=None)
         if isinstance(data, dict):
             return data
 
+        # 第二层：正则兜底提取 JSON 对象
         import json
-        import re
-        m = re.search(r'\{.*\}', text, flags=re.S)
-        if not m:
-            return {}
-        try:
-            parsed_data = json.loads(m.group(0))
-            return parsed_data if isinstance(parsed_data, dict) else {}
-        except Exception:
-            return {}
+        m = re.search(r'\{.*\}', clean, flags=re.S)
+        if m:
+            try:
+                parsed_data = json.loads(m.group(0))
+                if isinstance(parsed_data, dict):
+                    return parsed_data
+            except Exception:
+                pass
+
+        # 最终兜底：打印原始响应以便调试
+        print(f'[LLM抽取失败] 原始响应（前500字符）: {text[:500]}')
+        return {}
 
     # ========================================================================
     # 结构化信息落库

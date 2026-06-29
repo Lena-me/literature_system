@@ -36,3 +36,47 @@ export interface GraphNode { id: number | string; type: string; name: string; pr
 export interface GraphEdge { id?: number | string; source: number | string; target: number | string; relation_type: string; properties?: Record<string, unknown> }
 export interface KnowledgeGraph { id: number; name: string; nodes: GraphNode[]; edges: GraphEdge[] }
 export interface OperationOverview { paper_count: number; report_count: number; qa_count: number; records: any[]; recent_records?: any[]; keyword_cloud?: Record<string, number> }
+
+// ========== Notebook / Session 相关类型 ==========
+
+export interface SessionPaper {
+  id: number
+  title: string
+  original_filename: string
+  parse_status: string
+  authors?: string[] | string | null
+  publication_year?: number | null
+}
+
+export interface SessionSummary {
+  id: number
+  title: string
+  paper_count: number
+  paper_ids: number[]
+  last_message_preview?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SessionDetail {
+  id: number
+  user_id: number
+  title: string
+  papers: SessionPaper[]
+  paper_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeDomain {
+  id: number
+  name: string
+  description?: string
+  session_count: number
+  paper_count: number
+}
+
+export interface SuggestedQuestions {
+  questions: string[]
+  session_id?: number
+}

@@ -1,26 +1,138 @@
+/* ============================================================================
+   学术级浅色主题 (Academic Light Mode Design Tokens)
+   设计理念："纸质呼吸感"、"极简弱边框"、"高对比度柔和文本"、"知性蓝点缀"
+   ============================================================================ */
+
 :root {
-  --bg: #08111f;
-  --panel: rgba(255,255,255,.082);
-  --panel-2: rgba(255,255,255,.125);
-  --line: rgba(255,255,255,.14);
-  --text: #eef6ff;
-  --muted: #9fb1cc;
-  --brand: #66e7ff;
-  --brand-2: #8a7cff;
-  --brand-3: #5af0a0;
-  --danger: #ff708d;
-  --shadow: 0 24px 70px rgba(0,0,0,.34);
+  /* ── 1. 背景系统 ── */
+  --academic-canvas: #F8FAFC;       /* 全局底色 / 极窄侧边栏 */
+  --academic-panel: #FFFFFF;        /* 内容面板 / 卡片 / 抽屉 */
+
+  /* ── 2. 边框系统 ── */
+  --academic-border: #E2E8F0;       /* 柔和分割线 */
+  --academic-border-hover: #CBD5E1; /* 交互态边框 */
+
+  /* ── 3. 文本系统 ── */
+  --academic-text-main: #0F172A;    /* 标题 / 强调文字 */
+  --academic-text-body: #334155;    /* 正文深灰，防眩光 */
+  --academic-text-muted: #64748B;   /* 次要信息：DOI / 时间 / 占位符 */
+
+  /* ── 4. 主题色系统 ── */
+  --academic-primary: #2563EB;      /* 知性蓝 */
+  --academic-primary-hover: #1D4ED8;
+  --academic-primary-light: #EFF6FF;/* 极浅蓝：选中背景 / 筹码底色 */
+
+  /* ── 5. 阴影 ── */
+  --shadow-soft: 0 2px 10px -2px rgba(0, 0, 0, 0.04);
+  --shadow-float: 0 10px 30px -5px rgba(0, 0, 0, 0.08);
+
+  /* ── 6. 排版 ── */
+  --line-academic: 1.65;
+
+  /* ── 兼容旧变量（用于未迁移的旧组件） ── */
+  --brand: #2563EB;
+  --brand-2: #1D4ED8;
+  --brand-3: #10B981;
+  --danger: #EF4444;
+  --bg: var(--academic-canvas);
+  --panel: rgba(255, 255, 255, 0.0);
+  --panel-2: rgba(0, 0, 0, 0.04);
+  --line: var(--academic-border);
+  --text: var(--academic-text-main);
+  --muted: var(--academic-text-muted);
+  --shadow: var(--shadow-soft);
 }
+
 * { box-sizing: border-box; }
-html, body, #app { margin: 0; min-height: 100%; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); }
+
+html, body, #app {
+  margin: 0;
+  min-height: 100%;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: var(--academic-canvas);
+  color: var(--academic-text-body);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--academic-text-main);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
 a { color: inherit; text-decoration: none; }
-.glass { background: linear-gradient(145deg, rgba(255,255,255,.14), rgba(255,255,255,.055)); border: 1px solid var(--line); box-shadow: var(--shadow); backdrop-filter: blur(18px); }
-.page-shell { min-height: 100vh; background: radial-gradient(circle at 10% 0%, rgba(102,231,255,.24), transparent 34%), radial-gradient(circle at 88% 8%, rgba(138,124,255,.26), transparent 36%), linear-gradient(135deg, #07111d, #0b1225 48%, #070c16); }
-.gradient-title { background: linear-gradient(120deg, #fff 0%, #92f2ff 38%, #b6a8ff 70%, #79ffb6 100%); -webkit-background-clip: text; color: transparent; }
-.soft-card { border-radius: 24px; padding: 22px; background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.12); box-shadow: 0 18px 45px rgba(0,0,0,.23); }
-.slim-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.25) transparent; }
-.slim-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
-.slim-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.23); border-radius: 999px; }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; background: var(--brand-3); box-shadow: 0 0 12px var(--brand-3); }
-.el-card, .el-table, .el-input__wrapper, .el-textarea__inner { --el-bg-color-overlay: rgba(255,255,255,.95); }
-.el-button.is-glow { background: linear-gradient(135deg, var(--brand), var(--brand-2)); border: 0; color: #06111f; font-weight: 700; box-shadow: 0 10px 28px rgba(102,231,255,.25); }
+
+/* ── 全局工具类 ── */
+.glass {
+  background: var(--academic-panel);
+  border: 1px solid var(--academic-border);
+  box-shadow: var(--shadow-soft);
+  /* 浅色主题不需要 backdrop-filter blur，保留做渐进增强 */
+}
+
+.page-shell {
+  min-height: 100vh;
+  background: var(--academic-canvas);
+}
+
+.gradient-title {
+  background: linear-gradient(120deg, var(--academic-text-main) 0%, var(--academic-primary) 50%, var(--brand-3) 100%);
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+.soft-card {
+  border-radius: 24px;
+  padding: 22px;
+  background: var(--academic-panel);
+  border: 1px solid var(--academic-border);
+  box-shadow: var(--shadow-soft);
+}
+
+.slim-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+}
+
+.slim-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.slim-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 999px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 7px;
+  background: var(--brand-3);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+}
+
+/* Element Plus 全局覆盖 */
+.el-card, .el-table {
+  background: var(--academic-panel) !important;
+}
+
+.el-input__wrapper, .el-textarea__inner {
+  background: var(--academic-panel) !important;
+}
+
+.el-button.is-glow {
+  background: linear-gradient(135deg, var(--academic-primary), var(--academic-primary-hover));
+  border: 0;
+  color: #fff;
+  font-weight: 700;
+  box-shadow: var(--shadow-float);
+}
+
+.el-button.is-glow:hover {
+  background: linear-gradient(135deg, var(--academic-primary-hover), var(--academic-primary));
+}

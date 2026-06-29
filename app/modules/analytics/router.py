@@ -151,7 +151,7 @@ async def research_radar(
 
 @router.get('/hotspots')
 async def hotspots(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    messages = (await db.execute(select(QAMessage.content).join(LearningRecord, isouter=True).limit(300))).all()
+    messages = (await db.execute(select(QAMessage.content).limit(300))).all()
     words = Counter()
     for (text,) in messages:
         normalized = str(text).replace(',', ' ').replace('.', ' ').replace('\n', ' ')
