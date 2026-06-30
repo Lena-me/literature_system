@@ -1,10 +1,18 @@
 import { http } from './client'
 import type { TokenOut, User } from '@/types/domain'
 export const authApi = {
+  
   sendCode: (
       phone: string,
       purpose: 'register' | 'reset_password'
   ) => http.post<any, { message: string; dev_code?: string }>('/auth/verification-code', { phone, purpose }),
+
+  // 验证验证码并获取重置token
+  verifyCode:(
+    phone: string,
+    purpose: 'register' | 'reset_password',
+    code: string
+  ) => http.post<any, { token: string; phone: string }>('/auth/verify-code', { phone, purpose, code }),
 
   login: (
       phone: string, password: string
@@ -31,15 +39,13 @@ export const authApi = {
   // 重置密码功能
   resetPassword: (
       payload: {
-        phone: string;
+        token: string;
         password: string;
         confirm_password: string;
-        code: string
       }) => http.post('/auth/reset-password', {
-        phone: payload.phone,
+        token: payload.token,
         password: payload.password,
         confirm_password: payload.confirm_password,
-        code: payload.code
       }),
 
   // 获取用户信息
