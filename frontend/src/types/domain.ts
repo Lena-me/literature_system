@@ -32,9 +32,26 @@ export interface ContentItem { id: number; type: string; level?: number | null; 
 export interface ChatMessage { id?: number; role: 'user' | 'assistant'; content: string; created_at?: string; sources?: Source[] }
 export interface Source { paper_id: number; page_number?: number; section_title?: string; text?: string; snippet?: string; similarity_score?: number; rerank_score?: number }
 export interface Report { id: number; paper_id: number; title: string; content: any; created_at: string }
-export interface GraphNode { id: number | string; type: string; name: string; properties?: Record<string, unknown> }
-export interface GraphEdge { id?: number | string; source: number | string; target: number | string; relation_type: string; properties?: Record<string, unknown> }
-export interface KnowledgeGraph { id: number; name: string; nodes: GraphNode[]; edges: GraphEdge[] }
+export interface GraphNode { 
+  id: number | string
+  entity_type: string
+  name: string
+  properties?: Record<string, unknown>
+  // 向后兼容
+  type?: string
+}
+export interface GraphEdge { 
+  id?: number | string
+  source_node_id?: number | string
+  target_node_id?: number | string
+  relation_type: string
+  properties?: Record<string, unknown>
+  // 向后兼容
+  source?: number | string
+  target?: number | string
+}
+export interface KnowledgeGraph { id: number; name: string; domain_id?: number | null; nodes: GraphNode[]; edges: GraphEdge[] }
+export interface GraphSummary { id: number; name: string; created_at: string }
 export interface OperationOverview { paper_count: number; report_count: number; qa_count: number; records: any[]; recent_records?: any[]; keyword_cloud?: Record<string, number> }
 
 // ========== Notebook / Session 相关类型 ==========
@@ -71,9 +88,58 @@ export interface SessionDetail {
 export interface KnowledgeDomain {
   id: number
   name: string
-  description?: string
-  session_count: number
+  description?: string | null
+  icon: string
+  parent_domain_id?: number | null
+  graph_count: number
   paper_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface DomainOverview {
+  domain: KnowledgeDomain
+  graphs: GraphSummary[]
+  coverage?: CoverageInfo
+  recommendation_count?: number
+}
+
+export interface CoverageInfo {
+  coverage_rate: number
+  covered_count: number
+  suggested_count: number
+  core_concepts: string[]
+  missing_concepts: string[]
+}
+
+export interface RegionRecommendation {
+  concept: string
+  entity_type: string
+  reason: string
+  source: 'relation' | 'llm'
+  node_id: number | null
+  score: number | null
+  bridge_nodes: string[]
+}
+
+export interface DomainSuggestion {
+  domain_id: number | null
+  domain_name: string
+  match_type: 'existing' | 'new'
+  reason: string
+  paper_count_in_domain: number
+}
+
+export interface MergeSuggestion {
+  node_a: { id: number; name: string; type: string }
+  node_b: { id: number; name: string; type: string }
+  similarity: number
+}
+
+export interface MergeResult {
+  merged_edges: number
+  deleted_duplicates: number
+  message: string
 }
 
 export interface SuggestedQuestions {

@@ -45,6 +45,14 @@ async function handleFilesSelected(e: Event) {
   const files = input.files
   if (!files || files.length === 0) return
 
+  // ★ 捕获当前会话ID，防止上传期间用户切换会话导致挂载错误
+  const targetSessionId = notebook.activeSessionId
+  if (!targetSessionId) {
+    ElMessage.warning('请先创建或选择一个会话')
+    input.value = ''
+    return
+  }
+
   const uploadedIds: number[] = []
   for (const file of Array.from(files)) {
     uploading.value = true
@@ -53,8 +61,8 @@ async function handleFilesSelected(e: Event) {
       const paper = await papersApi.upload(file)
       uploadedIds.push(paper.id)
       uploadChip.value = { filename: file.name, status: '解析中...' }
-      // 添加到当前会话
-      await notebook.addSources([paper.id])
+      // 添加到目标会话（使用捕获的 sessionId，而非当前活跃会话）
+      await notebook.addSources([paper.id], targetSessionId)
     } catch (e: any) {
       const msg = e?.response?.data?.detail || e?.message || '上传失败'
       ElMessage.error(`${file.name}: ${msg}`)

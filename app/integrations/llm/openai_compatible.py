@@ -3,6 +3,16 @@ import httpx
 from app.core.config import get_settings
 settings = get_settings()
 
+
+def _headers() -> dict:
+    """构建请求头，api_key 为空时省略 Authorization"""
+    h = {'Content-Type': 'application/json'}
+    key = (settings.llm_api_key or '').strip()
+    if key:
+        h['Authorization'] = f'Bearer {key}'
+    return h
+
+
 class OpenAICompatibleLLM:
     # === 同步接口（Celery worker 使用）===
 
@@ -14,7 +24,7 @@ class OpenAICompatibleLLM:
             'temperature': settings.llm_temperature if temperature is None else temperature,
             'max_tokens': settings.llm_max_tokens if max_tokens is None else max_tokens,
         }
-        headers = {'Authorization': f'Bearer {settings.llm_api_key}', 'Content-Type': 'application/json'}
+        headers = _headers()
         with httpx.Client(timeout=180) as client:
             response = client.post(url, headers=headers, json=payload)
             response.raise_for_status()
@@ -31,7 +41,7 @@ class OpenAICompatibleLLM:
             'temperature': settings.llm_temperature if temperature is None else temperature,
             'max_tokens': settings.llm_max_tokens if max_tokens is None else max_tokens,
         }
-        headers = {'Authorization': f'Bearer {settings.llm_api_key}', 'Content-Type': 'application/json'}
+        headers = _headers()
         async with httpx.AsyncClient(timeout=180) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
@@ -47,22 +57,38 @@ class OpenAICompatibleLLM:
             'max_tokens': settings.llm_max_tokens if max_tokens is None else max_tokens,
             'stream': True,
         }
-        headers = {'Authorization': f'Bearer {settings.llm_api_key}', 'Content-Type': 'application/json'}
+        headers = _headers()
         async with httpx.AsyncClient(timeout=180) as client:
-            async with client.stream('POST', url, headers=headers, json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith('data:'):
-                        continue
-                    data = line.removeprefix('data:').strip()
-                    if data == '[DONE]':
-                        break
-                    try:
-                        import json
-                        obj = json.loads(data)
-                        delta = obj['choices'][0].get('delta') or {}
-                        piece = delta.get('content') or ''
-                        if piece:
-                            yield piece
-                    except Exception:
-                        continue
+            try:
+                async with client.stream('POST', url, headers=headers, json=payload) as response:
+                    if response.status_code == 401:
+                        import logging
+                        logging.getLogger(__name__).error(
+                            'LLM 认证失败 (401)。请检查环境变量 LLM_API_KEY 是否正确。'
+                            '当前 base_url=%s, model=%s, api_key_set=%s',
+                            settings.llm_base_url, settings.llm_model,
+                            bool((settings.llm_api_key or '').strip()),
+                        )
+                        raise RuntimeError(
+                            'LLM API 认证失败 (401)。请检查 LLM_API_KEY 环境变量是否配置了有效的 API Key。'
+                        )
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith('data:'):
+                            continue
+                        data = line.removeprefix('data:').strip()
+                        if data == '[DONE]':
+                            break
+                        try:
+                            import json
+                            obj = json.loads(data)
+                            delta = obj['choices'][0].get('delta') or {}
+                            piece = delta.get('content') or ''
+                            if piece:
+                                yield piece
+                        except Exception:
+                            continue
+            except httpx.HTTPStatusError:
+                raise
+            except httpx.RequestError as e:
+                raise RuntimeError(f'LLM API 请求失败: {e}') from e

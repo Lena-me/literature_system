@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user
 from app.db.mysql import AsyncSessionLocal, get_db
-from app.models import Paper, QAMessage, QASession, QASessionPaper, User
+from app.models import Paper, QAMessage, QAMessageSource, QASession, QASessionPaper, TextChunk, User
 from app.schemas import QAAskIn, SessionCreateIn, SessionUpdateIn
 from app.services.quota_service import QuotaService
 from app.services.rag_service import RAGService
@@ -156,7 +156,37 @@ async def messages(
     if limit > 0:
         q = q.limit(limit).offset(offset)
     rows = (await db.execute(q)).scalars().all()
-    return [{'id': x.id, 'role': x.role, 'content': x.content, 'created_at': x.created_at} for x in rows]
+
+    # ★ 批量查询所有消息的来源引用
+    message_ids = [x.id for x in rows]
+    sources_map: dict[int, list[dict]] = {mid: [] for mid in message_ids}
+    if message_ids:
+        src_q = (
+            select(QAMessageSource, TextChunk.chunk_text)
+            .outerjoin(TextChunk, QAMessageSource.chunk_id == TextChunk.id)
+            .where(QAMessageSource.message_id.in_(message_ids))
+        )
+        src_rows = (await db.execute(src_q)).all()
+        for src, chunk_text in src_rows:
+            sources_map[src.message_id].append({
+                'paper_id': src.paper_id,
+                'page_number': src.page_number,
+                'section_title': src.section_title,
+                'text': chunk_text or src.snippet,
+                'snippet': src.snippet,
+                'similarity_score': src.similarity_score,
+            })
+
+    return [
+        {
+            'id': x.id,
+            'role': x.role,
+            'content': x.content,
+            'created_at': x.created_at,
+            'sources': sources_map.get(x.id, []),
+        }
+        for x in rows
+    ]
 
 # ========== 自动生成标题 ==========
 
@@ -175,12 +205,16 @@ async def generate_title(session_id: int, data: GenerateTitleIn, db: AsyncSessio
             messages=[{'role': 'user', 'content': f"请将用户的这句话提炼为一个不超过10个字的极简会话标题。只输出标题纯文本，不要带书名号、引号或任何标点。用户提问：{data.first_message}"}],
             temperature=0.3, max_tokens=20,
         )
-        session.title = title.strip()
-        await db.commit()
-        await db.refresh(session)
+        title = (title or '').strip()
+        if title:
+            session.title = title
+            await db.commit()
+            await db.refresh(session)
+            return {'title': session.title}
         return {'title': session.title}
-    except Exception:
-        # LLM 失败不回退，保留原标题
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning('生成会话标题失败: %s', e)
         return {'title': session.title}
 
 # ========== 推荐问题 ==========
