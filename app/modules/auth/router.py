@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.mysql import get_db
 from app.models import User
-from app.schemas import LoginIn, RegisterIn, ResetPasswordIn, TokenOut, VerificationCodeIn
+from app.schemas import LoginIn, RegisterIn, SendCodeIn, VerifyCodeIn, ResetPasswordIn, TokenOut
 from app.services.audit_service import write_audit
 from app.services.auth_service import LoginGuard, VerificationCodeService
 
@@ -13,7 +13,7 @@ router = APIRouter(prefix='/auth', tags=['认证'])
 
 
 @router.post('/verification-code')
-async def verification_code(data: VerificationCodeIn, db: AsyncSession = Depends(get_db)):
+async def verification_code(data: SendCodeIn, db: AsyncSession = Depends(get_db)):
     phone = data.phone.strip()
     if data.purpose == 'reset_password':
         user = (
@@ -23,11 +23,20 @@ async def verification_code(data: VerificationCodeIn, db: AsyncSession = Depends
             raise HTTPException(404, '该账号未注册')
     return await VerificationCodeService().issue(phone, data.purpose)
 
+# 校验验证码
+@router.post("/verify-code")
+async def verify_code(data:VerifyCodeIn, db: AsyncSession = Depends(get_db)):
+    phone = data.phone.strip()
+    token = await VerificationCodeService().verify_and_issue_reset_token(
+        phone, 
+        data.purpose, 
+        data.code
+    )
+    return {"token": token, "phone": phone}
 
 @router.post('/register', response_model=TokenOut)
 async def register(data: RegisterIn, request: Request, db: AsyncSession = Depends(get_db)):
     await VerificationCodeService().verify(data.phone, 'register', data.code)
-
     exists = (
         await db.execute(
             select(User).where(
@@ -35,7 +44,6 @@ async def register(data: RegisterIn, request: Request, db: AsyncSession = Depend
             )
         )
     ).scalar_one_or_none()
-
 
     if exists:
         raise HTTPException(400, '账号、邮箱或手机号已存在')
@@ -104,13 +112,13 @@ async def login(data: LoginIn, request: Request, db: AsyncSession = Depends(get_
         user={'id': user.id, 'username': user.username, 'role': user.role},
     )
 
-
 @router.post('/reset-password')
 async def reset_password(data: ResetPasswordIn, db: AsyncSession = Depends(get_db)):
-    await VerificationCodeService().verify(data.phone, 'reset_password', data.code)
+    # 使用token验证身份
+    phone = await VerificationCodeService().verify_reset_token(data.token)
     user = (
         await db.execute(
-            select(User).where(User.phone == data.phone))).scalar_one_or_none()
+            select(User).where(User.phone == phone))).scalar_one_or_none()
     if not user:
         raise HTTPException(404, '账号不存在')
     user.password_hash = hash_password(data.password)
