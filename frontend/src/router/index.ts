@@ -20,6 +20,7 @@ const router = createRouter({
         { path: '/reports', component: () => import('@/views/research/ReportsView.vue') },
         { path: '/legacy', component: () => import('@/views/research/WorkbenchView.vue') },
         { path: '/archive', component: () => import('@/views/research/LearningArchiveView.vue') },
+        { path: '/graph', component: () => import('@/views/research/GraphView.vue') },
       ],
     },
 

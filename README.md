@@ -220,7 +220,7 @@ BACKUP_ID
 - N+1 → 3 次批量 SQL；AbortController 竞态修复 + Map 缓存；消息 limit=100。
 
 ### 10.7 新增页面
-- `/dashboard` 主页、`/profile` 档案、`/archive` 学习档案、`/library`、`/reports`。
+- `/dashboard` 主页概览、`/profile` 个人档案、`/archive` 学习档案、`/graph` 知识图谱、`/library` 文献库、`/reports` 研读报告。
 
 ### 10.8 其他修复
 - PDF `v-if`→`v-show` 防 blob 销毁 / 路由自动跳转 / Markdown html:true / 输入框对齐。
