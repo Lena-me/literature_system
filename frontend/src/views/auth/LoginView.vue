@@ -7,10 +7,10 @@ import BrandMark from '@/components/common/BrandMark.vue'
 import { useAuthStore } from '@/stores/auth'
 import { authApi } from '@/api/auth'
 
-
 const router = useRouter();
+
 const auth = useAuthStore();
-const mode = ref<'login'|'register'|'reset'>('login')
+const mode = ref<'login'|'register'>('login')
 const form = reactive({
   account: 'admin',
   username: '',
@@ -26,31 +26,22 @@ const title = computed(() => {
   if(mode.value === 'login'){
     return '登录科研知识平台'
   }
-  else if(mode.value === 'register'){
+  else{
     return '创建科研账户'
-  }
-  else {
-    return '重置密码'
   }
 })
 
 // 验证码机制，根据手机号获取验证码
-const codeAccount = computed(() => {return form.phone})
+const phoneNum = computed(() => {return form.phone})
 
 // 获取验证码
 async function getCode() {
-  if (!codeAccount.value) {
-    return ElMessage.warning('请先填写手机号')
+  if (!phoneNum.value) {
+    return ElMessage.warning('请输入手机号')
   }
-  let scene: 'register' | 'reset_password'
-  if (mode.value === 'reset'){
-    scene = 'reset_password'
-  }
-  else {
-    scene = 'register'
-  }
+  
   // 调用发送短信接口
-  const res = await authApi.sendCode(codeAccount.value, scene)
+  const res = await authApi.sendCode(phoneNum.value, 'register')
   if (res.dev_code) {
     form.code = res.dev_code
   }
@@ -62,11 +53,11 @@ async function submit() {
   // 登录功能
   if (mode.value === 'login') {
     const user = await auth.login(form.phone, form.password)
-    router.push(user.role === 'admin' ? '/admin' : '/research')
+    router.push(user.role === 'admin' ? '/admin' : '/dashboard')
   }
 
   // 注册功能
-  else if (mode.value === 'register') {
+  else {
     if (form.password !== form.confirm_password) return ElMessage.warning('两次密码不一致')
     if (!form.code) return ElMessage.warning('请输入验证码')
     const user = await auth.register({
@@ -77,23 +68,9 @@ async function submit() {
       phone: form.phone,
       code: form.code
     })
-    router.push(user.role === 'admin' ? '/admin' : '/research')
+    router.push(user.role === 'admin' ? '/admin' : '/login')
   }
 
-  // 修改密码功能
-  else {
-    if (!form.code) {
-      return ElMessage.warning('请输入验证码')
-    }
-    await authApi.resetPassword({
-      phone: form.phone,
-      password: form.password,
-      confirm_password: form.confirm_password,
-      code: form.code
-    })
-    ElMessage.success('密码已重置，请重新登录');
-    mode.value = 'login'
-  }
 }
 </script>
 <template>
@@ -131,8 +108,8 @@ async function submit() {
       <p class="subtitle">默认管理员：13800138000 / admin123456</p >
 
       <el-form label-position="top" @submit.prevent>
-        <!-- 只有登录和重置密码显示这个 -->
-        <el-form-item v-if="mode !== 'register'" label="手机号">
+        <!-- 登录显示手机号 -->
+        <el-form-item v-if="mode === 'login'" label="手机号">
           <el-input v-model="form.phone" size="large"/>
         </el-form-item>
 
@@ -168,15 +145,15 @@ async function submit() {
         </el-form-item>
 
         <el-button class="submit is-glow" size="large" :loading="auth.loading" @click="submit">
-          {{ mode === 'login' ? '登录' : mode === 'register' ? '注册并进入' : '重置密码' }}
+          {{ mode === 'login' ? '登录' : '注册'}}
         </el-button>
       </el-form>
 
       <!-- 底部按钮 -->
       <div class="switches">
-        <button v-if="mode !== 'login'" @click="mode='login'">登录</button>
+        <button v-if="mode !== 'login'" @click="mode='login'">返回登录</button>
         <button v-if="mode !== 'register'" @click="mode='register'">注册</button>
-        <button v-if="mode !== 'reset'" @click="mode='reset'">忘记密码</button>
+        <button v-if="mode === 'login'" @click="router.push('/find-pwd-1')">忘记密码</button>
       </div>
     </section>
   </main>

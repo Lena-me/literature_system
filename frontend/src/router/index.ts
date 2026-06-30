@@ -6,6 +6,8 @@ const router = createRouter({
   routes: [
     { path: '/', redirect: '/dashboard' },
     { path: '/login', component: () => import('@/views/auth/LoginView.vue') },
+    { path: '/find-pwd-1', component: () => import('@/views/auth/FindPwd1View.vue') },
+    { path: '/find-pwd-2', component: () => import('@/views/auth/FindPwd2View.vue') },
 
     // ===== 统一 NotebookLayout (三层架构：GlobalNav + SessionSidebar + Content) =====
     {
@@ -41,7 +43,9 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  if (to.path !== '/login' && !auth.isAuthed) return '/login'
+  // 登录、注册页面和忘记密码页面无需登录
+  const publicPaths = ['/login', '/find-pwd-1', '/find-pwd-2']
+  if (!publicPaths.includes(to.path) && !auth.isAuthed) return '/login'
   if (auth.isAuthed && !auth.user) await auth.loadMe().catch(() => auth.logout())
   if (to.path.startsWith('/admin') && auth.user?.role !== 'admin') return '/dashboard'
   if (to.path === '/login' && auth.isAuthed) return auth.user?.role === 'admin' ? '/admin' : '/dashboard'
