@@ -43,6 +43,13 @@ export const useNotebookStore = defineStore('notebook', () => {
     const detail = await qaApi.createSession({ title, paper_ids: paperIds })
     await loadSessions()
     await switchSession(detail.id)
+    // ★ 如果创建时传入了论文且标题为默认，立即触发标题生成
+    if (paperIds && paperIds.length > 0 && isDefaultTitle(detail.title)) {
+      const firstPaper = detail.papers?.[0]
+      if (firstPaper) {
+        autoGenerateTitle(detail.id, `请基于以下文献内容提炼会话标题：${firstPaper.title || firstPaper.original_filename}`)
+      }
+    }
     return detail
   }
 
@@ -130,18 +137,23 @@ export const useNotebookStore = defineStore('notebook', () => {
 
   // ========== 文献管理 ==========
 
-  async function addSources(paperIds: number[]) {
-    if (!activeSessionId.value) return
-    const detail = await qaApi.updateSession(activeSessionId.value, { add_paper_ids: paperIds })
-    activeSources.value = detail.papers || []
-    activeSessionDetail.value = detail
+  async function addSources(paperIds: number[], forceSessionId?: number | null) {
+    const sid = forceSessionId ?? activeSessionId.value
+    if (!sid) return
+    const detail = await qaApi.updateSession(sid, { add_paper_ids: paperIds })
+    // 仅当仍在同一会话时更新 UI 状态（防止上传完成前用户已切走）
+    if (activeSessionId.value === sid || forceSessionId == null) {
+      activeSources.value = detail.papers || []
+      activeSessionDetail.value = detail
+    }
+    detailCache.set(sid, detail) // ★ 同步更新缓存，避免切回时覆写
     await loadSessions()
 
     // ★ 上传文献后，如果标题仍为默认，根据第一篇文献名生成标题
-    if (isDefaultTitle(activeSessionDetail.value?.title)) {
+    if (isDefaultTitle(detail.title)) {
       const firstPaper = detail.papers?.[0]
       if (firstPaper) {
-        autoGenerateTitle(activeSessionId.value, `请基于以下文献内容提炼会话标题：${firstPaper.title || firstPaper.original_filename}`)
+        autoGenerateTitle(sid, `请基于以下文献内容提炼会话标题：${firstPaper.title || firstPaper.original_filename}`)
       }
     }
   }
@@ -151,6 +163,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     const detail = await qaApi.updateSession(activeSessionId.value, { remove_paper_ids: [paperId] })
     activeSources.value = detail.papers || []
     activeSessionDetail.value = detail
+    detailCache.set(activeSessionId.value, detail) // ★ 同步更新缓存，避免切回时覆写
     await loadSessions()
   }
 
@@ -211,7 +224,9 @@ export const useNotebookStore = defineStore('notebook', () => {
   function isDefaultTitle(title?: string): boolean {
     if (!title || !title.trim()) return true
     const t = title.trim()
-    return t === '新会话' || t === '新对话' || t === '新建会话' || t === '未命名' || t === 'New Chat' || t === 'New Session'
+    return t === '新会话' || t === '新对话' || t === '新建会话'
+        || t === '未命名' || t === 'New Chat' || t === 'New Session'
+        || t === '新研究'
   }
 
   async function autoGenerateTitle(sessionId: number, message: string) {
