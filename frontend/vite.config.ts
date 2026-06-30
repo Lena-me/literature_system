@@ -4,6 +4,7 @@ import path from 'node:path'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
+  const appMode = env.VITE_APP_MODE || 'user'
   return {
     plugins: [vue()],
     resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
@@ -16,6 +17,7 @@ export default defineConfig(({ mode }) => {
       }
     },
     build: {
+      outDir: appMode === 'admin' ? 'dist-admin' : 'dist-user',
       target: 'es2020',
       chunkSizeWarningLimit: 1800
     }

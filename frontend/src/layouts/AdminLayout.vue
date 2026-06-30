@@ -2,7 +2,7 @@
 import { useRouter } from 'vue-router'
 import BrandMark from '@/components/common/BrandMark.vue'
 import { useAuthStore } from '@/stores/auth'
-const router = useRouter(); const auth = useAuthStore(); function logout(){ auth.logout(); router.push('/login') }
+const router = useRouter(); const auth = useAuthStore(); function logout(){ auth.logout(); router.push('/admin/login') }
 </script>
 <template>
   <main class="admin-layout page-shell">
