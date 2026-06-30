@@ -19,19 +19,23 @@ class RegisterIn(BaseModel):
     confirm_password: str = Field(min_length=6, max_length=18)
     email: str | None = None
     phone: str
-    code: str = Field(min_length=4, max_length=8)
+    code: str = Field(min_length=6, max_length=6)
 
 class LoginIn(BaseModel):
     phone: str
     password: str
 
-class VerificationCodeIn(BaseModel):
+class SendCodeIn(BaseModel):
     phone: str
     purpose: Literal['register', 'reset_password'] = 'register'
 
-class ResetPasswordIn(BaseModel):
+class VerifyCodeIn(BaseModel):
     phone: str
-    code: str = Field(min_length=4, max_length=8)
+    purpose: Literal['register', 'reset_password'] = 'register'
+    code: str = Field(min_length=6, max_length=6)
+
+class ResetPasswordIn(BaseModel):
+    token: str
     password: str = Field(min_length=6, max_length=18)
     confirm_password: str = Field(min_length=6, max_length=18)
 
