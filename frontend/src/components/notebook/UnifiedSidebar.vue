@@ -169,6 +169,8 @@ function isActive(path: string): boolean {
         v-for="item in [
           { label: '文献库', path: '/library', icon: 'M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z' },
           { label: '研读报告', path: '/reports', icon: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8 M16 17H8' },
+          { label: '知识图谱', path: '/graph', icon: 'M12 20a8 8 0 100-16 8 8 0 000 16z M3.5 12h17 M12 3.5a15 15 0 010 17' },
+          { label: '学习档案', path: '/archive', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2 M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2 M9 14l2 2 4-4' },
           { label: '个人档案', path: '/profile', icon: 'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2 M12 7a4 4 0 100-8 4 4 0 000 8z' },
         ]"
         :key="item.label"
