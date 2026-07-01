@@ -31,8 +31,10 @@ const mergeLoading = ref(false)
 const recommendations = ref<RegionRecommendation[]>([])
 const recLoading = ref(false)
 
-// ========== 画布模式 ==========
-const canvasMode = ref<'detail' | 'overview'>('overview')
+const graphCypher = computed(() => {
+  if (!graphId.value) return ''
+  return `MATCH (n:Entity)-[r]->(m:Entity) WHERE r.graph_id = ${graphId.value} RETURN n, r, m`
+})
 
 const activeDomain = computed(() =>
   domains.value.find(d => d.id === activeDomainId.value) || null
@@ -397,10 +399,8 @@ function saveToHistory(id: number, name: string) {
           域：{{ activeDomain.name }} | 图谱：{{ graph.name }}
         </div>
         <GraphCanvas
-          :graph="graph"
-          :mode="canvasMode"
-          @change-mode="canvasMode = $event"
-          @node-dblclick="() => {}"
+          :cypher-query="graphCypher"
+          :graph-id="graphId"
         />
 
         <!-- 实体融合建议 -->

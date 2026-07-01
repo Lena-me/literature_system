@@ -6,8 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
 from app.models import (
     ComparisonResult,
-    GraphEdge,
-    GraphNode,
     KnowledgeDomain,
     KnowledgeGraph,
     KnowledgeGraphPaper,
@@ -16,7 +14,6 @@ from app.models import (
     Report,
     ReproducibilityGuide,
 )
-from app.services.entity_merge_service import EntityMergeService
 from app.utils.json_utils import dumps, loads
 
 
@@ -272,6 +269,9 @@ Input: {dumps(payload)}
         if filtered_edges:
             data['edges'] = filtered_edges
 
+        # ============================================================
+        # MySQL: 创建 KnowledgeGraph 元数据记录（保留）
+        # ============================================================
         graph = KnowledgeGraph(
             user_id=user_id,
             domain_id=domain_id,
@@ -284,68 +284,107 @@ Input: {dumps(payload)}
         for pid in paper_ids:
             db.add(KnowledgeGraphPaper(graph_id=graph.id, paper_id=pid))
 
-        node_map: dict[str, int] = {}
-        nodes_to_encode: list[GraphNode] = []
-        for n in data.get('nodes', []):
-            node_name = (n.get('name') or '').strip()
-            if not node_name or node_name in node_map:
-                continue
-
-            node = GraphNode(
-                graph_id=graph.id,
-                entity_type=n.get('type', 'paper'),
-                name=node_name[:300],
-                properties=dumps(n.get('properties') or {}),
-            )
-            db.add(node)
-            await db.flush()
-            node_map[node.name] = node.id
-            nodes_to_encode.append(node)
-
         # ============================================================
-        # ★ 跨图谱实体融合（仅当在某个知识域下时执行）
+        # Neo4j: 批量创建节点和关系
         # ============================================================
-        merged_count = 0
-        if domain_id is not None and nodes_to_encode:
-            merge_svc = EntityMergeService()
-            # 为新节点批量编码并存储向量
-            await merge_svc.ensure_node_vectors(
-                db, [n.id for n in nodes_to_encode]
-            )
-            # 逐个检查是否与域内已有节点高度相似
-            for node in nodes_to_encode:
-                if node.id not in node_map.values():
-                    continue  # 已被之前的合并操作删除
-                similars = await merge_svc.find_similar_in_domain(
-                    db, domain_id, node.name, exclude_node_id=node.id,
-                )
-                auto_match = next(
-                    (s for s in similars if s['similarity'] >= EntityMergeService.AUTO_MERGE_THRESHOLD),
-                    None,
-                )
-                if auto_match:
-                    # 将 node_map 中该名称映射到已有节点
-                    node_map[node.name] = auto_match['node_id']
-                    await db.delete(node)
-                    merged_count += 1
+        from app.db.neo4j_client import neo4j_manager
 
-        if merged_count > 0:
-            await db.flush()
+        VALID_ENTITY_TYPES = frozenset({
+            'paper', 'task', 'method', 'dataset', 'metric',
+            'result', 'innovation', 'limitation', 'author',
+        })
+        VALID_RELATION_TYPES = frozenset({
+            'uses', 'studies', 'achieves', 'proposes', 'compares_with',
+            'improves_upon', 'evaluated_on', 'has_limitation', 'belongs_to',
+            'related_to', 'reports', 'contributes', 'evaluates_on',
+        })
 
-        # 创建边（使用融合后的 node_map）
-        for e in data.get('edges', []):
-            source_name = (e.get('source') or '').strip()
-            target_name = (e.get('target') or '').strip()
-            s, t = node_map.get(source_name), node_map.get(target_name)
-            if s and t and s != t:
-                db.add(
-                    GraphEdge(
-                        graph_id=graph.id,
-                        source_node_id=s,
-                        target_node_id=t,
-                        relation_type=e.get('relation_type', 'related_to'),
-                        properties=dumps(e.get('properties') or {}),
-                    )
+        async with neo4j_manager.driver.session() as neo4j_session:
+            # ---------- 创建节点 ----------
+            nodes_data = data.get('nodes', [])
+            created_names: set[str] = set()
+
+            for n in nodes_data:
+                node_name = (n.get('name') or '').strip()
+                if not node_name:
+                    continue
+                # 去重：同一 graph 内同名节点只创建一次
+                if node_name in created_names:
+                    continue
+                created_names.add(node_name)
+
+                entity_type = (n.get('type') or 'paper').strip().lower()
+                if entity_type not in VALID_ENTITY_TYPES:
+                    entity_type = 'paper'
+
+                properties = n.get('properties') or {}
+                if isinstance(properties, dict):
+                    properties_str = dumps(properties)
+                else:
+                    properties_str = '{}'
+
+                # 标签名取首字母大写（如 paper → Paper），用于 Neo4j 可视化区分
+                label = entity_type.capitalize()
+
+                cypher = (
+                    f"MERGE (n:Entity {{name: $name}}) "
+                    f"SET n:{label} "
+                    f"SET n.domain_id = $domain_id, "
+                    f"n.graph_id = $graph_id, "
+                    f"n.milvus_id = $milvus_id, "
+                    f"n.properties = $properties"
+                )
+                await neo4j_session.run(
+                    cypher,
+                    {
+                        'name': node_name,
+                        'domain_id': domain_id,
+                        'graph_id': graph.id,
+                        'milvus_id': None,
+                        'properties': properties_str,
+                    },
+                )
+
+            # ---------- 创建关系 ----------
+            edges_data = data.get('edges', [])
+            seen_edges: set[tuple[str, str, str]] = set()
+
+            for e in edges_data:
+                source_name = (e.get('source') or '').strip()
+                target_name = (e.get('target') or '').strip()
+                if not source_name or not target_name or source_name == target_name:
+                    continue
+
+                rel_type = (e.get('relation_type') or 'related_to').strip().lower()
+                if rel_type not in VALID_RELATION_TYPES:
+                    rel_type = 'related_to'
+
+                # 去重：相同 source→relation→target 只创建一次
+                edge_key = (source_name, target_name, rel_type)
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+
+                properties = e.get('properties') or {}
+                if isinstance(properties, dict):
+                    properties_str = dumps(properties)
+                else:
+                    properties_str = '{}'
+
+                cypher = (
+                    f"MATCH (s:Entity {{name: $source_name}}) "
+                    f"MATCH (t:Entity {{name: $target_name}}) "
+                    f"MERGE (s)-[r:{rel_type.upper()} {{graph_id: $graph_id}}]->(t) "
+                    f"SET r.properties = $properties"
+                )
+                await neo4j_session.run(
+                    cypher,
+                    {
+                        'source_name': source_name,
+                        'target_name': target_name,
+                        'graph_id': graph.id,
+                        'properties': properties_str,
+                    },
                 )
 
         await db.commit()
@@ -507,8 +546,6 @@ Input: {dumps(payload)}
 
 # ============================================================
 # 辅助函数
-# ============================================================
-# 工具函数
 # ============================================================
 
 def _validate_relation(source_type: str | None, relation_type: str) -> bool:

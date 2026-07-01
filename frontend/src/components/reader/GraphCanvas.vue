@@ -1,415 +1,423 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch, computed } from 'vue'
-import { Graph } from '@antv/g6'
-import type { KnowledgeGraph, GraphNode, GraphEdge } from '@/types/domain'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+// ============================================================
+// Props：接收 Cypher 查询字符串 + Neo4j 连接信息
+// ============================================================
 const props = withDefaults(defineProps<{
-  graph?: KnowledgeGraph | null
-  mode?: 'detail' | 'overview'
+  cypherQuery: string
+  neo4jUri?: string
+  neo4jUser?: string
+  neo4jPassword?: string
+  graphId?: number | null
 }>(), {
-  mode: 'detail',
+  neo4jUri: '',
+  neo4jUser: '',
+  neo4jPassword: '',
+  graphId: null,
 })
 
 const emit = defineEmits<{
-  (e: 'change-mode', mode: 'detail' | 'overview'): void
-  (e: 'node-dblclick', nodeId: string, type: string): void
+  (e: 'ready'): void
+  (e: 'error', message: string): void
 }>()
 
-const el = ref<HTMLDivElement | null>(null)
-let instance: any
-const internalMode = ref(props.mode)
+const containerId = 'neo4j-viz-canvas'
+const hasQuery = ref(false)
+const errorMsg = ref('')
+const loading = ref(false)
+let neoVisInstance: any = null
 
 // ============================================================
-// 实体类型 → 视觉配置
+// 实体类型 → 学术科技感配色
 // ============================================================
-const TYPE_CONFIG: Record<string, { color: string; size: number; rank: number; icon: string; label: string }> = {
-  task:     { color: '#ff7a45', size: 48, rank: 0, icon: '🎯', label: '核心问题' },
-  method:   { color: '#597ef7', size: 44, rank: 1, icon: '⚙️', label: '方法' },
-  innovation:{ color: '#73d13d', size: 40, rank: 1, icon: '💡', label: '创新点' },
-  paper:    { color: '#ffc53d', size: 40, rank: 2, icon: '📄', label: '论文' },
-  dataset:  { color: '#36cfc9', size: 34, rank: 3, icon: '📊', label: '数据集' },
-  metric:   { color: '#b37feb', size: 32, rank: 3, icon: '📈', label: '指标' },
-  result:   { color: '#ff85c0', size: 32, rank: 3, icon: '📋', label: '结果' },
-  limitation:{ color: '#ff9c6e', size: 30, rank: 3, icon: '⚠️', label: '局限' },
-  author:   { color: '#5cdbd3', size: 28, rank: 3, icon: '👤', label: '作者' },
-  __default__: { color: '#d9d9d9', size: 30, rank: 2, icon: '📌', label: '其他' },
+const LABEL_COLORS: Record<string, { background: string; border: string; highlightBg: string; highlightBorder: string; size: number }> = {
+  Paper:      { background: '#ffc53d', border: '#d4a017', highlightBg: '#ffe58f', highlightBorder: '#d4a017', size: 40 },
+  Method:     { background: '#597ef7', border: '#1d39c4', highlightBg: '#85a5ff', highlightBorder: '#1d39c4', size: 42 },
+  Model:      { background: '#597ef7', border: '#1d39c4', highlightBg: '#85a5ff', highlightBorder: '#1d39c4', size: 42 },
+  Task:       { background: '#ff7a45', border: '#d4380d', highlightBg: '#ffbb96', highlightBorder: '#d4380d', size: 44 },
+  Dataset:    { background: '#36cfc9', border: '#08979c', highlightBg: '#87e8de', highlightBorder: '#08979c', size: 34 },
+  Metric:     { background: '#b37feb', border: '#531dab', highlightBg: '#d3adf7', highlightBorder: '#531dab', size: 32 },
+  Result:     { background: '#ff85c0', border: '#c41d7f', highlightBg: '#ffadd2', highlightBorder: '#c41d7f', size: 32 },
+  Innovation: { background: '#73d13d', border: '#389e0d', highlightBg: '#b7eb8f', highlightBorder: '#389e0d', size: 36 },
+  Limitation: { background: '#ff9c6e', border: '#d46b08', highlightBg: '#ffd591', highlightBorder: '#d46b08', size: 30 },
+  Author:     { background: '#5cdbd3', border: '#006d75', highlightBg: '#b5f5ec', highlightBorder: '#006d75', size: 28 },
 }
 
-function getTypeConfig(type?: string) {
-  return TYPE_CONFIG[type || ''] || TYPE_CONFIG['__default__']
+function getLabelConfig(label: string) {
+  return LABEL_COLORS[label] || { background: '#bfbfbf', border: '#8c8c8c', highlightBg: '#d9d9d9', highlightBorder: '#8c8c8c', size: 30 }
 }
 
 // ============================================================
-// 构建 Dagre 层次布局数据
+// 构建 neovis.js 配置
 // ============================================================
-function buildLayoutData(graph: KnowledgeGraph, viewMode: string) {
-  if (viewMode === 'overview') {
-    return buildOverviewData(graph)
-  }
-  return buildDetailData(graph)
-}
+function buildNeoVisConfig(query: string) {
+  const uri = props.neo4jUri || import.meta.env.VITE_NEO4J_URI || 'bolt://127.0.0.1:7687'
+  const user = props.neo4jUser || import.meta.env.VITE_NEO4J_USER || 'neo4j'
+  const password = props.neo4jPassword || import.meta.env.VITE_NEO4J_PASSWORD || 'neo4j'
 
-function buildDetailData(graph: KnowledgeGraph) {
-  const nodes = graph.nodes.map(n => ({
-    id: String(n.id),
-    data: {
-      label: n.name,
-      type: n.entity_type || n.type || 'paper',
-    },
-  }))
-
-  const edges = graph.edges.map(e => ({
-    source: String(e.source_node_id ?? e.source),
-    target: String(e.target_node_id ?? e.target),
-    data: { label: e.relation_type ?? 'related_to' },
-  }))
-
-  return { nodes, edges }
-}
-
-function buildOverviewData(graph: KnowledgeGraph) {
-  // 按类型聚合
-  const typeMap: Record<string, { count: number; examples: string[]; ids: string[] }> = {}
-  for (const n of graph.nodes) {
-    const t = (n.entity_type || n.type || 'paper')
-    if (!typeMap[t]) typeMap[t] = { count: 0, examples: [], ids: [] }
-    typeMap[t].count++
-    typeMap[t].ids.push(String(n.id))
-    if (typeMap[t].examples.length < 3) {
-      typeMap[t].examples.push(n.name)
-    }
-  }
-
-  const nodes = Object.entries(typeMap).map(([type, info]) => {
-    const cfg = getTypeConfig(type)
-    const displayedLabel = info.count === 1
-      ? info.examples[0]
-      : `${cfg.icon} ${cfg.label} (${info.count})`
-
-    return {
-      id: `group:${type}`,
-      data: {
-        label: displayedLabel,
-        type,
-        isGroup: true,
-        groupIds: info.ids,
-        groupCount: info.count,
-        groupExamples: info.examples,
+  // 动态构建 labels 配置
+  const labels: Record<string, any> = {}
+  for (const [label, colorCfg] of Object.entries(LABEL_COLORS)) {
+    labels[label] = {
+      caption: 'name',
+      size: colorCfg.size,
+      font: { size: 13, color: '#ffffff', face: 'Inter, system-ui, sans-serif' },
+      color: {
+        background: colorCfg.background,
+        border: colorCfg.border,
+        highlight: {
+          background: colorCfg.highlightBg,
+          border: colorCfg.highlightBorder,
+        },
       },
     }
-  })
-
-  // 概览模式：按关系类型聚合（如果有边连接不同类型组）
-  const typeSet = new Set(Object.keys(typeMap))
-  const edges: any[] = []
-
-  // 为不同类型组之间添加关系边（基于原始边的统计）
-  const rawEdges = graph.edges || []
-  const crossTypeEdges = new Set<string>()
-  const nodeTypeMap: Record<string, string> = {}
-  for (const n of graph.nodes) {
-    nodeTypeMap[String(n.id)] = n.entity_type || n.type || 'paper'
+  }
+  // 兜底：Entity 默认样式
+  labels.Entity = {
+    caption: 'name',
+    size: 30,
+    font: { size: 12, color: '#e6e6e6', face: 'Inter, system-ui, sans-serif' },
+    color: {
+      background: '#434343',
+      border: '#666666',
+      highlight: { background: '#595959', border: '#8c8c8c' },
+    },
   }
 
-  for (const e of rawEdges) {
-    const srcId = String(e.source_node_id ?? e.source)
-    const tgtId = String(e.target_node_id ?? e.target)
-    const srcType = nodeTypeMap[srcId] || 'paper'
-    const tgtType = nodeTypeMap[tgtId] || 'paper'
-    if (srcType !== tgtType) {
-      const key = `${srcType}->${tgtType}`
-      crossTypeEdges.add(key)
+  // 关系映射：显示关系类型名称
+  const RELATION_NAMES = [
+    'USES', 'STUDIES', 'ACHIEVES', 'PROPOSES', 'COMPARES_WITH',
+    'IMPROVES_UPON', 'EVALUATED_ON', 'HAS_LIMITATION', 'BELONGS_TO',
+    'RELATED_TO', 'REPORTS', 'CONTRIBUTES', 'EVALUATES_ON',
+  ]
+  const relationships: Record<string, any> = {}
+  for (const rel of RELATION_NAMES) {
+    relationships[rel] = {
+      caption: true,
+      thickness: '1.5px',
+      font: { size: 10, color: '#c4d6f0', background: 'rgba(13,17,23,0.9)', strokeWidth: 0 },
     }
   }
 
-  for (const key of crossTypeEdges) {
-    const [src, tgt] = key.split('->')
-    edges.push({
-      source: `group:${src}`,
-      target: `group:${tgt}`,
-      data: { label: '关联' },
-    })
+  return {
+    containerId,
+    neo4j: { serverUrl: uri, serverUser: user, serverPassword: password },
+    labels,
+    relationships,
+    initialCypher: query,
+    visConfig: {
+      physics: {
+        solver: 'forceAtlas2Based',
+        forceAtlas2Based: {
+          gravitationalConstant: -65,
+          centralGravity: 0.005,
+          springLength: 180,
+          springConstant: 0.06,
+          damping: 0.6,
+        },
+        stabilization: { iterations: 200, updateInterval: 25 },
+        minVelocity: 0.5,
+      },
+      interaction: {
+        navigationButtons: true,
+        keyboard: { enabled: true, bindToWindow: false },
+        hover: true,
+        hoverConnectedEdges: true,
+        selectConnectedEdges: true,
+        dragNodes: true,
+        dragView: true,
+        zoomView: true,
+        multiselect: true,
+      },
+      edges: {
+        arrows: { to: { enabled: true, scaleFactor: 0.7 } },
+        smooth: { type: 'continuous', roundness: 0.4 },
+        color: { color: 'rgba(255,255,255,0.22)', highlight: 'rgba(102,231,255,0.6)' },
+        width: 1.2,
+        selectionWidth: 2,
+      },
+      nodes: {
+        shape: 'dot',
+        borderWidth: 2,
+        borderWidthSelected: 3,
+        shadow: { enabled: true, color: 'rgba(0,0,0,0.4)', size: 6 },
+        font: { face: 'Inter, system-ui, sans-serif' },
+      },
+      layout: { improvedLayout: true },
+      autoResize: true,
+      height: '100%',
+      width: '100%',
+    },
   }
-
-  return { nodes, edges }
 }
 
 // ============================================================
-// 渲染
+// 初始化 / 重建 NeoVis 实例
 // ============================================================
-async function render() {
-  if (!el.value || !props.graph || !props.graph.nodes?.length) return
+async function initNeoVis() {
+  const query = props.cypherQuery?.trim()
+  if (!query) {
+    hasQuery.value = false
+    errorMsg.value = ''
+    loading.value = false
+    return
+  }
+  hasQuery.value = true
+  errorMsg.value = ''
+  loading.value = true
 
+  // 等待容器渲染
   await nextTick()
-  await new Promise(resolve => setTimeout(resolve, 80))
+  await new Promise(r => setTimeout(r, 120))
 
-  instance?.destroy?.()
+  // 销毁旧实例
+  destroyInstance()
 
-  const width = el.value.clientWidth || 800
-  const height = el.value.clientHeight || 560
-  internalMode.value = props.mode
+  // 使用 CDN 加载的全局 NeoVis（window.NeoVis）
+  const NeoVis = (window as any).NeoVis
+  if (!NeoVis) {
+    errorMsg.value = 'neovis.js CDN 未加载，请检查网络连接'
+    loading.value = false
+    emit('error', errorMsg.value)
+    return
+  }
 
-  const data = buildLayoutData(props.graph, internalMode.value)
+  try {
+    const config = buildNeoVisConfig(query)
+    neoVisInstance = new NeoVis(config)
+    neoVisInstance.render()
+    loading.value = false
 
-  const isOverview = internalMode.value === 'overview'
+    // 渲染完成后通知父组件
+    setTimeout(() => {
+      // 验证渲染结果：嵌入的 vis.js network 对象是否存在
+      const network = neoVisInstance?._network
+      const nodeCount = network?.body?.data?.nodes?.length || 0
+      if (nodeCount === 0) {
+        errorMsg.value = '查询成功但图谱为空。请确认知识图谱已含内容。'
+      }
+      emit('ready')
+    }, 1200)
+  } catch (err: any) {
+    errorMsg.value = err?.message || 'neovis.js 初始化失败'
+    loading.value = false
+    emit('error', errorMsg.value)
+  }
+}
 
-  instance = new Graph({
-    container: el.value,
-    width,
-    height,
-    data,
-    node: {
-      type: 'rect',
-      style: (d: any) => {
-        const t = d.data?.type || 'paper'
-        const cfg = getTypeConfig(t)
-        const rawLabel = d.data?.label || ''
-        const text = rawLabel.length > 26 ? rawLabel.slice(0, 26) + '…' : rawLabel
-        const isGroup = d.data?.isGroup
-
-        if (isGroup) {
-          return {
-            size: [Math.min(220, Math.max(140, d.data.groupCount * 30 + 80)), 48],
-            radius: 8,
-            fill: cfg.color + '33',
-            stroke: cfg.color,
-            lineWidth: 2,
-            labelText: text,
-            labelFill: cfg.color,
-            labelFontSize: 14,
-            labelFontWeight: 'bold',
-            labelPlacement: 'center',
-            labelBackground: false,
-          }
-        }
-
-        return {
-          size: [Math.min(220, Math.max(90, text.length * 12)), 40],
-          radius: 6,
-          fill: '#1a2035',
-          stroke: cfg.color,
-          lineWidth: 2,
-          labelText: text,
-          labelFill: '#ffffff',
-          labelFontSize: 13,
-          labelFontWeight: 'normal',
-          labelPlacement: 'center',
-          labelBackground: true,
-          labelBackgroundFill: '#0d1117',
-          labelBackgroundRadius: 4,
-          labelBackgroundPadding: [3, 8],
-        }
-      },
-    },
-    edge: {
-      type: 'cubic-horizontal',
-      labelText: (d: any) => d.data?.label || '',
-      labelFill: '#c4d6f0',
-      labelFontSize: 10,
-      labelBackground: true,
-      labelBackgroundFill: 'rgba(17,24,39,0.85)',
-      labelBackgroundRadius: 3,
-      labelBackgroundPadding: [1, 4],
-      style: {
-        stroke: 'rgba(255,255,255,.28)',
-        lineWidth: 1.2,
-        endArrow: true,
-      },
-    },
-    layout: {
-      type: 'dagre',
-      rankdir: 'LR',
-      nodesep: isOverview ? 60 : 40,
-      ranksep: isOverview ? 120 : 100,
-      ranker: 'tight-tree',
-    },
-    behaviors: [
-      'drag-canvas',
-      'zoom-canvas',
-      'drag-element',
-      {
-        type: 'hover-activate',
-        degree: 1,
-        direction: 'both',
-      },
-    ],
-  })
-
-  // ★ 概览模式下双击组节点 → 展开为详细视图
-  instance.on('node:dblclick', (evt: any) => {
-    const nodeId = evt.target?.id
-    if (!nodeId) return
-
-    if (isOverview && nodeId.startsWith('group:')) {
-      const type = nodeId.replace('group:', '')
-      // 切换到详情模式
-      internalMode.value = 'detail'
-      emit('change-mode', 'detail')
-      render()
+function destroyInstance() {
+  if (neoVisInstance) {
+    try {
+      // neovis.js 的销毁链路：清除 network → 清除容器
+      if (typeof neoVisInstance._network?.destroy === 'function') {
+        neoVisInstance._network.destroy()
+      }
+      if (typeof neoVisInstance.destroy === 'function') {
+        neoVisInstance.destroy()
+      }
+    } catch {
+      // 忽略销毁异常
     }
-    emit('node-dblclick', nodeId, nodeId.replace('group:', ''))
-  })
-
-  instance.render()
+    neoVisInstance = null
+  }
 }
 
 // ============================================================
-// 监听
+// 生命周期
 // ============================================================
-onMounted(render)
-watch(() => props.graph, render, { deep: true })
-watch(() => props.mode, (newMode) => {
-  if (newMode !== internalMode.value) {
-    internalMode.value = newMode
-    render()
-  }
+watch(() => props.cypherQuery, () => {
+  initNeoVis()
+})
+
+onMounted(() => {
+  initNeoVis()
 })
 
 onBeforeUnmount(() => {
-  instance?.destroy?.()
+  destroyInstance()
 })
 
 // ============================================================
-// 对外方法
+// 对外暴露
 // ============================================================
-function toggleView() {
-  internalMode.value = internalMode.value === 'overview' ? 'detail' : 'overview'
-  emit('change-mode', internalMode.value)
-  render()
+function fitView() {
+  neoVisInstance?._network?.fit?.({ animation: true })
 }
 
 function resetView() {
-  instance?.fitView?.()
+  neoVisInstance?._network?.fit?.({ animation: { duration: 600, easingFunction: 'easeInOutQuad' } })
 }
 
-defineExpose({ toggleView, resetView, currentMode: internalMode })
+defineExpose({ fitView, resetView })
 </script>
 
 <template>
-  <div class="graph-container">
-    <!-- 视图切换按钮 -->
-    <div class="view-controls" v-if="graph && graph.nodes?.length">
-      <button
-        class="view-btn"
-        :class="{ active: internalMode === 'overview' }"
-        @click="internalMode = 'overview'; emit('change-mode', 'overview'); render()"
-      >
-        🗂️ 概览
-      </button>
-      <button
-        class="view-btn"
-        :class="{ active: internalMode === 'detail' }"
-        @click="internalMode = 'detail'; emit('change-mode', 'detail'); render()"
-      >
-        🔬 详情
-      </button>
-      <button class="view-btn reset-btn" @click="resetView">⊞ 重置视野</button>
+  <div class="graph-canvas-wrapper">
+    <!-- 工具栏 -->
+    <div class="toolbar" v-if="hasQuery">
+      <button class="tool-btn" @click="fitView" title="适应视野">⊞ 适应视野</button>
+      <button class="tool-btn" @click="initNeoVis" title="刷新图谱">↻ 刷新</button>
     </div>
 
-    <div ref="el" class="graph-canvas">
-      <div v-if="!graph" class="empty">Select a knowledge graph to view entity relations.</div>
-      <div v-else-if="!graph.nodes || graph.nodes.length === 0" class="empty">
-        The current graph has no nodes. Check extraction results or regenerate the graph.
+    <!-- neovis.js 渲染容器 -->
+    <div
+      :id="containerId"
+      class="neo4j-viz"
+      :class="{ loading: !hasQuery }"
+    ></div>
+
+    <!-- 占位提示 -->
+    <div v-if="!hasQuery || errorMsg" class="empty-state">
+      <div class="empty-icon">{{ errorMsg ? '⚠️' : '🔗' }}</div>
+      <div class="empty-text">
+        {{ errorMsg || '未提供 Cypher 查询语句。请先生成知识图谱。' }}
       </div>
     </div>
 
-    <!-- 图例 -->
-    <div class="legend" v-if="graph && graph.nodes?.length && internalMode === 'detail'">
-      <span v-for="(cfg, type) in TYPE_CONFIG" :key="type" class="legend-item"
-        v-show="type !== '__default__'">
-        <span class="legend-dot" :style="{ background: cfg.color }"></span>
-        {{ cfg.label }}
-      </span>
+    <!-- 加载态 -->
+    <div v-if="loading && !errorMsg" class="loading-overlay">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">连接 Neo4j 并渲染图谱…</div>
     </div>
 
-    <!-- 概览模式提示 -->
-    <div class="hint-bar" v-if="graph && graph.nodes?.length && internalMode === 'overview'">
-      💡 双击任意类型节点可展开查看该类型的详细实体关系
+    <!-- 图例 -->
+    <div class="legend-bar" v-if="hasQuery">
+      <span
+        v-for="(cfg, label) in LABEL_COLORS"
+        :key="label"
+        class="legend-tag"
+      >
+        <span class="legend-dot" :style="{ background: cfg.background }"></span>
+        {{ label }}
+      </span>
     </div>
   </div>
 </template>
 
 <style scoped>
-.graph-container {
+.graph-canvas-wrapper {
   position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
+  border-radius: 12px;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 40%, rgba(102,231,255,0.08), rgba(255,255,255,0.02));
+  border: 1px solid rgba(255,255,255,0.08);
 }
-.view-controls {
+
+/* —— 工具栏 —— */
+.toolbar {
   position: absolute;
   top: 10px;
-  left: 12px;
+  right: 12px;
   z-index: 10;
   display: flex;
   gap: 6px;
 }
-.view-btn {
-  padding: 3px 12px;
-  border-radius: 4px;
-  border: 1px solid rgba(255,255,255,.18);
-  background: rgba(17,28,51,.9);
+.tool-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(13,17,23,0.85);
   color: #9fb1cc;
   font-size: 12px;
   cursor: pointer;
-  transition: all .2s;
-  backdrop-filter: blur(6px);
+  transition: all 0.2s;
+  backdrop-filter: blur(8px);
 }
-.view-btn.active {
-  background: rgba(102,231,255,.18);
-  border-color: rgba(102,231,255,.5);
+.tool-btn:hover {
+  border-color: rgba(102,231,255,0.45);
   color: #66e7ff;
+  background: rgba(102,231,255,0.08);
 }
-.view-btn:hover { border-color: rgba(255,255,255,.35); }
-.reset-btn { margin-left: 8px; }
 
-.graph-canvas {
+/* —— 画布容器 —— */
+.neo4j-viz {
   flex: 1;
-  border-radius: 22px;
-  background: radial-gradient(circle at center, rgba(102,231,255,.10), rgba(255,255,255,.03));
-  border: 1px solid rgba(255,255,255,.10);
-  overflow: hidden;
-  position: relative;
   min-height: 480px;
 }
-.empty {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: rgba(238,246,255,.45);
-  text-align: center;
-  padding: 20px;
-  font-size: 14px;
+.neo4j-viz.loading {
+  opacity: 0.3;
+  pointer-events: none;
 }
 
-.legend {
+/* —— 加载态 —— */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(13,17,23,0.6);
+  z-index: 5;
+  backdrop-filter: blur(4px);
+}
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(255,255,255,0.15);
+  border-top-color: #66e7ff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.loading-text {
+  color: rgba(238,246,255,0.5);
+  font-size: 13px;
+}
+
+/* —— 占位 —— */
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  pointer-events: none;
+}
+.empty-icon {
+  font-size: 40px;
+  opacity: 0.6;
+}
+.empty-text {
+  color: rgba(238,246,255,0.4);
+  font-size: 14px;
+  text-align: center;
+  max-width: 260px;
+  line-height: 1.6;
+}
+
+/* —— 图例 —— */
+.legend-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 16px;
-  padding: 8px 60px 0 12px;
+  gap: 6px 14px;
+  padding: 8px 14px;
+  background: rgba(13,17,23,0.7);
+  border-top: 1px solid rgba(255,255,255,0.06);
+  backdrop-filter: blur(6px);
 }
-.legend-item {
-  display: flex;
+.legend-tag {
+  display: inline-flex;
   align-items: center;
   gap: 5px;
   font-size: 11px;
   color: #9fb1cc;
+  white-space: nowrap;
 }
 .legend-dot {
   width: 10px;
   height: 10px;
   border-radius: 2px;
   flex-shrink: 0;
-}
-
-.hint-bar {
-  text-align: center;
-  padding: 6px 12px;
-  font-size: 12px;
-  color: #ffc53d;
-  background: rgba(255,197,61,.08);
-  border-top: 1px solid rgba(255,197,61,.2);
-  border-radius: 0 0 8px 8px;
+  box-shadow: 0 0 4px currentColor;
 }
 </style>
