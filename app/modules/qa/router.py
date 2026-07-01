@@ -196,25 +196,31 @@ class GenerateTitleIn(PydanticBaseModel):
 @router.post('/sessions/{session_id}/generate-title')
 async def generate_title(session_id: int, data: GenerateTitleIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     """根据首条消息自动生成会话标题"""
+    import logging
+    logger = logging.getLogger(__name__)
     session = await db.get(QASession, session_id)
     if not session or session.user_id != user.id:
         raise HTTPException(404, '会话不存在')
     try:
         llm = OpenAICompatibleLLM()
-        title = await llm.async_chat(
-            messages=[{'role': 'user', 'content': f"请将用户的这句话提炼为一个不超过10个字的极简会话标题。只输出标题纯文本，不要带书名号、引号或任何标点。用户提问：{data.first_message}"}],
-            temperature=0.3, max_tokens=20,
+        raw = await llm.async_chat(
+            messages=[
+                {'role': 'system', 'content': '你是会话标题提炼助手。根据用户提问生成不超过10个字的极简中文标题。只输出标题纯文本，不要任何额外内容。'},
+                {'role': 'user', 'content': f'用户提问：{data.first_message}'},
+            ],
+            temperature=0.3, max_tokens=50,
         )
-        title = (title or '').strip()
-        if title:
+        title = (raw or '').strip()
+        logger.info('[generate-title] session_id=%s raw=%r stripped=%r', session_id, raw, title)
+        if title and len(title) <= 20:
             session.title = title
             await db.commit()
             await db.refresh(session)
-            return {'title': session.title}
+        else:
+            logger.warning('[generate-title] 标题无效（为空或过长），保持原标题: %s', session.title)
         return {'title': session.title}
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning('生成会话标题失败: %s', e)
+        logger.warning('[generate-title] 生成失败: %s', e, exc_info=True)
         return {'title': session.title}
 
 # ========== 推荐问题 ==========

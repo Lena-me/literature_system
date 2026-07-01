@@ -53,7 +53,11 @@ async function submit() {
   // 登录功能
   if (mode.value === 'login') {
     const user = await auth.login(form.phone, form.password)
-    router.push(user.role === 'admin' ? '/admin' : '/dashboard')
+    if (user.role !== 'researcher') {
+      auth.logout()
+      return ElMessage.error('该账号请使用管理员登录入口')
+    }
+    router.push('/dashboard')
   }
 
   // 注册功能

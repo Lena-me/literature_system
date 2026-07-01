@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 from app.core.dependencies import get_current_user
 from app.db.mysql import get_db
 from app.models import (
@@ -398,7 +399,7 @@ async def get_graph(
             "MATCH (n:Entity) WHERE n.graph_id = $graph_id "
             "RETURN elementId(n) AS id, labels(n) AS labels, "
             "n.name AS name, n.properties AS properties, "
-            "n.domain_id AS domain_id, n.milvus_id AS milvus_id",
+            "n.domain_id AS domain_id",
             {'graph_id': graph_id},
         )
         node_records = [r.data() async for r in nodes_result]
@@ -439,6 +440,46 @@ async def get_graph(
             }
             for rec in edge_records
         ]
+
+        # ★ 补偿查询：边引用了但节点查询漏掉的节点（通常是因为n.graph_id ≠ r.graph_id 的数据不一致）
+        existing_node_ids = {n['id'] for n in nodes}
+        referenced_node_ids: set[str] = set()
+        for rec in edge_records:
+            referenced_node_ids.add(rec['source'])
+            referenced_node_ids.add(rec['target'])
+        missing_node_ids = referenced_node_ids - existing_node_ids
+        if missing_node_ids:
+            logging.getLogger(__name__).warning(
+                f'[get_graph] graph_id={graph_id} 发现{len(missing_node_ids)}个孤儿节点引用，正在补偿查询...'
+            )
+            missing_result = await neo4j_session.run(
+                "MATCH (n:Entity) WHERE elementId(n) IN $ids "
+                "RETURN elementId(n) AS id, labels(n) AS labels, "
+                "n.name AS name, n.properties AS properties, "
+                "n.domain_id AS domain_id",
+                {'ids': list(missing_node_ids)},
+            )
+            async for rec in missing_result:
+                raw_labels: list[str] = list(rec['labels'])
+                entity_type = 'paper'
+                for lbl in raw_labels:
+                    if lbl != 'Entity':
+                        entity_type = lbl.lower()
+                        break
+                nodes.append({
+                    'id': rec['id'],
+                    'type': entity_type,
+                    'name': rec['name'],
+                    'properties': loads(rec['properties'], {}),
+                })
+
+    print(f'[get_graph] graph_id={graph_id} | Neo4j节点数={len(nodes)} | Neo4j边数={len(edges)}')
+    if nodes:
+        print(f'[get_graph] 第1个节点: id={nodes[0]["id"][:8]} type={nodes[0]["type"]} name={nodes[0]["name"][:30]}')
+    if edges:
+        print(f'[get_graph] 第1个边: id={edges[0]["id"][:8]} source={edges[0]["source"][:8]} target={edges[0]["target"][:8]} type={edges[0]["relation_type"]}')
+    else:
+        print(f'[get_graph] ⚠️ 无边数据! nodes={len(nodes)}')
 
     return {
         'id': graph.id,
