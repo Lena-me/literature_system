@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { papersApi } from '@/api/papers'
 import { usePaperStore } from '@/stores/papers'
 import PaperReader from '@/components/reader/PaperReader.vue'
@@ -27,8 +27,7 @@ const loading = ref(false)
 const searchQuery = ref('')
 const activeCategory = ref<string | number>('all')
 const sortBy = ref<'date-desc' | 'date-asc' | 'title-asc' | 'title-desc'>('date-desc')
-const dateFrom = ref('')
-const dateTo = ref('')
+const dateRange = ref<[string, string] | null>(null)
 const activeLetter = ref('')
 const sidebarCollapsed = ref(false)
 const sidebarHovered = ref(false)
@@ -39,8 +38,7 @@ function clearAllFilters() {
   if (isClearing.value) return
   isClearing.value = true
   activeLetter.value = ''
-  dateFrom.value = ''
-  dateTo.value = ''
+  dateRange.value = null
   searchQuery.value = ''
   setTimeout(() => { isClearing.value = false }, 600)
 }
@@ -80,9 +78,35 @@ function getCategoryName(paper: any): string | null {
   return categories.value.find(c => c.id === paper.category_id)?.name || null
 }
 
+// ── 实时轮询：检测解析中的文献，自动刷新列表 ──
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+function startPolling() {
+  stopPolling()
+  pollTimer = setInterval(async () => {
+    const hasProcessing = store.list.some(
+      (p: any) => p.parse_status && p.parse_status !== 'completed' && p.parse_status !== 'failed'
+    )
+    if (hasProcessing) {
+      await store.load()
+    }
+  }, 3000)
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
 onMounted(() => {
-  store.load()
+  store.load().then(startPolling)
   loadCategories()
+})
+
+onUnmounted(() => {
+  stopPolling()
 })
 
 // ── 分类 API ──
@@ -152,6 +176,31 @@ function formatDate(ts: string | null | undefined) {
   return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
 }
 
+function statusLabel(s: string | null | undefined): string {
+  switch (s) {
+    case 'completed': return '已解析'
+    case 'failed': return '解析失败'
+    case 'processing':
+    case 'parsing': return '解析中'
+    case 'pending': return '等待中'
+    default: return '未解析'
+  }
+}
+
+function parsedAuthors(row: any): string[] {
+  const val = row.authors
+  if (!val) return []
+  if (Array.isArray(val)) return val.filter(Boolean)
+  if (typeof val === 'string') {
+    try {
+      const arr = JSON.parse(val)
+      if (Array.isArray(arr)) return arr.filter(Boolean)
+    } catch {}
+    return val.split(/[,;，；]/).map((s: string) => s.trim().replace(/^\[|\]$/g, '')).filter(Boolean)
+  }
+  return []
+}
+
 const ALPHABET = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 const filteredPapers = computed(() => {
@@ -187,15 +236,15 @@ const filteredPapers = computed(() => {
   }
 
   // 3. 日期筛选
-  if (dateFrom.value) {
-    const from = new Date(dateFrom.value).getTime()
+  if (dateRange.value && dateRange.value[0]) {
+    const from = new Date(dateRange.value[0]).getTime()
     list = list.filter(p => {
       const t = p.upload_time ? new Date(p.upload_time).getTime() : 0
       return t >= from
     })
   }
-  if (dateTo.value) {
-    const to = new Date(dateTo.value + 'T23:59:59').getTime()
+  if (dateRange.value && dateRange.value[1]) {
+    const to = new Date(dateRange.value[1] + 'T23:59:59').getTime()
     list = list.filter(p => {
       const t = p.upload_time ? new Date(p.upload_time).getTime() : 0
       return t <= to
@@ -491,71 +540,56 @@ async function batchDelete() {
     <main class="lib-main">
       <!-- Header -->
       <div class="lib-header">
-        <div class="lib-header-left">
-          <h2 class="lib-header-title">{{ categoryLabel }}</h2>
-          <span class="lib-header-count">{{ filteredPapers.length }} 篇文献</span>
-        </div>
-        <div class="lib-header-right">
-          <div class="lib-filter-row">
-            <!-- 排序 -->
-            <select v-model="sortBy" class="lib-sort-select">
-              <option value="date-desc">最新上传</option>
-              <option value="date-asc">最早上传</option>
-              <option value="title-asc">标题 A-Z</option>
-              <option value="title-desc">标题 Z-A</option>
-            </select>
+        <h2 class="lib-header-title">{{ categoryLabel }}</h2>
+        <span class="lib-header-count">{{ filteredPapers.length }} 篇</span>
 
-            <!-- 日期筛选 -->
-            <div class="lib-date-wrap">
-              <input
-                v-model="dateFrom"
-                type="date"
-                class="lib-date-input"
-                title="起始日期"
-              />
-              <span v-if="!dateFrom" class="lib-date-placeholder">开始日期</span>
-            </div>
-            <span class="lib-date-sep">—</span>
-            <div class="lib-date-wrap">
-              <input
-                v-model="dateTo"
-                type="date"
-                class="lib-date-input"
-                title="结束日期"
-              />
-              <span v-if="!dateTo" class="lib-date-placeholder">结束日期</span>
-            </div>
-            <button
-              v-if="dateFrom || dateTo"
-              class="lib-filter-clear"
-              @click="dateFrom = ''; dateTo = ''"
-              title="清除日期筛选"
-            >清除</button>
+        <div class="lib-header-spacer"></div>
 
-            <!-- 搜索 -->
-            <div class="lib-search-box">
-              <svg class="lib-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-              </svg>
-              <input
-                v-model="searchQuery"
-                class="lib-search-input"
-                placeholder="搜索标题、期刊、DOI..."
-              />
-              <button
-                v-if="searchQuery"
-                class="lib-search-clear"
-                @click="searchQuery = ''"
-              >&times;</button>
-            </div>
-          </div>
-          <button class="lib-upload-btn" @click="openUpload">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-            </svg>
-            上传文献
-          </button>
+        <select v-model="sortBy" class="lib-sort-select">
+          <option value="date-desc">最新上传</option>
+          <option value="date-asc">最早上传</option>
+          <option value="title-asc">标题 A-Z</option>
+          <option value="title-desc">标题 Z-A</option>
+        </select>
+
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          range-separator="—"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          value-format="YYYY-MM-DD"
+          size="default"
+          class="lib-date-picker"
+        />
+        <button
+          v-if="dateRange"
+          class="lib-filter-clear"
+          @click="dateRange = null"
+        >清除</button>
+
+        <div class="lib-search-box">
+          <svg class="lib-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            v-model="searchQuery"
+            class="lib-search-input"
+            placeholder="搜索标题、期刊、DOI..."
+          />
+          <button
+            v-if="searchQuery"
+            class="lib-search-clear"
+            @click="searchQuery = ''"
+          >&times;</button>
         </div>
+
+        <button class="lib-upload-btn" @click="openUpload">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          上传
+        </button>
       </div>
 
       <!-- 文献列表 -->
@@ -616,12 +650,12 @@ async function batchDelete() {
           <div class="lib-item-main" @click="openReader(row)">
             <div class="lib-item-title">{{ row.title || row.original_filename }}</div>
             <div class="lib-item-meta">
-              <span v-if="row.publication_year" class="lib-item-year">{{ row.publication_year }}</span>
-              <span v-if="row.publication_year && row.journal_conf" class="lib-item-sep">·</span>
-              <span v-if="row.journal_conf" class="lib-item-journal">{{ row.journal_conf }}</span>
-              <span v-if="(row.publication_year || row.journal_conf) && row.authors" class="lib-item-sep">·</span>
-              <span v-if="row.authors" class="lib-item-authors">{{ row.authors }}</span>
-              <span v-if="row.upload_time" class="lib-item-sep">·</span>
+              <span v-if="row.publication_year" class="lib-meta-year">{{ row.publication_year }}</span>
+              <span v-if="row.journal_conf" class="lib-meta-journal">{{ row.journal_conf }}</span>
+              <span v-if="parsedAuthors(row).length" class="lib-item-authors">
+                <span v-for="(a, ai) in parsedAuthors(row).slice(0, 3)" :key="ai" class="lib-author-chip">{{ a }}</span>
+                <span v-if="parsedAuthors(row).length > 3" class="lib-author-more">+{{ parsedAuthors(row).length - 3 }}</span>
+              </span>
               <span v-if="row.upload_time" class="lib-item-date">{{ formatDate(row.upload_time) }}</span>
             </div>
           </div>
@@ -631,14 +665,14 @@ async function batchDelete() {
             v-if="getCategoryName(row)"
             class="lib-item-cat-tag"
             @click.stop
-          ># {{ getCategoryName(row) }}</span>
+          >{{ getCategoryName(row) }}</span>
 
           <!-- 状态徽章 -->
           <span class="lib-item-status" :class="row.parse_status">
             <span v-if="row.parse_status === 'completed'" class="status-dot completed"></span>
             <span v-else-if="row.parse_status === 'failed'" class="status-dot failed"></span>
-            <span v-else class="status-dot processing"></span>
-            {{ row.parse_status === 'completed' ? 'Completed' : row.parse_status === 'failed' ? 'Failed' : 'Parsing' }}
+            <span v-else class="status-dot processing pulsing"></span>
+            {{ statusLabel(row.parse_status) }}
           </span>
 
           <!-- 操作按钮 -->
@@ -853,7 +887,7 @@ async function batchDelete() {
 .lib-sidebar-toggle {
   position: absolute;
   left: 220px;
-  top: 32px;
+  top: 18px;
   z-index: 50;
   width: 24px;
   height: 24px;
@@ -1129,51 +1163,39 @@ async function batchDelete() {
   position: relative;
 }
 
-/* ---- Header ---- */
+/* ---- Header (single-row toolbar) ---- */
 .lib-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 20px 24px 20px 40px;
+  gap: 10px;
+  padding: 14px 24px 14px 24px;
   flex-shrink: 0;
-}
-
-.lib-header-left {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
+  flex-wrap: nowrap;
 }
 
 .lib-header-title {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   color: #0F172A;
-  margin: 0;
+  margin: 0 0 0 16px;
+  white-space: nowrap;
 }
 
 .lib-header-count {
   font-size: 13px;
   color: #94A3B8;
+  white-space: nowrap;
 }
 
-.lib-header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-/* ---- 搜索框 ---- */
-.lib-filter-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.lib-header-spacer {
+  flex: 1;
+  min-width: 8px;
 }
 
 .lib-sort-select {
-  padding: 8px 12px;
+  padding: 6px 10px;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fff;
   font-size: 13px;
   color: #475569;
@@ -1183,57 +1205,15 @@ async function batchDelete() {
   white-space: nowrap;
 }
 
-.lib-date-wrap {
-  position: relative;
-  display: inline-flex;
+.lib-date-picker {
+  width: 230px;
 }
-.lib-date-placeholder {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 13px;
-  color: #94A3B8;
-  pointer-events: none;
-  user-select: none;
+.lib-date-picker .el-input__wrapper {
+  border-radius: 8px !important;
+  box-shadow: 0 0 0 1px #E2E8F0 !important;
 }
-.lib-date-input {
-  width: 130px;
-  padding: 7px 10px;
-  border: 1px solid #E2E8F0;
-  border-radius: 8px;
-  background: #fff;
-  font-size: 13px;
-  color: #475569;
-  outline: none;
-  box-shadow: none;
-  transition: border-color 0.15s;
-}
-.lib-date-input::-webkit-calendar-picker-indicator {
-  color: #94A3B8;
-  opacity: 0.6;
-  cursor: pointer;
-}
-.lib-date-input:hover {
-  border-color: #6366F1;
-}
-.lib-date-input:focus {
-  border-color: #6366F1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-  color: #475569;
-}
-.lib-date-input::-webkit-datetime-edit {
-  color: transparent;
-}
-.lib-date-input:focus::-webkit-datetime-edit,
-.lib-date-input:valid::-webkit-datetime-edit {
-  color: #475569;
-}
-
-.lib-date-sep {
-  font-size: 12px;
-  color: #94A3B8;
-  user-select: none;
+.lib-date-picker .el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px #6366F1 !important;
 }
 
 .lib-filter-clear {
@@ -1265,21 +1245,21 @@ async function batchDelete() {
 }
 
 .lib-search-input {
-  width: 220px;
-  padding: 8px 32px 8px 34px;
+  width: 180px;
+  padding: 6px 30px 6px 32px;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fff;
   font-size: 13px;
   color: #334155;
   outline: none;
   box-shadow: 0 0 0 1px #E2E8F0;
-  transition: box-shadow 0.15s;
+  transition: box-shadow 0.15s, width 0.2s;
 }
 
 .lib-search-input:focus {
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
-  width: 280px;
+  width: 220px;
 }
 
 .lib-search-input::placeholder {
@@ -1311,24 +1291,21 @@ async function batchDelete() {
 .lib-upload-btn {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 9px 20px;
+  gap: 6px;
+  padding: 7px 16px;
   background: #3B82F6;
   color: #fff;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
-  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.3);
   white-space: nowrap;
+  transition: background 0.15s, box-shadow 0.15s;
 }
 
 .lib-upload-btn:hover {
   background: #2563EB;
-  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3);
-  transform: translateY(-0.5px);
 }
 
 /* ---- 文献列表 ---- */
@@ -1514,32 +1491,56 @@ async function batchDelete() {
   flex-wrap: wrap;
 }
 
-.lib-item-year {
-  color: #64748B;
+.lib-meta-year {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  font-size: 11px;
   font-weight: 500;
+  color: #7C3AED;
+  background: #F5F3FF;
+  border-radius: 4px;
 }
 
-.lib-item-sep {
-  color: #CBD5E1;
-  user-select: none;
-  margin: 0 2px;
-}
-
-.lib-item-journal {
+.lib-meta-journal {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  font-size: 11px;
   font-style: italic;
-  color: #94A3B8;
-  max-width: 260px;
+  color: #059669;
+  background: #ECFDF5;
+  border-radius: 4px;
+  max-width: 220px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .lib-item-authors {
-  color: #94A3B8;
-  max-width: 200px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.lib-author-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: #3B82F6;
+  background: #EFF6FF;
+  border-radius: 4px;
   white-space: nowrap;
+  max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.lib-author-more {
+  font-size: 11px;
+  color: #94A3B8;
+  white-space: nowrap;
 }
 
 .lib-item-date {
@@ -1554,8 +1555,8 @@ async function batchDelete() {
   display: inline-flex;
   align-items: center;
   padding: 2px 10px;
-  background: #F1F5F9;
-  color: #64748B;
+  background: #FFF7ED;
+  color: #C2410C;
   font-size: 11px;
   font-weight: 500;
   border-radius: 4px;

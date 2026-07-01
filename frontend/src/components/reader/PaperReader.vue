@@ -25,33 +25,69 @@ const md = new MarkdownIt({
   typographer: true,
 })
 
-// 将 ContentItem[] 转为 Markdown 字符串
-const markdownContent = computed(() => {
-  if (!contentItems.value.length) return '*暂无解析内容*'
-  return contentItems.value
-    .map(item => {
-      const text = item.content || ''
-      switch (item.type) {
-        case 'heading':
-          const level = Math.min(item.level || 1, 6)
-          return '#'.repeat(level) + ' ' + text
-        case 'code':
-          return '```\n' + text + '\n```'
-        case 'table':
-          return text // 表格已是 Markdown 格式
-        case 'list':
-        case 'list_item':
-          return text
-        case 'image':
-          return `![${text}](${text})`
-        default:
-          return text
+// ── 结构化章节（按 heading 分组折叠视图） ──
+interface Section {
+  title: string
+  level: number
+  children: ContentItem[]
+}
+
+const structuredSections = computed<Section[]>(() => {
+  const items = contentItems.value
+  if (!items.length) return []
+
+  const sections: Section[] = []
+  let current: Section | null = null
+
+  for (const item of items) {
+    const type = (item as any).type || (item as any).item_type || ''
+    if (type === 'heading') {
+      const level = (item as any).level || 1
+      current = { title: (item as any).content || '', level, children: [] }
+      sections.push(current)
+    } else if (current) {
+      current.children.push(item)
+    } else {
+      // 无 heading 开头的内容归入"引言 / 摘要"
+      if (!sections.length) {
+        sections.push({ title: '引言 / 摘要', level: 0, children: [] })
       }
-    })
-    .join('\n\n')
+      sections[0].children.push(item)
+    }
+  }
+
+  // 如果没有任何章节（全是 heading 无 content），保留 heading 本身
+  if (!sections.length && items.length) {
+    sections.push({ title: '全文', level: 0, children: items })
+  }
+
+  return sections
 })
 
-const renderedHtml = computed(() => md.render(markdownContent.value))
+// 渲染单个 ContentItem 为 HTML
+function renderItemHtml(item: ContentItem): string {
+  const type = (item as any).type || (item as any).item_type || ''
+  const text = item.content || ''
+  switch (type) {
+    case 'code':
+      return '<pre><code>' + escapeHtml(text) + '</code></pre>'
+    case 'table':
+      return text // 已是 Markdown table
+    case 'image':
+      return `<img src="${escapeHtml(text)}" alt="${escapeHtml(text)}" style="max-width:100%" />`
+    case 'heading':
+      return '<p><strong>' + escapeHtml(text) + '</strong></p>'
+    case 'list_item':
+      return '<p>' + escapeHtml(text) + '</p>'
+    default:
+      // paragraph 等 → 用 MarkdownIt 渲染内联格式
+      return md.renderInline(text) ? md.render(text) : '<p>' + escapeHtml(text) + '</p>'
+  }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
 
 // ── 加载 ──
 function open() {
@@ -206,7 +242,30 @@ defineExpose({ open })
 
               <div class="pane-body">
                 <!-- Markdown 视图 -->
-                <div v-if="activeTab === 'markdown'" class="markdown-body" v-html="renderedHtml"></div>
+                <div v-if="activeTab === 'markdown'" class="accordion-body">
+                  <template v-if="structuredSections.length">
+                    <details
+                      v-for="(sec, si) in structuredSections"
+                      :key="si"
+                      class="acc-section"
+                      :open="si === 0"
+                    >
+                      <summary class="acc-summary">
+                        <span class="acc-title">{{ sec.title }}</span>
+                        <span v-if="sec.children.length" class="acc-count">{{ sec.children.length }}</span>
+                      </summary>
+                      <div class="acc-content">
+                        <div
+                          v-for="(child, ci) in sec.children"
+                          :key="ci"
+                          class="acc-item"
+                          v-html="renderItemHtml(child)"
+                        ></div>
+                      </div>
+                    </details>
+                  </template>
+                  <div v-else class="pane-empty">暂无解析内容</div>
+                </div>
 
                 <!-- 知识图谱预览 -->
                 <div v-else class="pane-empty">知识图谱预览功能即将上线</div>
@@ -244,22 +303,14 @@ defineExpose({ open })
 }
 
 /* ── Slide transition ── */
-.reader-slide-enter-active,
-.reader-slide-leave-active {
-  transition: opacity 0.25s ease;
-}
+
 .reader-slide-enter-active .reader-drawer,
 .reader-slide-leave-active .reader-drawer {
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.reader-slide-enter-from {
-  opacity: 0;
-}
+
 .reader-slide-enter-from .reader-drawer {
   transform: translateX(100%);
-}
-.reader-slide-leave-to {
-  opacity: 0;
 }
 .reader-slide-leave-to .reader-drawer {
   transform: translateX(100%);
@@ -451,62 +502,108 @@ defineExpose({ open })
 }
 
 /* ========================================
-   Markdown Content
+   Accordion (结构化折叠视图)
    ======================================== */
-.markdown-body {
-  padding: 28px 32px;
-  font-size: 15px;
-  line-height: 1.75;
-  color: #334155;
-  max-width: 100%;
+.accordion-body {
+  padding: 20px 24px;
 }
 
-/* Headings */
-.markdown-body :deep(h1) {
-  font-size: 22px;
-  font-weight: 700;
-  color: #0F172A;
-  margin: 28px 0 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #E2E8F0;
-}
-.markdown-body :deep(h1:first-child) {
-  margin-top: 0;
+/* ── 章节容器 ── */
+.acc-section {
+  margin-bottom: 4px;
+  border: none;
+  outline: none;
 }
 
-.markdown-body :deep(h2) {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1E293B;
-  margin: 24px 0 10px;
-}
-.markdown-body :deep(h2:first-child) {
-  margin-top: 0;
+.acc-section[open] {
+  margin-bottom: 12px;
 }
 
-.markdown-body :deep(h3) {
-  font-size: 15px;
+/* ── 标题栏 ── */
+.acc-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 16px;
   font-weight: 600;
   color: #334155;
-  margin: 20px 0 8px;
+  cursor: pointer;
+  border-radius: 6px;
+  list-style: none;
+  transition: background 0.12s;
+  outline: none;
+  user-select: none;
 }
 
-.markdown-body :deep(h4),
-.markdown-body :deep(h5),
-.markdown-body :deep(h6) {
+.acc-summary::-webkit-details-marker {
+  display: none;
+}
+.acc-summary::marker {
+  display: none;
+  content: '';
+}
+
+/* 自定义三角箭头 */
+.acc-summary::before {
+  content: '▸';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 12px;
+  color: #94A3B8;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+
+.acc-section[open] > .acc-summary::before {
+  transform: rotate(90deg);
+}
+
+.acc-summary:hover {
+  background: #F8FAFC;
+}
+
+/* 标题文字 */
+.acc-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 子项计数 */
+.acc-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: #94A3B8;
+  background: #F1F5F9;
+  padding: 1px 6px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+/* ── 内容区 ── */
+.acc-content {
+  padding: 8px 0 4px 32px;
   font-size: 14px;
-  font-weight: 600;
+  line-height: 1.8;
   color: #475569;
-  margin: 16px 0 6px;
 }
 
-/* Paragraph */
-.markdown-body :deep(p) {
-  margin: 0 0 12px;
+.acc-item {
+  margin-bottom: 1em;
 }
 
-/* Code */
-.markdown-body :deep(code) {
+/* 内容区内嵌元素样式 */
+.acc-content :deep(p) {
+  margin: 0 0 0.8em;
+}
+
+.acc-content :deep(code) {
   background: #F1F5F9;
   color: #E11D48;
   padding: 2px 6px;
@@ -515,16 +612,16 @@ defineExpose({ open })
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
 }
 
-.markdown-body :deep(pre) {
+.acc-content :deep(pre) {
   background: #1E293B;
   color: #E2E8F0;
-  padding: 16px 20px;
-  border-radius: 10px;
+  padding: 14px 18px;
+  border-radius: 8px;
   overflow-x: auto;
-  margin: 12px 0;
+  margin: 10px 0;
 }
 
-.markdown-body :deep(pre code) {
+.acc-content :deep(pre code) {
   background: transparent;
   color: inherit;
   padding: 0;
@@ -532,52 +629,49 @@ defineExpose({ open })
   line-height: 1.6;
 }
 
-/* Table */
-.markdown-body :deep(table) {
+.acc-content :deep(table) {
   width: 100%;
   border-collapse: collapse;
-  margin: 12px 0;
+  margin: 10px 0;
   font-size: 13px;
 }
 
-.markdown-body :deep(th) {
+.acc-content :deep(th) {
   background: #F8FAFC;
   color: #475569;
   font-weight: 600;
   text-align: left;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border: 1px solid #E2E8F0;
 }
 
-.markdown-body :deep(td) {
-  padding: 8px 14px;
+.acc-content :deep(td) {
+  padding: 6px 12px;
   border: 1px solid #E2E8F0;
   color: #334155;
 }
 
-.markdown-body :deep(tr:nth-child(even) td) {
+.acc-content :deep(tr:nth-child(even) td) {
   background: #F8FAFC;
 }
 
-/* Blockquote */
-.markdown-body :deep(blockquote) {
-  margin: 12px 0;
-  padding: 8px 16px;
-  border-left: 3px solid #3B82F6;
+.acc-content :deep(blockquote) {
+  margin: 10px 0;
+  padding: 6px 14px;
+  border-left: 2px solid #3B82F6;
   background: #F8FAFC;
   color: #64748B;
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 4px 4px 0;
 }
 
-/* List */
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
-  padding-left: 24px;
-  margin: 8px 0;
+.acc-content :deep(ul),
+.acc-content :deep(ol) {
+  padding-left: 22px;
+  margin: 6px 0;
 }
 
-.markdown-body :deep(li) {
-  margin: 4px 0;
+.acc-content :deep(li) {
+  margin: 3px 0;
   line-height: 1.7;
 }
 
