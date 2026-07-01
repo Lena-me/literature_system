@@ -36,11 +36,12 @@ async def verify_code(data:VerifyCodeIn, db: AsyncSession = Depends(get_db)):
 
 @router.post('/register', response_model=TokenOut)
 async def register(data: RegisterIn, request: Request, db: AsyncSession = Depends(get_db)):
-    await VerificationCodeService().verify(data.phone, 'register', data.code)
+    phone = data.phone.strip()
+    await VerificationCodeService().verify(phone, 'register', data.code)
     exists = (
         await db.execute(
             select(User).where(
-                User.phone == data.phone,
+                User.phone == phone,
             )
         )
     ).scalar_one_or_none()
@@ -52,7 +53,7 @@ async def register(data: RegisterIn, request: Request, db: AsyncSession = Depend
         username=data.username,
         password_hash=hash_password(data.password),
         email=data.email,
-        phone=data.phone,
+        phone=phone,
         role='researcher',
         status='active',
     )

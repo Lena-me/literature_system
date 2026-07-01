@@ -1,18 +1,27 @@
 FROM python:3.11-slim
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
+ENV PYTHONDONTWRITECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
+
+# 系统依赖层
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
     sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
     apt-get update && \
     apt-get install -y --no-install-recommends build-essential curl && \
     rm -rf /var/lib/apt/lists/*
 
+# Python 依赖层（requirements.txt 变更时才会重建）
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir \
+
+# 使用 BuildKit 缓存挂载，pip 下载缓存持久化
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --extra-index-url https://download.pytorch.org/whl/cpu \
     -r /app/requirements.txt
+
+# 代码层
 COPY app /app/app
 COPY scripts /app/scripts
+
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

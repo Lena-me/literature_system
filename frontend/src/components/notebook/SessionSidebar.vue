@@ -13,7 +13,7 @@ onMounted(() => {
 })
 
 async function handleNewSession() {
-  await notebook.createSession('新会话')
+  await notebook.createSession()
   ElMessage.success('新会话已创建')
 }
 

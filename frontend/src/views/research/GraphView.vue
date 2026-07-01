@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { knowledgeApi } from '@/api/knowledge'
@@ -39,6 +39,15 @@ const graphCypher = computed(() => {
 const activeDomain = computed(() =>
   domains.value.find(d => d.id === activeDomainId.value) || null
 )
+
+// 切换知识域时自动回到构建模式
+watch(activeDomainId, () => {
+  if (graphId.value) {
+    graphId.value = null
+    graph.value = null
+    router.replace({ query: {} })
+  }
+})
 
 async function loadDomains() {
   try {
@@ -85,14 +94,44 @@ const creating = ref(false)
 const graphId = ref<number | null>(null)
 const graph = ref<KnowledgeGraph | null>(null)
 
-const graphHistory = ref<{ id: number; name: string }[]>([])
-const filteredHistory = computed(() =>
-  graphHistory.value.filter(h => {
-    if (!activeDomainId.value) return false
-    // simplified: show all, actual filter needs domain_id from API
-    return true
+interface HistoryItem {
+  id: number
+  name: string
+  paperCount?: number
+  nodeCount?: number
+  edgeCount?: number
+  updatedAt?: string
+}
+
+const graphHistory = ref<HistoryItem[]>([])
+const showBuildModal = ref(false)
+const paperSearchQuery = ref('')
+const menuOpenId = ref<number | null>(null)
+const editingId = ref<number | null>(null)
+const editName = ref('')
+
+const filteredPapers = computed(() => {
+  const q = paperSearchQuery.value.trim().toLowerCase()
+  if (!q) return papers.value
+  return papers.value.filter((p: any) => {
+    const title = (p.title || p.original_filename || '').toLowerCase()
+    return title.includes(q)
   })
-)
+})
+
+function openBuildModal() {
+  if (!activeDomainId.value) {
+    ElMessage.warning('请先在左侧选择一个知识域')
+    return
+  }
+  paperSearchQuery.value = ''
+  showBuildModal.value = true
+}
+
+function closeBuildModal() {
+  showBuildModal.value = false
+  paperSearchQuery.value = ''
+}
 
 onMounted(async () => {
   try { graphHistory.value = JSON.parse(localStorage.getItem('graph_ids') || '[]') } catch { /* */ }
@@ -114,7 +153,6 @@ function togglePaper(id: number) {
   if (idx > -1) selectedIds.value.splice(idx, 1)
   else {
     selectedIds.value.push(id)
-    // 用户每次勾选论文，防抖触发 AI 域建议
     triggerSuggest()
   }
 }
@@ -140,12 +178,10 @@ async function fetchSuggestions() {
 
 async function adoptSuggestion(s: DomainSuggestion) {
   if (s.match_type === 'existing' && s.domain_id) {
-    // 情况 A：直接选中有域
     activeDomainId.value = s.domain_id
     aiSuggestions.value = []
     ElMessage.success(`已选择「${s.domain_name}」`)
   } else {
-    // 情况 B：AI 建议新建域 — 弹出创建表单，预填名称
     newDomainName.value = s.domain_name
     newDomainDesc.value = s.reason
     showNewDomainForm.value = true
@@ -175,7 +211,6 @@ async function handleMerge(sourceId: number, targetId: number) {
       source_node_id: sourceId, target_node_id: targetId,
     })
     ElMessage.success(`已合并（${result.merged_edges} 条边重定向${result.deleted_duplicates ? `，${result.deleted_duplicates} 条重复边已删除` : ''}）`)
-    // 重新加载图谱以获取合并后的状态
     if (graphId.value) await loadGraph(graphId.value)
     mergeSuggestions.value = []
   } catch { ElMessage.error('合并失败') }
@@ -213,24 +248,35 @@ async function handleCreate() {
     })
     graphId.value = kg.id
     graph.value = kg
-    saveToHistory(kg.id, kg.name)
+    console.log('[GraphView:create] kg.id =', kg.id, '| kg.nodes =', kg.nodes?.length, '| kg.edges =', kg.edges?.length)
+    saveToHistory(kg.id, kg.name, kg)
     router.replace({ query: { id: kg.id } })
+    showBuildModal.value = false
+    paperSearchQuery.value = ''
+    selectedIds.value = []
     ElMessage.success('知识图谱已构建')
-    // refresh domain stats
     await loadDomains()
-  } catch { ElMessage.error('构建失败') }
+  } catch (err: any) {
+    console.error('[GraphView:create] 构建失败详情:', err?.message || err)
+    ElMessage.error('构建失败')
+  }
   creating.value = false
 }
 
-async function loadGraph(id: number) {
+async function loadGraph(id: number, updateUrl = true) {
   loading.value = true
   try {
     const kg = await knowledgeApi.get(id)
+    console.log('[GraphView:loadGraph] kg.id =', kg.id, '| kg.nodes =', kg.nodes?.length, '| kg.edges =', kg.edges?.length)
     graph.value = kg
     graphId.value = id
-    saveToHistory(id, kg.name)
-    // ★ 加载图谱后自动拉取融合建议 + 推荐
+    saveToHistory(id, kg.name, kg)
+    if (updateUrl) router.replace({ query: { id } })
     if (kg.domain_id) {
+      // 自动同步知识域选择
+      if (activeDomainId.value !== kg.domain_id) {
+        activeDomainId.value = kg.domain_id
+      }
       await loadMergeSuggestions()
       await loadRecommendations()
     }
@@ -238,779 +284,1692 @@ async function loadGraph(id: number) {
   loading.value = false
 }
 
-function saveToHistory(id: number, name: string) {
+function saveToHistory(id: number, name: string, kg?: KnowledgeGraph) {
+  const safeName = name || `图谱 #${id}`
   const exists = graphHistory.value.find(h => h.id === id)
+  const meta = kg ? {
+    paperCount: kg.paper_count ?? (kg as any).paper_ids?.length,
+    nodeCount: kg.nodes?.length,
+    edgeCount: kg.edges?.length,
+  } : {}
   if (!exists) {
-    graphHistory.value.unshift({ id, name })
+    graphHistory.value.unshift({ id, name: safeName, ...meta, updatedAt: new Date().toISOString() })
     if (graphHistory.value.length > 20) graphHistory.value.pop()
+  } else {
+    Object.assign(exists, { name: safeName, ...meta, updatedAt: new Date().toISOString() })
   }
-  localStorage.setItem('graph_ids', JSON.stringify(graphHistory.value))
+  try {
+    localStorage.setItem('graph_ids', JSON.stringify(graphHistory.value))
+  } catch {
+    console.warn('[GraphView] localStorage写入失败，图谱历史未能持久化')
+  }
+}
+
+// 返回构建模式
+function backToBuild() {
+  graphId.value = null
+  graph.value = null
+  router.replace({ query: {} })
+  loadDomains()
+}
+
+// 点击卡片进入图谱
+function enterGraph(id: number) {
+  loadGraph(id)
+}
+
+// 从历史记录中删除
+function removeFromHistory(id: number) {
+  graphHistory.value = graphHistory.value.filter(h => h.id !== id)
+  menuOpenId.value = null
+  syncHistoryToStorage()
+}
+
+// 开始重命名
+function startRename(h: HistoryItem) {
+  editingId.value = h.id
+  editName.value = h.name
+  menuOpenId.value = null
+}
+
+// 确认重命名
+function confirmRename() {
+  const item = graphHistory.value.find(h => h.id === editingId.value)
+  if (item && editName.value.trim()) {
+    item.name = editName.value.trim()
+    syncHistoryToStorage()
+  }
+  editingId.value = null
+  editName.value = ''
+}
+
+// 取消重命名
+function cancelRename() {
+  editingId.value = null
+  editName.value = ''
+}
+
+function syncHistoryToStorage() {
+  try {
+    localStorage.setItem('graph_ids', JSON.stringify(graphHistory.value))
+  } catch { /* */ }
+}
+
+function toggleMenu(id: number) {
+  menuOpenId.value = menuOpenId.value === id ? null : id
+}
+
+function closeMenu() {
+  menuOpenId.value = null
 }
 </script>
 
 <template>
-  <div class="graph-page">
-    <div class="graph-header">
-      <h2 class="graph-title">知识图谱</h2>
-      <div v-if="graphId" class="graph-id-badge">图谱 #{{ graphId }} · {{ graph?.name }}</div>
-    </div>
+  <div class="workspace">
+    <!-- ========== 左侧边栏：知识域导航 ========== -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h3 class="sidebar-title">知识域</h3>
+        <span class="sidebar-count" v-if="domains.length">{{ domains.length }}</span>
+      </div>
 
-    <div class="graph-body">
-      <!-- ===== 知识域选择 ===== -->
-      <div v-if="!graphId" class="domain-section">
-        <h3>知识域</h3>
-        <p class="section-hint">知识域用于组织你的知识图谱，同一域下的知识将自动关联。建议按"深度学习""自然语言处理"等学科领域划分。</p>
-
-        <!-- AI 感知建议面板 -->
-        <div v-if="aiSuggestions.length && selectedIds.length" class="ai-suggest-panel">
-          <div class="ai-suggest-header">
-            <span class="ai-sparkle">✨ AI 感知建议</span>
-            <span v-if="suggestionsLoading" class="ai-thinking">分析中...</span>
-            <button class="ai-dismiss" @click="dismissSuggestions">×</button>
-          </div>
-          <div class="ai-suggest-list">
-            <div
-              v-for="(s, i) in aiSuggestions"
-              :key="i"
-              class="ai-suggest-card"
-              :class="{ 'ai-new': s.match_type === 'new', 'ai-existing': s.match_type === 'existing' }"
-              @click="adoptSuggestion(s)"
-            >
-              <div class="ai-suggest-top">
-                <span class="ai-badge">{{ s.match_type === 'existing' ? '匹配已有域' : '建议新建' }}</span>
-                <span class="ai-action">{{ s.match_type === 'existing' ? '点击采用' : '点击创建' }}</span>
-              </div>
-              <strong class="ai-suggest-name">{{ s.domain_name }}</strong>
-              <p class="ai-suggest-reason">{{ s.reason }}</p>
-            </div>
-          </div>
+      <!-- AI 感知建议 -->
+      <div v-if="aiSuggestions.length && selectedIds.length" class="sidebar-ai-panel">
+        <div class="sidebar-ai-header">
+          <span class="sidebar-ai-title">✨ AI 建议</span>
+          <span v-if="suggestionsLoading" class="sidebar-ai-loading">分析中...</span>
+          <button class="sidebar-ai-close" @click="dismissSuggestions">&times;</button>
         </div>
-
-        <!-- 已有域列表 -->
-        <div class="domain-list" v-if="domains.length">
-          <button
-            v-for="d in domains"
-            :key="d.id"
-            class="domain-chip"
-            :class="{ active: d.id === activeDomainId, 'ai-highlighted': aiSuggestions.some(s => s.domain_id === d.id && s.match_type === 'existing') }"
-            @click="activeDomainId = d.id"
-          >
-            <span class="domain-chip-icon" v-if="aiSuggestions.some(s => s.domain_id === d.id && s.match_type === 'existing')">✨</span>
-            <span class="domain-chip-icon" v-else>{{ d.icon === 'folder' ? '📁' : d.icon }}</span>
-            <span class="domain-chip-name">{{ d.name }}</span>
-            <span class="domain-chip-stat">{{ d.graph_count }}图谱 · {{ d.paper_count }}论文</span>
-            <span class="domain-chip-del" @click.stop="handleDeleteDomain(d.id)" title="删除">×</span>
-          </button>
-        </div>
-
-        <div v-if="!showNewDomainForm" class="add-domain-row">
-          <button class="add-domain-btn" @click="showNewDomainForm = true">+ 创建新知识域</button>
-        </div>
-        <div v-else class="new-domain-form">
-          <input
-            v-model="newDomainName"
-            class="domain-input"
-            placeholder="域名，如：深度学习、NLP..."
-            @keyup.enter="handleCreateDomain"
-          />
-          <input
-            v-model="newDomainDesc"
-            class="domain-input domain-desc"
-            placeholder="简要描述（可选）"
-          />
-          <div class="new-domain-actions">
-            <button class="domain-confirm-btn" :disabled="domainCreating" @click="handleCreateDomain">
-              {{ domainCreating ? '创建中...' : '确认创建' }}
-            </button>
-            <button class="domain-cancel-btn" @click="showNewDomainForm = false; newDomainName = ''; newDomainDesc = ''">取消</button>
-          </div>
-        </div>
-
-        <!-- 知识推荐 -->
-        <div v-if="recommendations.length" class="rec-panel">
-          <div class="rec-header">
-            <span class="rec-title">💡 知识拓展建议</span>
-            <span class="rec-hint">基于图谱关系 + AI 推理，帮你发现可能感兴趣的概念</span>
-          </div>
-          <div v-for="(r, i) in recommendations" :key="i" class="rec-card">
-            <div class="rec-card-left">
-              <span class="rec-source-badge" :class="r.source === 'relation' ? 'rec-relation' : 'rec-llm'">
-                {{ r.source === 'relation' ? '🔗 关联推理' : '🤖 AI推荐' }}
-              </span>
-              <span class="rec-concept">{{ r.concept }}</span>
-              <span class="rec-type-tag">{{ r.entity_type }}</span>
-            </div>
-            <div class="rec-card-right">
-              <span class="rec-reason" :title="r.reason">{{ r.reason }}</span>
-              <button class="rec-explore-btn" @click="handleExplore(r.concept, r.source)">标记探索</button>
-            </div>
-          </div>
+        <div
+          v-for="(s, i) in aiSuggestions"
+          :key="i"
+          class="sidebar-ai-item"
+          :class="{ 'ai-existing': s.match_type === 'existing', 'ai-new': s.match_type === 'new' }"
+          @click="adoptSuggestion(s)"
+        >
+          <span class="sidebar-ai-badge">{{ s.match_type === 'existing' ? '已有' : '新建' }}</span>
+          <span class="sidebar-ai-name">{{ s.domain_name }}</span>
+          <span class="sidebar-ai-reason">{{ s.reason }}</span>
         </div>
       </div>
 
-      <!-- 构建面板 -->
-      <div v-if="!graphId" class="build-panel">
-        <h3>构建新图谱</h3>
-        <p class="build-hint">
-          选择文献，系统将抽取命名实体（CV/NLP模型、数据集、指标等）与关系生成知识图谱。
-          <template v-if="activeDomain">
-            当前域：<strong>{{ activeDomain.name }}</strong>
-          </template>
-          <template v-else>
-            <span class="no-domain-warn">请先在上方选择或创建一个知识域</span>
-          </template>
-        </p>
-
-        <div class="form-row">
-          <input
-            v-model="nameInput"
-            class="name-input"
-            placeholder="图谱名称（可选）"
-          />
+      <!-- 知识域列表 -->
+      <nav class="domain-nav">
+        <div
+          v-for="d in domains"
+          :key="d.id"
+          class="domain-nav-item"
+          :class="{ active: d.id === activeDomainId }"
+          @click="activeDomainId = d.id"
+        >
+          <span class="domain-nav-icon">📁</span>
+          <div class="domain-nav-info">
+            <span class="domain-nav-name">{{ d.name }}</span>
+            <span class="domain-nav-meta">{{ d.graph_count }} 图谱 · {{ d.paper_count }} 论文</span>
+          </div>
           <button
-            class="create-btn"
-            :disabled="selectedIds.length === 0 || creating || !activeDomainId"
-            @click="handleCreate"
+            class="domain-nav-delete"
+            title="删除知识域"
+            @click.stop="handleDeleteDomain(d.id)"
           >
-            {{ creating ? '构建中...' : `构建图谱 (${selectedIds.length} 篇)` }}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+            </svg>
           </button>
         </div>
 
-        <div class="paper-grid" v-if="papers.length">
-          <label
-            v-for="p in papers"
-            :key="p.id"
-            class="paper-item"
-            :class="{ checked: paperChecked(p.id) }"
-          >
-            <input type="checkbox" :checked="paperChecked(p.id)" @change="togglePaper(p.id)" />
-            <span class="paper-name">{{ p.title || p.original_filename }}</span>
-          </label>
+        <div v-if="!domains.length && !showNewDomainForm" class="domain-nav-empty">
+          暂无知识域，请新建一个
         </div>
-        <div v-else class="empty-hint">暂无文献，请先上传文献</div>
-      </div>
+      </nav>
 
-      <!-- 图谱展示 -->
-      <div v-else class="graph-viewer">
-        <button class="back-btn" @click="graphId = null; graph = null; router.replace({ query: {} }); loadDomains()">
-          ← 返回构建
-        </button>
-        <div v-if="graph?.domain_id && activeDomain" class="domain-context">
-          域：{{ activeDomain.name }} | 图谱：{{ graph.name }}
-        </div>
-        <GraphCanvas
-          :cypher-query="graphCypher"
-          :graph-id="graphId"
+      <!-- 新建知识域表单 -->
+      <div v-if="showNewDomainForm" class="sidebar-new-form">
+        <input
+          v-model="newDomainName"
+          class="sidebar-input"
+          placeholder="域名，如：深度学习"
+          @keyup.enter="handleCreateDomain"
         />
-
-        <!-- 实体融合建议 -->
-        <div v-if="mergeSuggestions.length" class="merge-panel">
-          <div class="merge-header">
-            <span class="merge-title">🔗 发现疑似同义实体，确认是否合并？</span>
-            <span class="merge-hint">相似度越高越可能是同一概念的不同表述</span>
-          </div>
-          <div
-            v-for="(s, i) in mergeSuggestions"
-            :key="i"
-            class="merge-row"
-          >
-            <div class="merge-entities">
-              <span class="merge-node merge-source" :title="`类型: ${s.node_a.type}`">{{ s.node_a.name }}</span>
-              <span class="merge-arrow">→</span>
-              <span class="merge-node merge-target" :title="`类型: ${s.node_b.type}`">{{ s.node_b.name }}</span>
-              <span class="merge-sim">{{ (s.similarity * 100).toFixed(0) }}%</span>
-            </div>
-            <button class="merge-btn" @click="handleMerge(s.node_a.id, s.node_b.id)">合并</button>
-          </div>
+        <input
+          v-model="newDomainDesc"
+          class="sidebar-input"
+          placeholder="简要描述（可选）"
+        />
+        <div class="sidebar-new-actions">
+          <button class="sidebar-btn-confirm" :disabled="domainCreating" @click="handleCreateDomain">
+            {{ domainCreating ? '创建中...' : '确认' }}
+          </button>
+          <button class="sidebar-btn-cancel" @click="showNewDomainForm = false; newDomainName = ''; newDomainDesc = ''">取消</button>
         </div>
       </div>
 
-      <!-- 历史图谱 -->
-      <div v-if="graphHistory.length && !graphId" class="history-section">
-        <h4>历史图谱</h4>
-        <div class="history-list">
+      <!-- 新建知识域按钮 -->
+      <button v-if="!showNewDomainForm" class="sidebar-new-btn" @click="showNewDomainForm = true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        新建知识域
+      </button>
+    </aside>
+
+    <!-- ========== 右侧主内容区 ========== -->
+    <main class="main-content">
+      <!-- Header -->
+      <header class="workspace-header">
+        <div class="header-left">
+          <h1 class="header-title">{{ activeDomain ? activeDomain.name : '知识图谱工作台' }}</h1>
+          <span v-if="activeDomain" class="header-subtitle">
+            {{ activeDomain.graph_count }} 图谱 · {{ activeDomain.paper_count }} 论文
+          </span>
+        </div>
+        <div class="header-right">
           <button
-            v-for="h in graphHistory"
-            :key="h.id"
-            class="history-item"
-            :class="{ active: h.id === graphId }"
-            @click="loadGraph(h.id)"
+            v-if="graphId"
+            class="btn-secondary"
+            @click="backToBuild"
           >
-            #{{ h.id }} · {{ h.name }}
+            &larr; 返回
+          </button>
+          <button
+            v-if="!graphId"
+            class="btn-primary"
+            @click="openBuildModal"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            构建新图谱
           </button>
         </div>
+      </header>
+
+      <!-- Body -->
+      <div class="workspace-body" @click="closeMenu">
+        <!-- ===== 主页：历史图谱卡片网格 ===== -->
+        <template v-if="!graphId">
+          <!-- 历史图谱卡片网格 -->
+          <div v-if="graphHistory.length" class="history-section">
+            <div class="history-section-header">
+              <h2 class="history-section-title">历史图谱</h2>
+              <span class="history-section-count">{{ graphHistory.length }} 个图谱</span>
+            </div>
+
+            <div class="history-grid">
+              <div
+                v-for="h in graphHistory"
+                :key="h.id"
+                class="history-card"
+                @click="enterGraph(h.id)"
+              >
+                <!-- 卡片头部 -->
+                <div class="card-header">
+                  <div class="card-title-row">
+                    <template v-if="editingId === h.id">
+                      <input
+                        v-model="editName"
+                        class="card-rename-input"
+                        @keyup.enter="confirmRename"
+                        @keyup.escape="cancelRename"
+                        @click.stop
+                        @blur="confirmRename"
+                        autofocus
+                      />
+                    </template>
+                    <template v-else>
+                      <h4 class="card-title">{{ h.name }}</h4>
+                    </template>
+                  </div>
+                  <div class="card-menu" @click.stop>
+                    <button class="card-menu-btn" @click="toggleMenu(h.id)" title="更多操作">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>
+                      </svg>
+                    </button>
+                    <div v-if="menuOpenId === h.id" class="card-dropdown">
+                      <button class="card-dropdown-item" @click="startRename(h)">重命名</button>
+                      <button class="card-dropdown-item card-dropdown-danger" @click="removeFromHistory(h.id)">删除</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 数据区：label / value 竖线分隔 -->
+                <div class="card-stats">
+                  <span class="stat-group">
+                    <span class="stat-label">实体</span>
+                    <span class="stat-value">{{ h.nodeCount ?? 0 }}</span>
+                  </span>
+                  <span class="stat-sep">|</span>
+                  <span class="stat-group">
+                    <span class="stat-label">关系</span>
+                    <span class="stat-value">{{ h.edgeCount ?? 0 }}</span>
+                  </span>
+                  <span class="stat-sep">|</span>
+                  <span class="stat-group">
+                    <span class="stat-label">文献</span>
+                    <span class="stat-value">{{ h.paperCount ?? '-' }}</span>
+                  </span>
+                </div>
+
+                <!-- 底部 -->
+                <div class="card-footer">
+                  <span class="card-time">更新于 {{ new Date(h.updatedAt || Date.now()).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 空状态 -->
+          <div v-if="!graphHistory.length" class="history-empty">
+            <div class="empty-illustration">
+              <h3>还没有知识图谱</h3>
+              <p>点击上方「构建新图谱」按钮，从文献中抽取知识</p>
+            </div>
+          </div>
+        </template>
+
+        <!-- ===== 图谱查看模式 ===== -->
+        <div v-else class="graph-view">
+          <GraphCanvas
+            :cypher-query="graphCypher"
+            :graph-id="graphId"
+            :graph-data="graph"
+          />
+
+          <!-- 实体融合建议 -->
+          <div v-if="mergeSuggestions.length" class="merge-panel">
+            <div class="merge-panel-header">
+              <span class="merge-panel-title">🔗 发现疑似同义实体</span>
+              <span class="merge-panel-hint">相似度越高越可能是同一概念的不同表述</span>
+            </div>
+            <div
+              v-for="(s, i) in mergeSuggestions"
+              :key="i"
+              class="merge-row"
+            >
+              <div class="merge-entities">
+                <span class="merge-node merge-source">{{ s.node_a.name }}</span>
+                <span class="merge-arrow">&rarr;</span>
+                <span class="merge-node merge-target">{{ s.node_b.name }}</span>
+                <span class="merge-sim">{{ (s.similarity * 100).toFixed(0) }}%</span>
+              </div>
+              <button class="merge-btn" @click="handleMerge(s.node_a.id, s.node_b.id)">合并</button>
+            </div>
+          </div>
+
+          <!-- 知识推荐 -->
+          <div v-if="recommendations.length" class="rec-panel">
+            <div class="rec-panel-header">
+              <span class="rec-panel-title">💡 知识拓展建议</span>
+              <span class="rec-panel-hint">基于图谱关系 + AI 推理</span>
+            </div>
+            <div v-for="(r, i) in recommendations" :key="i" class="rec-row">
+              <div class="rec-left">
+                <span class="rec-badge" :class="r.source === 'relation' ? 'rec-relation' : 'rec-llm'">
+                  {{ r.source === 'relation' ? '关联推理' : 'AI推荐' }}
+                </span>
+                <span class="rec-concept">{{ r.concept }}</span>
+                <span class="rec-type">{{ r.entity_type }}</span>
+              </div>
+              <div class="rec-right">
+                <span class="rec-reason">{{ r.reason }}</span>
+                <button class="rec-explore-btn" @click="handleExplore(r.concept, r.source)">标记探索</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
+    </main>
+
+    <!-- ========== 构建新图谱 Modal ========== -->
+    <Teleport to="body">
+      <Transition name="modal-fade">
+        <div v-if="showBuildModal" class="modal-overlay" @click.self="closeBuildModal">
+          <div class="modal-dialog" @click.stop>
+            <!-- Modal Header -->
+            <div class="modal-header">
+              <h3 class="modal-title">构建新图谱</h3>
+              <span class="modal-domain-badge" v-if="activeDomain">{{ activeDomain.name }}</span>
+              <button class="modal-close" @click="closeBuildModal">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="modal-body">
+              <!-- 图谱名称 -->
+              <div class="modal-field">
+                <label class="modal-label">图谱名称（可选）</label>
+                <input
+                  v-model="nameInput"
+                  class="modal-input"
+                  placeholder="如：CV综述知识图谱"
+                />
+              </div>
+
+              <!-- 搜索文献 -->
+              <div class="modal-field">
+                <div class="modal-search-row">
+                  <label class="modal-label">选择文献</label>
+                  <span class="modal-search-count">共 {{ papers.length }} 篇 · 已选 {{ selectedIds.length }}</span>
+                </div>
+                <div class="modal-search-box">
+                  <svg class="modal-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  </svg>
+                  <input
+                    v-model="paperSearchQuery"
+                    class="modal-search-input"
+                    placeholder="搜索文献标题..."
+                  />
+                  <button
+                    v-if="paperSearchQuery"
+                    class="modal-search-clear"
+                    @click="paperSearchQuery = ''"
+                  >
+                    &times;
+                  </button>
+                </div>
+              </div>
+
+              <!-- 文献列表 -->
+              <div class="modal-paper-list" v-if="filteredPapers.length">
+                <label
+                  v-for="p in filteredPapers"
+                  :key="p.id"
+                  class="modal-paper-item"
+                  :class="{ checked: paperChecked(p.id) }"
+                >
+                  <div class="modal-paper-check">
+                    <input
+                      type="checkbox"
+                      :checked="paperChecked(p.id)"
+                      @change="togglePaper(p.id)"
+                    />
+                  </div>
+                  <div class="modal-paper-body">
+                    <span class="modal-paper-title">{{ p.title || p.original_filename }}</span>
+                    <span class="modal-paper-meta" v-if="p.authors">{{ p.authors }}</span>
+                  </div>
+                </label>
+              </div>
+
+              <div v-else class="modal-paper-empty">
+                <span v-if="paperSearchQuery">未找到匹配「{{ paperSearchQuery }}」的文献</span>
+                <span v-else>暂无文献，请先上传文献</span>
+              </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="modal-footer">
+              <button class="modal-btn-cancel" @click="closeBuildModal">取消</button>
+              <button
+                class="modal-btn-confirm"
+                :disabled="selectedIds.length === 0 || creating"
+                @click="handleCreate"
+              >
+                <template v-if="creating">
+                  <span class="modal-spinner"></span>
+                  构建中...
+                </template>
+                <template v-else>
+                  确认构建 (已选 {{ selectedIds.length }} 篇)
+                </template>
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
-.graph-page {
+/* ========================================
+   Workspace Layout
+   ======================================== */
+.workspace {
+  display: flex;
   height: 100%;
+  background: #F8FAFC;
+  overflow: hidden;
+}
+
+/* ========================================
+   Sidebar (260px)
+   ======================================== */
+.sidebar {
+  width: 260px;
+  min-width: 260px;
   display: flex;
   flex-direction: column;
+  background: #fff;
+  border-right: none;
+  box-shadow: 1px 0 0 0 rgba(0, 0, 0, 0.04), 2px 0 8px rgba(0, 0, 0, 0.03);
+  z-index: 10;
+  padding: 24px 0 16px;
+  overflow-y: auto;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  margin-bottom: 4px;
+}
+
+.sidebar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #94A3B8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0;
+}
+
+.sidebar-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748B;
+  background: #F1F5F9;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+/* ---- AI 建议面板 ---- */
+.sidebar-ai-panel {
+  margin: 8px 12px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, rgba(250, 173, 20, 0.06), rgba(250, 173, 20, 0.02));
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(250, 173, 20, 0.15);
+  animation: aiFadeIn 0.25s ease-out;
+}
+
+@keyframes aiFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.sidebar-ai-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sidebar-ai-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #D48806;
+}
+
+.sidebar-ai-loading {
+  font-size: 11px;
+  color: #94A3B8;
+}
+
+.sidebar-ai-close {
+  margin-left: auto;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  color: #94A3B8;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.sidebar-ai-close:hover {
+  color: #475569;
+}
+
+.sidebar-ai-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  transition: background 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-ai-item:last-child { margin-bottom: 0; }
+
+.sidebar-ai-item.ai-existing {
+  background: rgba(59, 130, 246, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.15);
+}
+
+.sidebar-ai-item.ai-new {
+  background: rgba(250, 173, 20, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(250, 173, 20, 0.15);
+}
+
+.sidebar-ai-item:hover { filter: brightness(0.97); }
+
+.sidebar-ai-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: #fff;
+  width: fit-content;
+}
+
+.ai-existing .sidebar-ai-badge { background: #3B82F6; }
+.ai-new .sidebar-ai-badge { background: #D48806; }
+
+.sidebar-ai-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1E293B;
+}
+
+.sidebar-ai-reason {
+  font-size: 11px;
+  color: #94A3B8;
+  line-height: 1.3;
+}
+
+/* ---- 知识域导航 ---- */
+.domain-nav {
+  flex: 1;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.domain-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+}
+
+.domain-nav-item:hover {
+  background: #F1F5F9;
+}
+
+.domain-nav-item.active {
+  background: #EFF6FF;
+  box-shadow: inset 3px 0 0 0 #3B82F6;
+}
+
+.domain-nav-item.active .domain-nav-name {
+  color: #2563EB;
+  font-weight: 600;
+}
+
+.domain-nav-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.domain-nav-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.domain-nav-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #334155;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.domain-nav-meta {
+  font-size: 11px;
+  color: #94A3B8;
+}
+
+.domain-nav-delete {
+  opacity: 0;
+  padding: 4px;
+  border: none;
+  background: transparent;
+  color: #94A3B8;
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.domain-nav-item:hover .domain-nav-delete {
+  opacity: 1;
+}
+
+.domain-nav-delete:hover {
+  color: #EF4444;
+  background: #FEE2E2;
+}
+
+.domain-nav-empty {
+  padding: 20px 12px;
+  font-size: 13px;
+  color: #94A3B8;
+  text-align: center;
+}
+
+/* ---- 新建知识域表单 ---- */
+.sidebar-new-form {
+  margin: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: #F8FAFC;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px #3B82F6;
+  animation: aiFadeIn 0.2s ease-out;
+}
+
+.sidebar-input {
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  color: #334155;
+  outline: none;
+  box-shadow: 0 0 0 1px #E2E8F0;
+  transition: box-shadow 0.15s;
+}
+
+.sidebar-input:focus {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.sidebar-input::placeholder {
+  color: #94A3B8;
+}
+
+.sidebar-new-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sidebar-btn-confirm {
+  flex: 1;
+  padding: 7px 0;
+  background: #3B82F6;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.sidebar-btn-confirm:hover:not(:disabled) { background: #2563EB; }
+.sidebar-btn-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.sidebar-btn-cancel {
+  flex: 1;
+  padding: 7px 0;
+  background: #fff;
+  color: #64748B;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px #E2E8F0;
+  transition: all 0.15s;
+}
+
+.sidebar-btn-cancel:hover { background: #F1F5F9; }
+
+/* ---- 新建知识域按钮 ---- */
+.sidebar-new-btn {
+  margin: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 0;
+  background: #fff;
+  color: #3B82F6;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px #E2E8F0;
+  transition: all 0.15s;
+}
+
+.sidebar-new-btn:hover {
+  background: #EFF6FF;
+  box-shadow: 0 0 0 1px #3B82F6;
+}
+
+/* ---- 新建知识域按钮 ---- END ---- */
+
+/* ========================================
+   History Section — Card Grid
+   ======================================== */
+.history-section {
+  margin-bottom: 24px;
+}
+
+.history-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.history-section-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+}
+
+.history-section-count {
+  font-size: 13px;
+  color: #94A3B8;
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+/* ---- 卡片 ---- */
+.history-card {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px #E2E8F0;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.history-card:hover {
+  box-shadow: 0 0 0 1px #CBD5E1, 0 12px 24px rgba(0, 0, 0, 0.06);
+  transform: translateY(-4px);
+}
+
+/* ---- 卡片头部 ---- */
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  gap: 8px;
+}
+
+.card-title-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-rename-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0F172A;
+  background: #F8FAFC;
+  outline: none;
+  box-shadow: 0 0 0 2px #3B82F6;
+}
+
+/* ---- 操作菜单 ---- */
+.card-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.card-menu-btn {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #94A3B8;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.card-menu-btn:hover {
+  background: #F1F5F9;
+  color: #475569;
+}
+
+.card-dropdown {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1), 0 0 0 1px #E2E8F0;
+  padding: 4px;
+  z-index: 20;
+  min-width: 120px;
+  animation: dropdownIn 0.12s ease-out;
+}
+
+@keyframes dropdownIn {
+  from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.card-dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #334155;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.card-dropdown-item:hover {
+  background: #F1F5F9;
+}
+
+.card-dropdown-danger {
+  color: #EF4444;
+}
+
+.card-dropdown-danger:hover {
+  background: #FEF2F2;
+}
+
+/* ---- 数据统计区 ---- */
+.card-stats {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stat-group {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #94A3B8;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+.stat-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1E293B;
+}
+
+.stat-sep {
+  font-size: 12px;
+  color: #E2E8F0;
+  user-select: none;
+}
+
+/* ---- 卡片底部 ---- */
+.card-footer {
+  padding-top: 14px;
+  border-top: 1px solid #F1F5F9;
+}
+
+.card-time {
+  font-size: 12px;
+  color: #94A3B8;
+  font-weight: 400;
+}
+
+/* ---- 空状态 ---- */
+.history-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+}
+
+.empty-illustration {
+  text-align: center;
+}
+
+.empty-illustration h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #64748B;
+  margin: 0 0 8px;
+}
+
+.empty-illustration p {
+  font-size: 14px;
+  color: #94A3B8;
+  margin: 0;
+}
+
+
+/* ========================================
+   Main Content
+   ======================================== */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ---- Header ---- */
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 32px;
+  background: #fff;
+  box-shadow: 0 1px 0 0 rgba(0, 0, 0, 0.04), 0 2px 4px rgba(0, 0, 0, 0.02);
+  flex-shrink: 0;
+  z-index: 5;
+}
+
+.header-left {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.header-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+  letter-spacing: -0.3px;
+}
+
+.header-subtitle {
+  font-size: 13px;
+  color: #94A3B8;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn-primary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  background: #3B82F6;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.3), 0 1px 2px rgba(59, 130, 246, 0.2);
+  white-space: nowrap;
+}
+
+.btn-primary:hover {
+  background: #2563EB;
+  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3), 0 2px 4px rgba(59, 130, 246, 0.2);
+  transform: translateY(-0.5px);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 16px;
+  background: #fff;
+  color: #64748B;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px #E2E8F0;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn-secondary:hover {
+  background: #F8FAFC;
+  color: #334155;
+  box-shadow: 0 0 0 1px #CBD5E1;
+}
+
+/* ---- Body ---- */
+.workspace-body {
+  flex: 1;
   overflow-y: auto;
   padding: 24px 32px;
 }
 
-.graph-header {
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
-  margin-bottom: 24px;
-}
+/* ========================================
+   Modal — 构建新图谱
+   ======================================== */
 
-.graph-title {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--academic-text-main);
-}
-
-.graph-id-badge {
-  font-size: 14px;
-  color: var(--academic-text-muted);
-}
-
-.graph-body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-/* ===== 知识域 ===== */
-.domain-section {
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  border-radius: 16px;
-  padding: 20px 24px;
-}
-
-.domain-section h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--academic-text-main);
-  margin-bottom: 6px;
-}
-
-.section-hint {
-  color: var(--academic-text-muted);
-  font-size: 13px;
-  margin-bottom: 16px;
-  line-height: 1.5;
-}
-
-.domain-list {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
-
-.domain-chip {
+/* ---- Overlay ---- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border: 1px solid var(--academic-border);
-  border-radius: 12px;
-  background: var(--academic-canvas);
-  color: var(--academic-text-body);
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.domain-chip:hover {
-  border-color: var(--academic-primary);
-}
-
-.domain-chip.active {
-  border-color: var(--academic-primary);
-  background: var(--academic-primary-light);
-  color: var(--academic-primary);
-}
-
-.domain-chip-icon { font-size: 16px; }
-
-.domain-chip-name { font-weight: 600; }
-
-.domain-chip-stat {
-  font-size: 12px;
-  opacity: 0.7;
-}
-
-.domain-chip-del {
-  margin-left: 2px;
-  padding: 0 4px;
-  font-size: 16px;
-  opacity: 0.4;
-  transition: opacity 0.15s;
-}
-
-.domain-chip-del:hover { opacity: 1; }
-
-.add-domain-row { margin-bottom: 0; }
-
-.add-domain-btn {
-  padding: 8px 20px;
-  border: 1px dashed var(--academic-border);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--academic-text-muted);
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.add-domain-btn:hover {
-  border-color: var(--academic-primary);
-  color: var(--academic-primary);
-}
-
-.new-domain-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--academic-primary);
-  border-radius: 12px;
-  background: var(--academic-primary-light);
-}
-
-.domain-input {
-  padding: 10px 14px;
-  border: 1px solid var(--academic-border);
-  border-radius: 10px;
-  background: var(--academic-canvas);
-  color: var(--academic-text-body);
-  font-size: 14px;
-  outline: none;
-}
-
-.domain-input:focus { border-color: var(--academic-primary); }
-
-.new-domain-actions { display: flex; gap: 8px; }
-
-.domain-confirm-btn {
-  padding: 8px 20px;
-  background: var(--academic-primary);
-  color: #fff;
-  border: none;
-  border-radius: 10px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.domain-confirm-btn:hover:not(:disabled) { background: var(--academic-primary-hover); }
-.domain-confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.domain-cancel-btn {
-  padding: 8px 20px;
-  border: 1px solid var(--academic-border);
-  border-radius: 10px;
-  background: var(--academic-canvas);
-  color: var(--academic-text-body);
-  font-size: 14px;
-  cursor: pointer;
-}
-
-/* ===== AI 感知建议面板 ===== */
-.ai-suggest-panel {
-  margin-bottom: 16px;
-  border: 1px solid rgba(250, 173, 20, 0.35);
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(250, 173, 20, 0.06), rgba(250, 173, 20, 0.02));
-  overflow: hidden;
-  animation: aiSlideIn 0.3s ease-out;
-}
-
-@keyframes aiSlideIn {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.ai-suggest-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px solid rgba(250, 173, 20, 0.15);
-}
-
-.ai-sparkle {
-  font-size: 14px;
-  font-weight: 700;
-  color: #d48806;
-}
-
-.ai-thinking {
-  font-size: 12px;
-  color: var(--academic-text-muted);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
-}
-
-.ai-dismiss {
-  margin-left: auto;
-  padding: 2px 8px;
-  border: none;
-  background: transparent;
-  color: var(--academic-text-muted);
-  font-size: 16px;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.ai-dismiss:hover {
-  background: rgba(0,0,0,0.05);
-  color: var(--academic-text-body);
-}
-
-.ai-suggest-list {
-  display: flex;
-  gap: 10px;
-  padding: 12px 16px;
-  flex-wrap: wrap;
-}
-
-.ai-suggest-card {
-  flex: 1;
-  min-width: 200px;
-  padding: 12px 16px;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: all 0.2s;
-  border: 1px solid transparent;
-}
-
-.ai-suggest-card.ai-existing {
-  background: var(--academic-primary-light);
-  border-color: var(--academic-primary);
-}
-
-.ai-suggest-card.ai-existing:hover {
-  box-shadow: 0 0 0 2px var(--academic-primary);
-}
-
-.ai-suggest-card.ai-new {
-  background: rgba(250, 173, 20, 0.08);
-  border-color: rgba(250, 173, 20, 0.4);
-}
-
-.ai-suggest-card.ai-new:hover {
-  box-shadow: 0 0 0 2px rgba(250, 173, 20, 0.5);
-}
-
-.ai-suggest-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.ai-badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 10px;
-  color: #fff;
-}
-
-.ai-existing .ai-badge {
-  background: var(--academic-primary);
-}
-
-.ai-new .ai-badge {
-  background: #d48806;
-}
-
-.ai-action {
-  font-size: 11px;
-  opacity: 0.6;
-}
-
-.ai-suggest-name {
-  display: block;
-  font-size: 16px;
-  color: var(--academic-text-main);
-  margin-bottom: 4px;
-}
-
-.ai-suggest-reason {
-  font-size: 12px;
-  color: var(--academic-text-muted);
-  margin: 0;
-  line-height: 1.4;
-}
-
-/* AI 高亮的域 Chip */
-.domain-chip.ai-highlighted {
-  border-color: rgba(250, 173, 20, 0.6);
-  background: rgba(250, 173, 20, 0.06);
-  animation: glowPulse 2s ease-in-out infinite;
-}
-
-@keyframes glowPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(250, 173, 20, 0.2); }
-  50% { box-shadow: 0 0 0 4px rgba(250, 173, 20, 0.1); }
-}
-
-/* ===== 构建面板 ===== */
-.build-panel {
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  border-radius: 16px;
+  justify-content: center;
+  z-index: 1000;
   padding: 24px;
 }
 
-.build-panel h3 {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--academic-text-main);
-  margin-bottom: 8px;
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.modal-fade-enter-active .modal-dialog,
+.modal-fade-leave-active .modal-dialog {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
+}
+.modal-fade-enter-from .modal-dialog {
+  transform: scale(0.96) translateY(8px);
+  opacity: 0;
+}
+.modal-fade-leave-to .modal-dialog {
+  transform: scale(0.96) translateY(8px);
+  opacity: 0;
 }
 
-.build-hint {
-  color: var(--academic-text-muted);
-  font-size: 14px;
-  margin-bottom: 20px;
-}
-
-.no-domain-warn {
-  color: var(--academic-warning, #e6a23c);
-  font-weight: 600;
-}
-
-.form-row {
+/* ---- Dialog ---- */
+.modal-dialog {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  width: 100%;
+  max-width: 640px;
+  max-height: 85vh;
   display: flex;
-  gap: 12px;
-  margin-bottom: 20px;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.name-input {
-  flex: 1;
-  padding: 10px 16px;
-  border: 1px solid var(--academic-border);
-  border-radius: 12px;
-  background: var(--academic-canvas);
-  color: var(--academic-text-body);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.name-input:focus { border-color: var(--academic-primary); }
-
-.create-btn {
-  padding: 10px 24px;
-  background: var(--academic-primary);
-  color: #fff;
-  border: none;
-  border-radius: 12px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.2s;
-}
-
-.create-btn:hover:not(:disabled) { background: var(--academic-primary-hover); }
-.create-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.paper-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 8px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.paper-item {
+/* ---- Modal Header ---- */
+.modal-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--academic-border);
-  background: var(--academic-canvas);
+  gap: 12px;
+  padding: 20px 24px;
+  border-bottom: 1px solid #F1F5F9;
+  flex-shrink: 0;
+}
+
+.modal-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+}
+
+.modal-domain-badge {
+  padding: 3px 10px;
+  background: #EFF6FF;
+  color: #3B82F6;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+}
+
+.modal-close {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #94A3B8;
   cursor: pointer;
   transition: all 0.15s;
+}
+
+.modal-close:hover {
+  background: #F1F5F9;
+  color: #475569;
+}
+
+/* ---- Modal Body ---- */
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.modal-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.modal-input {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 10px;
+  background: #F8FAFC;
   font-size: 14px;
-  color: var(--academic-text-body);
+  color: #334155;
+  outline: none;
+  box-shadow: 0 0 0 1px #E2E8F0;
+  transition: box-shadow 0.15s;
 }
 
-.paper-item:hover { border-color: var(--academic-primary); }
-
-.paper-item.checked {
-  border-color: var(--academic-primary);
-  background: var(--academic-primary-light);
-  color: var(--academic-primary);
+.modal-input:focus {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
 }
 
-.paper-item input { accent-color: var(--academic-primary); }
+.modal-input::placeholder {
+  color: #94A3B8;
+}
 
-.paper-name {
+/* ---- 搜索 ---- */
+.modal-search-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-search-count {
+  font-size: 12px;
+  color: #94A3B8;
+}
+
+.modal-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.modal-search-icon {
+  position: absolute;
+  left: 12px;
+  pointer-events: none;
+}
+
+.modal-search-input {
+  width: 100%;
+  padding: 9px 36px 9px 36px;
+  border: none;
+  border-radius: 10px;
+  background: #F8FAFC;
+  font-size: 13px;
+  color: #334155;
+  outline: none;
+  box-shadow: 0 0 0 1px #E2E8F0;
+  transition: box-shadow 0.15s;
+}
+
+.modal-search-input:focus {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.modal-search-input::placeholder {
+  color: #94A3B8;
+}
+
+.modal-search-clear {
+  position: absolute;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: #E2E8F0;
+  color: #64748B;
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.modal-search-clear:hover {
+  background: #CBD5E1;
+}
+
+/* ---- 文献列表 ---- */
+.modal-paper-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px #E2E8F0;
+}
+
+.modal-paper-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 0.1s;
+  border-bottom: 1px solid #F1F5F9;
+}
+
+.modal-paper-item:last-child {
+  border-bottom: none;
+}
+
+.modal-paper-item:nth-child(even) {
+  background: #F8FAFC;
+}
+
+.modal-paper-item:nth-child(odd) {
+  background: #fff;
+}
+
+.modal-paper-item:hover {
+  background: #EFF6FF !important;
+}
+
+.modal-paper-item.checked {
+  background: #EFF6FF !important;
+}
+
+.modal-paper-check {
+  flex-shrink: 0;
+}
+
+.modal-paper-check input {
+  accent-color: #3B82F6;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.modal-paper-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.modal-paper-title {
+  font-size: 13px;
+  color: #334155;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.modal-paper-item.checked .modal-paper-title {
+  color: #1D4ED8;
+  font-weight: 600;
+}
+
+.modal-paper-meta {
+  font-size: 11px;
+  color: #94A3B8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modal-paper-empty {
+  padding: 32px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: #94A3B8;
+}
+
+/* ---- Modal Footer ---- */
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 24px;
+  border-top: 1px solid #F1F5F9;
+  flex-shrink: 0;
+}
+
+.modal-btn-cancel {
+  padding: 9px 20px;
+  background: #fff;
+  color: #64748B;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px #E2E8F0;
+  transition: all 0.15s;
+}
+
+.modal-btn-cancel:hover {
+  background: #F8FAFC;
+}
+
+.modal-btn-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 24px;
+  background: #3B82F6;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.3);
+}
+
+.modal-btn-confirm:hover:not(:disabled) {
+  background: #2563EB;
+  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3);
+}
+
+.modal-btn-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modal-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ========================================
+   Graph View
+   ======================================== */
+.graph-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+.graph-view :deep(.graph-canvas) {
+  flex: 1;
+  min-height: 480px;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+/* ========================================
+   Merge Panel
+   ======================================== */
+.merge-panel {
+  background: #FFFBEB;
+  border-radius: 12px;
+  padding: 16px 20px;
+  box-shadow: 0 0 0 1px rgba(250, 173, 20, 0.15);
+  flex-shrink: 0;
+}
+
+.merge-panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.merge-panel-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #D48806;
+}
+
+.merge-panel-hint {
+  font-size: 12px;
+  color: #94A3B8;
+}
+
+.merge-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #fff;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  box-shadow: 0 0 0 1px #F1F5F9;
+}
+
+.merge-row:last-child { margin-bottom: 0; }
+
+.merge-entities {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.merge-node {
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.empty-hint {
-  color: var(--academic-text-muted);
-  font-size: 14px;
-  text-align: center;
-  padding: 40px;
-}
+.merge-source { background: #EFF6FF; color: #2563EB; }
+.merge-target { background: #ECFDF5; color: #059669; }
+.merge-arrow { color: #94A3B8; font-size: 12px; }
 
-/* ===== 图谱展示 ===== */
-.graph-viewer {
-  flex: 1;
-  min-height: 480px;
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  border-radius: 16px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-}
-
-.domain-context {
-  font-size: 13px;
-  color: var(--academic-text-muted);
-  margin-bottom: 8px;
-  padding: 6px 12px;
-  background: var(--academic-canvas);
-  border-radius: 8px;
-}
-
-.back-btn {
-  align-self: flex-start;
-  padding: 8px 16px;
-  border: 1px solid var(--academic-border);
-  border-radius: 8px;
-  background: var(--academic-canvas);
-  color: var(--academic-text-body);
-  font-size: 13px;
-  cursor: pointer;
-  margin-bottom: 12px;
-  transition: background 0.15s;
-}
-
-.back-btn:hover { background: var(--academic-primary-light); }
-
-.graph-viewer :deep(.graph-canvas) { flex: 1; }
-
-/* ========== 实体融合面板 ========== */
-.merge-panel {
-  margin: 16px 20px 20px;
-  background: #fffbe6;
-  border: 1px solid #ffe58f;
-  border-radius: 8px;
-  padding: 16px;
-}
-.merge-header {
-  display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px;
-}
-.merge-title { font-weight: 600; font-size: 14px; color: #d48806; }
-.merge-hint { font-size: 12px; color: #999; }
-.merge-row {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 12px; background: #fff; border-radius: 6px; margin-bottom: 8px;
-  border: 1px solid #f0f0f0;
-}
-.merge-entities { display: flex; align-items: center; gap: 8px; }
-.merge-node {
-  padding: 3px 10px; border-radius: 4px; font-size: 13px; font-weight: 500;
-  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.merge-source { background: #f0f5ff; color: #2f54eb; }
-.merge-target { background: #e6fffb; color: #13c2c2; }
-.merge-arrow { color: #bbb; font-size: 12px; }
 .merge-sim {
-  background: #fafafa; color: #fa8c16; font-weight: 600;
-  padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-left: 4px;
-}
-.merge-btn {
-  padding: 4px 16px; border: 1px solid #d9d9d9; border-radius: 4px;
-  background: #fff; cursor: pointer; font-size: 13px; transition: all .2s;
-}
-.merge-btn:hover { border-color: #ff7a45; color: #ff7a45; }
-
-/* ========== 知识推荐面板 ========== */
-.rec-panel {
-  margin: 0 20px 20px;
-  background: #f6ffed;
-  border: 1px solid #b7eb8f;
-  border-radius: 8px;
-  padding: 16px;
-}
-.rec-header {
-  display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px;
-}
-.rec-title { font-weight: 600; font-size: 14px; color: #389e0d; }
-.rec-hint { font-size: 12px; color: #999; }
-.rec-card {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 12px; background: #fff; border-radius: 6px; margin-bottom: 8px;
-  border: 1px solid #f0f0f0; gap: 12px;
-}
-.rec-card-left { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-.rec-source-badge {
-  padding: 2px 8px; border-radius: 4px; font-size: 11px; white-space: nowrap;
-}
-.rec-relation { background: #e6f7ff; color: #1890ff; }
-.rec-llm { background: #fff7e6; color: #fa8c16; }
-.rec-concept { font-weight: 600; font-size: 14px; color: #333; white-space: nowrap; }
-.rec-type-tag {
-  padding: 1px 6px; background: #fafafa; border-radius: 3px; font-size: 11px; color: #999;
-}
-.rec-card-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-.rec-reason {
-  font-size: 12px; color: #666; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.rec-explore-btn {
-  padding: 4px 14px; border: 1px solid #b7eb8f; border-radius: 4px;
-  background: #f6ffed; color: #389e0d; cursor: pointer; font-size: 12px; white-space: nowrap; transition: all .2s;
-}
-.rec-explore-btn:hover { background: #389e0d; color: #fff; }
-
-/* ===== 历史 ===== */
-.history-section h4 {
-  font-size: 14px;
+  background: #F8FAFC;
+  color: #D97706;
   font-weight: 600;
-  color: var(--academic-text-muted);
-  margin-bottom: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  margin-left: 4px;
 }
 
-.history-list {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.history-item {
-  padding: 6px 14px;
-  border: 1px solid var(--academic-border);
-  border-radius: 20px;
-  background: var(--academic-panel);
-  color: var(--academic-text-body);
-  font-size: 13px;
+.merge-btn {
+  padding: 5px 16px;
+  border: none;
+  border-radius: 8px;
+  background: #fff;
+  color: #64748B;
   cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 0 0 1px #E2E8F0;
   transition: all 0.15s;
 }
 
-.history-item:hover { border-color: var(--academic-primary); }
+.merge-btn:hover {
+  color: #EA580C;
+  box-shadow: 0 0 0 1px #EA580C;
+  background: #FFF7ED;
+}
 
-.history-item.active {
-  border-color: var(--academic-primary);
-  background: var(--academic-primary-light);
-  color: var(--academic-primary);
+/* ========================================
+   Recommendation Panel
+   ======================================== */
+.rec-panel {
+  background: #F0FDF4;
+  border-radius: 12px;
+  padding: 16px 20px;
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.15);
+  flex-shrink: 0;
+}
+
+.rec-panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.rec-panel-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #059669;
+}
+
+.rec-panel-hint {
+  font-size: 12px;
+  color: #94A3B8;
+}
+
+.rec-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #fff;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  box-shadow: 0 0 0 1px #F1F5F9;
+  gap: 12px;
+}
+
+.rec-row:last-child { margin-bottom: 0; }
+
+.rec-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rec-badge {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.rec-relation { background: #EFF6FF; color: #2563EB; }
+.rec-llm { background: #FFF7ED; color: #D97706; }
+
+.rec-concept {
+  font-weight: 600;
+  font-size: 14px;
+  color: #1E293B;
+  white-space: nowrap;
+}
+
+.rec-type {
+  padding: 1px 6px;
+  background: #F8FAFC;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #94A3B8;
+}
+
+.rec-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.rec-reason {
+  font-size: 12px;
+  color: #64748B;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-explore-btn {
+  padding: 4px 14px;
+  border: none;
+  border-radius: 8px;
+  background: #ECFDF5;
+  color: #059669;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.2);
+  transition: all 0.15s;
+}
+
+.rec-explore-btn:hover {
+  background: #059669;
+  color: #fff;
 }
 </style>

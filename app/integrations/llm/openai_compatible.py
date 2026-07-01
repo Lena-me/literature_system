@@ -29,9 +29,19 @@ class OpenAICompatibleLLM:
             response = client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
-            return data['choices'][0]['message']['content']
+            return self._extract_content(data)
 
     # === 异步接口（FastAPI 端使用）===
+
+    def _extract_content(self, data: dict) -> str:
+        """从 LLM 响应中提取文本内容，兼容推理模型（reasoning_content）"""
+        msg = data.get('choices', [{}])[0].get('message', {})
+        content = msg.get('content') or ''
+        if not content:
+            reasoning = msg.get('reasoning_content') or ''
+            if reasoning:
+                return reasoning
+        return content
 
     async def async_chat(self, messages: list[dict], temperature: float | None = None, max_tokens: int | None = None) -> str:
         url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
@@ -46,7 +56,7 @@ class OpenAICompatibleLLM:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
-            return data['choices'][0]['message']['content']
+            return self._extract_content(data)
 
     async def stream_chat(self, messages: list[dict], temperature: float | None = None, max_tokens: int | None = None):
         url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"

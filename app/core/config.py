@@ -1,16 +1,12 @@
-import os
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Docker Compose 通过 env_file 注入环境变量，以此区分 env 文件
-_env_file = '.env.docker' if os.getenv('APP_ENV') == 'docker' else '.env'
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=_env_file,
+        env_file='.env',
         env_file_encoding='utf-8',
         extra='ignore',
     )
@@ -57,6 +53,19 @@ class Settings(BaseSettings):
 
     # 解析 / 向量化 / RAG
     grobid_base_url: str = 'http://127.0.0.1:8070'
+
+    # Document Parser
+    document_parser: str = 'grobid'  # grobid / mineru
+    mineru_command: str = 'mineru'
+    mineru_backend: str = 'pipeline'
+    mineru_method: str = 'auto'
+    mineru_language: str | None = 'ch'
+    mineru_api_url: str | None = None
+    mineru_output_dir: str = './runtime/mineru_outputs'
+    mineru_timeout_seconds: int = 900
+    mineru_keep_output: bool = True
+    mineru_fallback_to_grobid: bool = True
+
     hf_cache_dir: str = './runtime/hf_cache'
     bge_embedding_model: str = 'BAAI/bge-large-zh-v1.5'
     bge_reranker_model: str = 'BAAI/bge-reranker-large'

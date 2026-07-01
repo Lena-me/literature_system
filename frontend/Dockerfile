@@ -3,6 +3,11 @@ WORKDIR /web
 COPY package.json ./
 RUN npm install
 COPY . .
+
+ARG APP_MODE=user
+ENV VITE_APP_MODE=${APP_MODE}
+
+RUN echo "Building with APP_MODE=${VITE_APP_MODE}"
 RUN npm run build
 
 FROM nginx:1.27-alpine

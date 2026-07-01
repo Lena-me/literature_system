@@ -302,57 +302,75 @@ Input: {dumps(payload)}
         async with neo4j_manager.driver.session() as neo4j_session:
             # ---------- 创建节点 ----------
             nodes_data = data.get('nodes', [])
-            created_names: set[str] = set()
+            # created_names: 记录每个节点名对应的所有类型（同名不同类型合并标签）
+            created_node_types: dict[str, set[str]] = {}
+            print(f'[create_graph] ===== graph_id={graph.id} 开始写入Neo4j =====')
+            print(f'[create_graph] LLM生成节点数={len(nodes_data)}, 边数={len(data.get("edges", []))}')
 
-            for n in nodes_data:
-                node_name = (n.get('name') or '').strip()
-                if not node_name:
-                    continue
-                # 去重：同一 graph 内同名节点只创建一次
-                if node_name in created_names:
-                    continue
-                created_names.add(node_name)
-
-                entity_type = (n.get('type') or 'paper').strip().lower()
-                if entity_type not in VALID_ENTITY_TYPES:
-                    entity_type = 'paper'
-
-                properties = n.get('properties') or {}
-                if isinstance(properties, dict):
-                    properties_str = dumps(properties)
+            async def write_node(name: str, entity_type: str, props: dict | None = None) -> None:
+                """写入或更新单个节点。同名节点合并所有类型标签。"""
+                name = (name or '').strip()
+                if not name:
+                    return
+                props = props or {}
+                if isinstance(props, dict):
+                    properties_str = dumps(props)
                 else:
                     properties_str = '{}'
 
-                # 标签名取首字母大写（如 paper → Paper），用于 Neo4j 可视化区分
                 label = entity_type.capitalize()
+                existing_types = created_node_types.get(name, set())
+                # 更新内存记录
+                existing_types.add(entity_type)
+                created_node_types[name] = existing_types
 
+                # 合并所有已知标签到 Neo4j（同名节点累加标签）
+                # ★ 关键修复：MERGE 必须包含 graph_id，否则同名节点会被跨图覆盖
+                all_labels = ':'.join(t.capitalize() for t in existing_types)
                 cypher = (
-                    f"MERGE (n:Entity {{name: $name}}) "
-                    f"SET n:{label} "
+                    f"MERGE (n:Entity {{name: $name, graph_id: $graph_id}}) "
+                    f"SET n:{all_labels} "
                     f"SET n.domain_id = $domain_id, "
-                    f"n.graph_id = $graph_id, "
-                    f"n.milvus_id = $milvus_id, "
                     f"n.properties = $properties"
                 )
                 await neo4j_session.run(
                     cypher,
                     {
-                        'name': node_name,
+                        'name': name,
                         'domain_id': domain_id,
                         'graph_id': graph.id,
-                        'milvus_id': None,
                         'properties': properties_str,
                     },
                 )
 
+            for n in nodes_data:
+                node_name = (n.get('name') or '').strip()
+                if not node_name:
+                    continue
+                entity_type = (n.get('type') or 'paper').strip().lower()
+                if entity_type not in VALID_ENTITY_TYPES:
+                    entity_type = 'paper'
+
+                properties = n.get('properties') or {}
+                await write_node(node_name, entity_type, properties)
+
+            print(f'[create_graph] 节点写入完成: 去重后写入{len(created_node_types)}个节点')
+
             # ---------- 创建关系 ----------
             edges_data = data.get('edges', [])
             seen_edges: set[tuple[str, str, str]] = set()
+            edges_created = 0
+            edges_skipped_missing_source = 0
+            edges_skipped_missing_target = 0
+            edges_skipped_self_loop = 0
+            edges_skipped_duplicate = 0
+            edges_auto_created_nodes = 0
 
             for e in edges_data:
                 source_name = (e.get('source') or '').strip()
                 target_name = (e.get('target') or '').strip()
                 if not source_name or not target_name or source_name == target_name:
+                    edges_skipped_self_loop += 1
                     continue
 
                 rel_type = (e.get('relation_type') or 'related_to').strip().lower()
@@ -362,8 +380,19 @@ Input: {dumps(payload)}
                 # 去重：相同 source→relation→target 只创建一次
                 edge_key = (source_name, target_name, rel_type)
                 if edge_key in seen_edges:
+                    edges_skipped_duplicate += 1
                     continue
                 seen_edges.add(edge_key)
+
+                # ★ 校验并补建缺失的节点
+                if source_name not in created_node_types:
+                    print(f'[create_graph] ⚠️ 边引用的 source 节点不存在，自动补建: "{source_name}"')
+                    await write_node(source_name, 'method', {})
+                    edges_auto_created_nodes += 1
+                if target_name not in created_node_types:
+                    print(f'[create_graph] ⚠️ 边引用的 target 节点不存在，自动补建: "{target_name}"')
+                    await write_node(target_name, 'method', {})
+                    edges_auto_created_nodes += 1
 
                 properties = e.get('properties') or {}
                 if isinstance(properties, dict):
@@ -372,8 +401,8 @@ Input: {dumps(payload)}
                     properties_str = '{}'
 
                 cypher = (
-                    f"MATCH (s:Entity {{name: $source_name}}) "
-                    f"MATCH (t:Entity {{name: $target_name}}) "
+                    f"MATCH (s:Entity {{name: $source_name, graph_id: $graph_id}}) "
+                    f"MATCH (t:Entity {{name: $target_name, graph_id: $graph_id}}) "
                     f"MERGE (s)-[r:{rel_type.upper()} {{graph_id: $graph_id}}]->(t) "
                     f"SET r.properties = $properties"
                 )
@@ -386,6 +415,12 @@ Input: {dumps(payload)}
                         'properties': properties_str,
                     },
                 )
+                edges_created += 1
+
+        print(f'[create_graph] 关系写入完成: 创建{edges_created}条'
+              f' | 跳过(自环{edges_skipped_self_loop}/重复{edges_skipped_duplicate})'
+              f' | 自动补建节点{edges_auto_created_nodes}个')
+        print(f'[create_graph] ===== graph_id={graph.id} 写入完毕 =====')
 
         await db.commit()
         await db.refresh(graph)
@@ -529,9 +564,9 @@ Input: {dumps(payload)}
             fields = [
                 ('task', info.research_question, 'studies'),
                 ('method', info.method, 'uses'),
-                ('dataset', info.experiment_data, 'evaluates_on'),
-                ('result', info.main_results, 'reports'),
-                ('innovation', info.innovations, 'contributes'),
+                ('dataset', info.experiment_data, 'evaluated_on'),
+                ('result', info.main_results, 'achieves'),
+                ('innovation', info.innovations, 'proposes'),
                 ('limitation', info.limitations, 'has_limitation'),
             ]
             for node_type, value, relation in fields:

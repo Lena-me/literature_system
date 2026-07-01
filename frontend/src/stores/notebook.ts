@@ -43,13 +43,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     const detail = await qaApi.createSession({ title, paper_ids: paperIds })
     await loadSessions()
     await switchSession(detail.id)
-    // ★ 如果创建时传入了论文且标题为默认，立即触发标题生成
-    if (paperIds && paperIds.length > 0 && isDefaultTitle(detail.title)) {
-      const firstPaper = detail.papers?.[0]
-      if (firstPaper) {
-        autoGenerateTitle(detail.id, `请基于以下文献内容提炼会话标题：${firstPaper.title || firstPaper.original_filename}`)
-      }
-    }
+    // 标题生成统一在 sendMessage 首条消息后触发，不在此处提前生成
     return detail
   }
 
@@ -148,14 +142,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     }
     detailCache.set(sid, detail) // ★ 同步更新缓存，避免切回时覆写
     await loadSessions()
-
-    // ★ 上传文献后，如果标题仍为默认，根据第一篇文献名生成标题
-    if (isDefaultTitle(detail.title)) {
-      const firstPaper = detail.papers?.[0]
-      if (firstPaper) {
-        autoGenerateTitle(sid, `请基于以下文献内容提炼会话标题：${firstPaper.title || firstPaper.original_filename}`)
-      }
-    }
+    // 标题生成统一在 sendMessage 首条消息后触发，不在此处提前生成
   }
 
   async function removeSource(paperId: number) {
