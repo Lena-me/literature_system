@@ -13,15 +13,26 @@ from app.utils.json_utils import dumps, loads
 router = APIRouter(prefix='/admin', tags=['管理后台'])
 
 @router.get('/users')
-async def list_users(keyword: str | None = None, status: str | None = None, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+async def list_users(keyword: str | None = None, status: str | None = None, sort_by: str | None = None, sort_order: str = 'desc', db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
     stmt = select(User)
     if keyword:
-        like = f'%{keyword}%'
-        stmt = stmt.where(or_(User.username.like(like), User.email.like(like), User.phone.like(like), User.name.like(like)))
+        if keyword.isdigit():
+            if len(keyword) == 11:
+                stmt = stmt.where(User.phone == keyword)
+            else:
+                stmt = stmt.where(User.id == int(keyword))
+        else:
+            stmt = stmt.where(User.username.like(f'%{keyword}%'))
     if status:
         stmt = stmt.where(User.status == status)
-    rows = (await db.execute(stmt.order_by(User.created_at.desc()).limit(500))).scalars().all()
-    return [{'id': x.id, 'username': x.username, 'name': x.name, 'email': x.email, 'phone': x.phone, 'role': x.role, 'status': x.status, 'paper_upload_count': x.paper_upload_count, 'report_generate_count': x.report_generate_count, 'quota': loads(x.quota_json,{})} for x in rows]
+    sort_map = {'id': User.id, 'created_at': User.created_at, 'last_login_at': User.last_login_at, 'status': User.status}
+    if sort_by and sort_by in sort_map:
+        order_col = sort_map[sort_by]
+        stmt = stmt.order_by(order_col.desc() if sort_order == 'desc' else order_col.asc())
+    else:
+        stmt = stmt.order_by(User.created_at.desc())
+    rows = (await db.execute(stmt.limit(500))).scalars().all()
+    return [{'id': x.id, 'username': x.username, 'name': x.name, 'email': x.email, 'phone': x.phone, 'role': x.role, 'status': x.status, 'paper_upload_count': x.paper_upload_count, 'report_generate_count': x.report_generate_count, 'quota': loads(x.quota_json,{}), 'created_at': x.created_at.isoformat() if x.created_at else None, 'last_login_at': x.last_login_at.isoformat() if x.last_login_at else None, 'last_login_ip': x.last_login_ip} for x in rows]
 
 @router.post('/users')
 async def create_user(data: UserCreateIn, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
