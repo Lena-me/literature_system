@@ -64,7 +64,7 @@ async function submit() {
   else {
     if (form.password !== form.confirm_password) return ElMessage.warning('两次密码不一致')
     if (!form.code) return ElMessage.warning('请输入验证码')
-    const user = await auth.register({
+    await auth.register({
       username: form.username,
       password: form.password,
       confirm_password: form.confirm_password,
@@ -72,7 +72,8 @@ async function submit() {
       phone: form.phone,
       code: form.code
     })
-    router.push(user.role === 'admin' ? '/admin' : '/login')
+    ElMessage.success('注册成功')
+    mode.value = 'login'
   }
 
 }

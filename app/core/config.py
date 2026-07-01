@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     mineru_keep_output: bool = True
     mineru_fallback_to_grobid: bool = True
 
+    hf_endpoint: str = 'https://hf-mirror.com'
     hf_cache_dir: str = './runtime/hf_cache'
     bge_embedding_model: str = 'BAAI/bge-large-zh-v1.5'
     bge_reranker_model: str = 'BAAI/bge-reranker-large'

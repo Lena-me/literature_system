@@ -30,6 +30,7 @@ def _web_engine_options() -> dict:
         'pool_reset_on_return': 'rollback',
         'connect_args': {
             'connect_timeout': settings.mysql_connect_timeout_seconds,
+            'init_command': "SET TIME_ZONE = '+08:00'",
         },
     }
 
@@ -67,6 +68,7 @@ celery_engine = create_engine(
     pool_timeout=settings.mysql_pool_timeout_seconds,
     connect_args={
         'connect_timeout': settings.mysql_connect_timeout_seconds,
+        'init_command': "SET TIME_ZONE = '+08:00'",
     },
 )
 

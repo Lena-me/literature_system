@@ -7,9 +7,9 @@ export const adminApi = {
   // ===================== 用户管理模块 =====================
   /**
    * 获取用户列表
-   * @param params 筛选参数：keyword 搜索关键词 / status 用户状态
+   * @param params 筛选参数：keyword 搜索关键词 / status 用户状态 / sort_by 排序字段 / sort_order 排序方向
    */
-  users: (params?: { keyword?: string; status?: string }) =>
+  users: (params?: { keyword?: string; status?: string; sort_by?: string; sort_order?: string }) =>
     http.get<any, any[]>('/admin/users', { params }),
 
   /**
@@ -149,5 +149,10 @@ export const adminApi = {
   /**
    * 系统操作量统计
    */
-  operationStats: () => http.get<any, any>('/system/operation-stats')
+  operationStats: () => http.get<any, any>('/system/operation-stats'),
+
+  /**
+   * 每日统计数据
+   */
+  dailyStats: () => http.get<any, any>('/system/daily-stats')
 }
