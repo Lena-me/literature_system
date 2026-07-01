@@ -50,8 +50,22 @@ async function submit() {
     <!-- 左侧区域 -->
     <section class="hero fade-slide">
       <BrandMark />
-      <h1 class="gradient-title">管理员登录</h1>
-      <p>科研知识平台管理后台，管理用户、模型和系统配置。</p>
+      <h1 class="gradient-title">把论文变成可问、可比、可复现的知识系统</h1>
+      <p>文献上传、结构化解析、RAG溯源问答、研读报告、多文献对比、知识图谱与复现实验建议的一体化科研工作台。</p >
+      <div class="hero-cards">
+        <div>
+          <b>RAG</b>
+          <span>检索增强生成</span>
+        </div>
+        <div>
+          <b>Graph</b>
+          <span>主题实体网络</span>
+        </div>
+        <div>
+          <b>Agent</b>
+          <span>报告与复现推导</span>
+        </div>
+      </div>
     </section>
 
     <!-- 右侧表单 -->
