@@ -108,8 +108,6 @@ async function submit() {
     <!-- 右侧表单 -->
     <section class="login-card glass fade-slide">
       <h2>{{ title }}</h2>
-      <!-- 注意删除 -->
-      <p class="subtitle">默认管理员：13800138000 / admin123456</p >
 
       <el-form label-position="top" @submit.prevent>
         <!-- 登录显示手机号 -->
