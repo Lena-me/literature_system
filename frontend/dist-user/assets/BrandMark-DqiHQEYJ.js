@@ -1,0 +1,1 @@
+import{_ as s,k as a,o as r,c as t,a as e,b as c}from"./index-Dzg40nHN.js";const d={},_={class:"brand-mark"},l={class:"logo-orb"};function i(p,o){const n=a("Reading");return r(),t("div",_,[e("div",l,[c(n)]),o[0]||(o[0]=e("div",null,[e("strong",null,"文献智能解析"),e("span",null,"Research Knowledge OS")],-1))])}const f=s(d,[["render",i],["__scopeId","data-v-cdf19544"]]);export{f as B};
