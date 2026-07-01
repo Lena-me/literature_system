@@ -4,3 +4,4 @@ node_modules/
 
 frontend/dist/
 .gitignore
+/frontend/dist-user/
