@@ -33,6 +33,11 @@ const pdfPage = ref(1)
 const pdfHighlight = ref('')
 const pdfReader = ref<InstanceType<typeof PdfReader> | null>(null)
 const selectedSingle = computed(() => (papers.selectedIds.length === 1 ? papers.selectedIds[0] : null))
+const graphCypher = computed(() => {
+  const id = graph.value?.id
+  if (!id) return ''
+  return `MATCH (n:Entity)-[r]->(m:Entity) WHERE r.graph_id = ${id} RETURN n, r, m`
+})
 
 function safeRevokeBlobUrl(url: string) {
   if (!url?.startsWith('blob:')) return
@@ -247,7 +252,10 @@ async function onSourceClick(source: Source) {
         </el-tab-pane>
 
         <el-tab-pane label="Knowledge Graph" name="graph">
-          <GraphCanvas :graph="graph" />
+          <GraphCanvas
+            :cypher-query="graphCypher"
+            :graph-id="graph?.id ?? null"
+          />
         </el-tab-pane>
 
         <el-tab-pane label="Compare" name="compare">

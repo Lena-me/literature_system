@@ -54,5 +54,7 @@ export const papersApi = {
   },
 
   createCategory: (name: string, parent_id?: number) => http.post('/papers/categories', { name, parent_id }),
-  categories: () => http.get('/papers/categories')
+  categories: () => http.get('/papers/categories'),
+  updateCategory: (id: number, data: { name: string; parent_id?: number | null }) => http.put(`/papers/categories/${id}`, data),
+  deleteCategory: (id: number) => http.delete(`/papers/categories/${id}`),
 }

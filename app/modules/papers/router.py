@@ -246,6 +246,38 @@ async def create_category(data: CategoryIn, db: AsyncSession = Depends(get_db), 
     return {'id': category.id, 'name': category.name, 'parent_id': category.parent_id}
 
 
+@router.put('/categories/{category_id}')
+async def update_category(
+    category_id: int,
+    data: CategoryIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    category = await db.get(Category, category_id)
+    if not category or category.user_id != user.id:
+        raise HTTPException(status_code=404, detail='分类不存在')
+    category.name = data.name
+    if data.parent_id is not None:
+        category.parent_id = data.parent_id
+    await db.commit()
+    await db.refresh(category)
+    return {'id': category.id, 'name': category.name, 'parent_id': category.parent_id}
+
+
+@router.delete('/categories/{category_id}')
+async def delete_category(
+    category_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    category = await db.get(Category, category_id)
+    if not category or category.user_id != user.id:
+        raise HTTPException(status_code=404, detail='分类不存在')
+    await db.delete(category)
+    await db.commit()
+    return {'ok': True}
+
+
 @router.get('/{paper_id}', response_model=PaperOut)
 async def get_paper(paper_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     paper = await db.get(Paper, paper_id)
