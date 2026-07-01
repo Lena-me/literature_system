@@ -51,20 +51,64 @@ class GrobidPyMuPDFParser:
         root = ET.fromstring(tei_xml.encode('utf-8'))
         title = self._text(root.find('.//tei:titleStmt/tei:title', TEI_NS))
         abstract = self._text(root.find('.//tei:profileDesc/tei:abstract', TEI_NS))
-        authors = [self._text(a) for a in root.findall('.//tei:sourceDesc//tei:author//tei:persName', TEI_NS) if self._text(a)]
+        authors = [self._text(a) for a in root.findall('.//tei:sourceDesc//tei:author//tei:persName', TEI_NS) if
+                   self._text(a)]
         keywords = [self._text(k) for k in root.findall('.//tei:keywords/tei:term', TEI_NS) if self._text(k)]
+
         items: list[dict] = []
         order = 0
+
         if abstract:
-            items.append({'item_type': 'abstract', 'level': None, 'content': abstract, 'page_number': 1, 'order_index': order}); order += 1
+            items.append(
+                {'item_type': 'abstract', 'level': None, 'content': abstract, 'page_number': 1, 'order_index': order})
+            order += 1
+
+        # 改进的核心：遍历 div 下的所有直接子节点，保留文献的原始阅读顺序
         for div in root.findall('.//tei:text/tei:body//tei:div', TEI_NS):
-            head = self._text(div.find('tei:head', TEI_NS))
-            if head:
-                items.append({'item_type': 'heading', 'level': 1, 'content': head, 'page_number': None, 'order_index': order}); order += 1
-            for p in div.findall('tei:p', TEI_NS):
-                text = self._text(p)
-                if text:
-                    items.append({'item_type': 'paragraph', 'level': None, 'content': text, 'page_number': None, 'order_index': order}); order += 1
+            for element in div:
+                # 去除 XML 命名空间，提取纯标签名 (例如从 '{http://www.tei-c.org/ns/1.0}p' 提取出 'p')
+                tag = element.tag.split('}')[-1] if '}' in element.tag else element.tag
+
+                text = self._text(element)
+                if not text:
+                    continue
+
+                # 根据不同标签类型进行细粒度分类
+                if tag == 'head':
+                    items.append({'item_type': 'heading', 'level': 1, 'content': text, 'page_number': None,
+                                  'order_index': order})
+                elif tag == 'p':
+                    items.append({'item_type': 'paragraph', 'level': None, 'content': text, 'page_number': None,
+                                  'order_index': order})
+                elif tag == 'formula':
+                    # 独立提取公式区块
+                    items.append({'item_type': 'formula', 'level': None, 'content': text, 'page_number': None,
+                                  'order_index': order})
+                elif tag == 'list':
+                    # 提取项目符号或数字列表
+                    items.append({'item_type': 'list', 'level': None, 'content': text, 'page_number': None,
+                                  'order_index': order})
+                elif tag == 'figure':
+                    # 区分表格和图片描述
+                    fig_type = element.get('type')
+                    if fig_type == 'table':
+                        items.append({'item_type': 'table', 'level': None, 'content': text, 'page_number': None,
+                                      'order_index': order})
+                    else:
+                        items.append(
+                            {'item_type': 'figure_caption', 'level': None, 'content': text, 'page_number': None,
+                             'order_index': order})
+                elif tag == 'note':
+                    # 提取脚注或尾注
+                    items.append({'item_type': 'footnote', 'level': None, 'content': text, 'page_number': None,
+                                  'order_index': order})
+                else:
+                    # 兜底：如果遇到未知的标签，仍然提取其文本，避免信息丢失
+                    items.append({'item_type': 'paragraph', 'level': None, 'content': text, 'page_number': None,
+                                  'order_index': order})
+
+                order += 1
+
         refs = [self._text(b) for b in root.findall('.//tei:listBibl/tei:biblStruct', TEI_NS) if self._text(b)]
         meta = {'title': title, 'authors': authors, 'keywords': keywords, 'abstract': abstract}
         return items, meta, refs

@@ -120,6 +120,107 @@ class CompareIn(BaseModel):
 class GraphCreateIn(BaseModel):
     paper_ids: list[int] = Field(min_length=1, max_length=5)
     name: str | None = None
+    domain_id: int | None = None
+
+class DomainCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = None
+    icon: str = 'folder'
+    parent_domain_id: int | None = None
+
+class DomainUpdateIn(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    icon: str | None = None
+
+class DomainOut(BaseModel):
+    id: int
+    name: str
+    description: str | None = None
+    icon: str
+    parent_domain_id: int | None = None
+    graph_count: int = 0
+    paper_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+    model_config = {'from_attributes': True}
+
+class GraphSummaryOut(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+    model_config = {'from_attributes': True}
+
+class DomainOverviewOut(BaseModel):
+    domain: DomainOut
+    graphs: list[GraphSummaryOut] = []
+
+class DomainSuggestIn(BaseModel):
+    paper_ids: list[int] = Field(min_length=1, max_length=5)
+
+class DomainSuggestItem(BaseModel):
+    domain_id: int | None = None  # None 表示建议新建
+    domain_name: str
+    match_type: str  # 'existing' | 'new'
+    reason: str
+    paper_count_in_domain: int = 0
+
+class DomainSuggestOut(BaseModel):
+    suggestions: list[DomainSuggestItem] = []
+
+# ==================== 实体融合 ====================
+
+class MergeSuggestionItem(BaseModel):
+    node_a: dict
+    node_b: dict
+    similarity: float
+
+class MergeSuggestionOut(BaseModel):
+    suggestions: list[MergeSuggestionItem] = []
+
+class MergeRequestIn(BaseModel):
+    source_node_id: int
+    target_node_id: int
+
+class MergeResultOut(BaseModel):
+    merged_edges: int
+    deleted_duplicates: int
+    message: str = '合并完成'
+
+# ==================== 知识推荐 ====================
+
+class RecommendationItem(BaseModel):
+    concept: str
+    entity_type: str = 'concept'
+    reason: str = ''
+    source: str = 'relation'  # relation / llm
+    node_id: int | None = None
+    score: float | None = None
+    bridge_nodes: list[str] = []
+
+class RecommendationOut(BaseModel):
+    domain_id: int
+    domain_name: str
+    recommendations: list[RecommendationItem] = []
+    source: str = 'hybrid'
+
+class ExploreRequestIn(BaseModel):
+    concept: str
+    source: str = 'relation'
+
+class ExploreResultOut(BaseModel):
+    message: str = '已记录探索'
+
+class CoverageInfo(BaseModel):
+    coverage_rate: float = 0.0
+    covered_count: int = 0
+    suggested_count: int = 0
+    core_concepts: list[str] = []
+    missing_concepts: list[str] = []
+
+class OverviewOutV2(DomainOverviewOut):
+    coverage: CoverageInfo | None = None
+    recommendation_count: int = 0
 
 class ReproGuideCreateIn(BaseModel):
     paper_id: int

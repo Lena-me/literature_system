@@ -6,9 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
 from app.models import (
     ComparisonResult,
-    GraphEdge,
-    GraphNode,
+    KnowledgeDomain,
     KnowledgeGraph,
+    KnowledgeGraphPaper,
+    Paper,
     PaperExtractedInfo,
     Report,
     ReproducibilityGuide,
@@ -137,6 +138,7 @@ class GenerationService:
         user_id: int,
         paper_ids: list[int],
         name: str | None,
+        domain_id: int | None = None,
     ) -> KnowledgeGraph:
         infos = (
             await db.execute(select(PaperExtractedInfo).where(PaperExtractedInfo.paper_id.in_(paper_ids)))
@@ -145,30 +147,72 @@ class GenerationService:
             raise ValueError('Target papers have no extracted structured information yet.')
 
         payload = [{k: v for k, v in x.__dict__.items() if not k.startswith('_')} for x in infos]
-        prompt = f"""Extract a knowledge graph from the structured paper information.
-Return JSON only, without Markdown fences.
-JSON schema:
-{{
-  "nodes": [
-    {{"type": "paper", "name": "paper title", "properties": {{}}}},
-    {{"type": "task", "name": "research question", "properties": {{}}}},
-    {{"type": "method", "name": "method name", "properties": {{}}}},
-    {{"type": "dataset", "name": "dataset or experiment object", "properties": {{}}}},
-    {{"type": "result", "name": "main finding", "properties": {{}}}}
-  ],
-  "edges": [
-    {{"source": "paper title", "target": "method name", "relation_type": "uses", "properties": {{}}}},
-    {{"source": "paper title", "target": "research question", "relation_type": "studies", "properties": {{}}}}
-  ]
-}}
-Allowed node types: paper, task, method, dataset, metric, result, innovation, limitation, author.
+
+        system_prompt = (
+            "You are an expert knowledge graph builder specializing in academic research. "
+            "Your task is to extract structured entity-relation triples from paper metadata.\n\n"
+            "=== EXTRACTION RULES ===\n"
+            "1. ONLY extract entities that are explicitly mentioned in the input. Do NOT invent or guess.\n"
+            "2. Each entity name must be the canonical/full form (e.g. 'Convolutional Neural Network' not 'CNN').\n"
+            "3. Avoid duplicates: if two papers mention the same method (e.g. 'ResNet'), merge into ONE node.\n"
+            "4. Property fields should contain brief factual details (year, score, parameter count, etc.).\n"
+            "5. Each edge MUST include a confidence score (0.0-1.0) reflecting how certain you are.\n\n"
+            "=== ONTOLOGY CONSTRAINTS ===\n"
+            "Allowed node types and their meanings:\n"
+            "- paper: a research paper (use the exact title)\n"
+            "- task: a research problem or question being addressed\n"
+            "- method: a technique, algorithm, model, or framework\n"
+            "- dataset: a dataset, benchmark, or corpus used in experiments\n"
+            "- metric: an evaluation metric (Accuracy, F1, BLEU, etc.)\n"
+            "- result: a key finding, performance number, or conclusion\n"
+            "- innovation: a novel contribution introduced by the paper\n"
+            "- limitation: a weakness or constraint acknowledged in the paper\n"
+            "- author: only include if person names are clearly given\n\n"
+            "Allowed relation types (source → target):\n"
+            "- uses: paper/method uses a method/dataset/metric\n"
+            "- studies: paper studies a task\n"
+            "- achieves: paper/method achieves a result\n"
+            "- proposes: paper/author proposes an innovation\n"
+            "- compares_with: method/paper compares with another method\n"
+            "- improves_upon: method improves upon a previous method\n"
+            "- evaluated_on: method is evaluated on a dataset\n"
+            "- has_limitation: paper has a limitation\n"
+            "- belongs_to: method belongs to a broader category\n\n"
+            "=== OUTPUT FORMAT ===\n"
+            "Return ONLY valid JSON (no markdown fences, no extra text):\n"
+            "{\n"
+            '  "nodes": [\n'
+            '    {"type": "paper", "name": "Exact Paper Title", "properties": {"year": 2023}}\n'
+            "  ],\n"
+            '  "edges": [\n'
+            '    {"source": "Exact Paper Title", "target": "Method Name", '
+            '"relation_type": "uses", "confidence": 0.95, "properties": {}}\n'
+            "  ]\n"
+            "}\n\n"
+            "=== FEW-SHOT EXAMPLE ===\n"
+            "Input: {\"title\": \"Attention Is All You Need\", \"abstract\": \"We propose Transformer, "
+            "a model relying entirely on attention...\", \"keywords\": \"transformer, attention, machine translation\"}\n"
+            "Think step by step:\n"
+            "  Step1-Entities: paper='Attention Is All You Need', method='Transformer', task='machine translation', "
+            "innovation='self-attention mechanism', metric='BLEU', result='28.4 BLEU on WMT 2014'\n"
+            "  Step2-Relations: paper→Transformer(uses,0.98), paper→machine translation(studies,0.95), "
+            "paper→self-attention mechanism(proposes,0.97), Transformer→28.4 BLEU(achieves,0.80), "
+            "paper→BLEU(uses,0.90)\n"
+            '  Step3-Output: {{"nodes":[...], "edges":[...]}}\n\n'
+            "Now process the real input below. Think step by step, then output JSON only."
+        )
+
+        prompt = f"""Extract a knowledge graph from the following paper metadata.
+Think step by step: first list all entities, then identify relationships, then build the JSON.
+IMPORTANT: Return ONLY the JSON object, no markdown code fences, no explanation.
+
 Input: {dumps(payload)}
 """
 
         try:
             text = await self.llm.async_chat(
                 [
-                    {'role': 'system', 'content': 'You build knowledge graphs and return parseable JSON only.'},
+                    {'role': 'system', 'content': system_prompt},
                     {'role': 'user', 'content': prompt},
                 ],
                 temperature=0.0,
@@ -185,48 +229,308 @@ Input: {dumps(payload)}
         if not data.get('nodes'):
             data = self._fallback_graph_from_infos(infos)
 
+        # ============================================================
+        # ★ 质量控制：置信度过滤 + 规则校验
+        # ============================================================
+        raw_edges = data.get('edges', [])
+        filtered_edges: list[dict] = []
+        high_confidence = 0
+        low_confidence = 0
+
+        for e in raw_edges:
+            conf = e.get('confidence', 0.7)  # 老版本 LLM 可能不返回此字段
+            source_type = None
+            rel_type = e.get('relation_type', '')
+
+            # 1. 置信度过滤
+            if conf < 0.5:
+                low_confidence += 1
+                continue
+            elif conf < 0.75:
+                low_confidence += 1
+                # 低置信度仍保留，但可标记（暂不做额外处理）
+            else:
+                high_confidence += 1
+
+            # 2. 找出 source 的实际类型用于规则校验
+            source_name = (e.get('source') or '').strip()
+            target_name = (e.get('target') or '').strip()
+            for n in data.get('nodes', []):
+                if (n.get('name') or '').strip() == source_name:
+                    source_type = n.get('type', '')
+                    break
+
+            # 3. 规则校验：关系类型必须与 source 实体类型兼容
+            if not _validate_relation(source_type, rel_type):
+                continue  # 不合规的三元组直接丢弃
+
+            filtered_edges.append(e)
+
+        if filtered_edges:
+            data['edges'] = filtered_edges
+
+        # ============================================================
+        # MySQL: 创建 KnowledgeGraph 元数据记录（保留）
+        # ============================================================
         graph = KnowledgeGraph(
             user_id=user_id,
+            domain_id=domain_id,
             paper_id=paper_ids[0] if len(paper_ids) == 1 else None,
             name=name or 'Research topic knowledge graph',
         )
         db.add(graph)
         await db.flush()
 
-        node_map: dict[str, int] = {}
-        for n in data.get('nodes', []):
-            node_name = (n.get('name') or '').strip()
-            if not node_name or node_name in node_map:
-                continue
+        for pid in paper_ids:
+            db.add(KnowledgeGraphPaper(graph_id=graph.id, paper_id=pid))
 
-            node = GraphNode(
-                graph_id=graph.id,
-                entity_type=n.get('type', 'paper'),
-                name=node_name[:300],
-                properties=dumps(n.get('properties') or {}),
-            )
-            db.add(node)
-            await db.flush()
-            node_map[node.name] = node.id
+        # ============================================================
+        # Neo4j: 批量创建节点和关系
+        # ============================================================
+        from app.db.neo4j_client import neo4j_manager
 
-        for e in data.get('edges', []):
-            source_name = (e.get('source') or '').strip()
-            target_name = (e.get('target') or '').strip()
-            s, t = node_map.get(source_name), node_map.get(target_name)
-            if s and t and s != t:
-                db.add(
-                    GraphEdge(
-                        graph_id=graph.id,
-                        source_node_id=s,
-                        target_node_id=t,
-                        relation_type=e.get('relation_type', 'related_to'),
-                        properties=dumps(e.get('properties') or {}),
-                    )
+        VALID_ENTITY_TYPES = frozenset({
+            'paper', 'task', 'method', 'dataset', 'metric',
+            'result', 'innovation', 'limitation', 'author',
+        })
+        VALID_RELATION_TYPES = frozenset({
+            'uses', 'studies', 'achieves', 'proposes', 'compares_with',
+            'improves_upon', 'evaluated_on', 'has_limitation', 'belongs_to',
+            'related_to', 'reports', 'contributes', 'evaluates_on',
+        })
+
+        async with neo4j_manager.driver.session() as neo4j_session:
+            # ---------- 创建节点 ----------
+            nodes_data = data.get('nodes', [])
+            # created_names: 记录每个节点名对应的所有类型（同名不同类型合并标签）
+            created_node_types: dict[str, set[str]] = {}
+            print(f'[create_graph] ===== graph_id={graph.id} 开始写入Neo4j =====')
+            print(f'[create_graph] LLM生成节点数={len(nodes_data)}, 边数={len(data.get("edges", []))}')
+
+            async def write_node(name: str, entity_type: str, props: dict | None = None) -> None:
+                """写入或更新单个节点。同名节点合并所有类型标签。"""
+                name = (name or '').strip()
+                if not name:
+                    return
+                props = props or {}
+                if isinstance(props, dict):
+                    properties_str = dumps(props)
+                else:
+                    properties_str = '{}'
+
+                label = entity_type.capitalize()
+                existing_types = created_node_types.get(name, set())
+                # 更新内存记录
+                existing_types.add(entity_type)
+                created_node_types[name] = existing_types
+
+                # 合并所有已知标签到 Neo4j（同名节点累加标签）
+                # ★ 关键修复：MERGE 必须包含 graph_id，否则同名节点会被跨图覆盖
+                all_labels = ':'.join(t.capitalize() for t in existing_types)
+                cypher = (
+                    f"MERGE (n:Entity {{name: $name, graph_id: $graph_id}}) "
+                    f"SET n:{all_labels} "
+                    f"SET n.domain_id = $domain_id, "
+                    f"n.properties = $properties"
                 )
+                await neo4j_session.run(
+                    cypher,
+                    {
+                        'name': name,
+                        'domain_id': domain_id,
+                        'graph_id': graph.id,
+                        'properties': properties_str,
+                    },
+                )
+
+            for n in nodes_data:
+                node_name = (n.get('name') or '').strip()
+                if not node_name:
+                    continue
+                entity_type = (n.get('type') or 'paper').strip().lower()
+                if entity_type not in VALID_ENTITY_TYPES:
+                    entity_type = 'paper'
+
+                properties = n.get('properties') or {}
+                await write_node(node_name, entity_type, properties)
+
+            print(f'[create_graph] 节点写入完成: 去重后写入{len(created_node_types)}个节点')
+
+            # ---------- 创建关系 ----------
+            edges_data = data.get('edges', [])
+            seen_edges: set[tuple[str, str, str]] = set()
+            edges_created = 0
+            edges_skipped_missing_source = 0
+            edges_skipped_missing_target = 0
+            edges_skipped_self_loop = 0
+            edges_skipped_duplicate = 0
+            edges_auto_created_nodes = 0
+
+            for e in edges_data:
+                source_name = (e.get('source') or '').strip()
+                target_name = (e.get('target') or '').strip()
+                if not source_name or not target_name or source_name == target_name:
+                    edges_skipped_self_loop += 1
+                    continue
+
+                rel_type = (e.get('relation_type') or 'related_to').strip().lower()
+                if rel_type not in VALID_RELATION_TYPES:
+                    rel_type = 'related_to'
+
+                # 去重：相同 source→relation→target 只创建一次
+                edge_key = (source_name, target_name, rel_type)
+                if edge_key in seen_edges:
+                    edges_skipped_duplicate += 1
+                    continue
+                seen_edges.add(edge_key)
+
+                # ★ 校验并补建缺失的节点
+                if source_name not in created_node_types:
+                    print(f'[create_graph] ⚠️ 边引用的 source 节点不存在，自动补建: "{source_name}"')
+                    await write_node(source_name, 'method', {})
+                    edges_auto_created_nodes += 1
+                if target_name not in created_node_types:
+                    print(f'[create_graph] ⚠️ 边引用的 target 节点不存在，自动补建: "{target_name}"')
+                    await write_node(target_name, 'method', {})
+                    edges_auto_created_nodes += 1
+
+                properties = e.get('properties') or {}
+                if isinstance(properties, dict):
+                    properties_str = dumps(properties)
+                else:
+                    properties_str = '{}'
+
+                cypher = (
+                    f"MATCH (s:Entity {{name: $source_name, graph_id: $graph_id}}) "
+                    f"MATCH (t:Entity {{name: $target_name, graph_id: $graph_id}}) "
+                    f"MERGE (s)-[r:{rel_type.upper()} {{graph_id: $graph_id}}]->(t) "
+                    f"SET r.properties = $properties"
+                )
+                await neo4j_session.run(
+                    cypher,
+                    {
+                        'source_name': source_name,
+                        'target_name': target_name,
+                        'graph_id': graph.id,
+                        'properties': properties_str,
+                    },
+                )
+                edges_created += 1
+
+        print(f'[create_graph] 关系写入完成: 创建{edges_created}条'
+              f' | 跳过(自环{edges_skipped_self_loop}/重复{edges_skipped_duplicate})'
+              f' | 自动补建节点{edges_auto_created_nodes}个')
+        print(f'[create_graph] ===== graph_id={graph.id} 写入完毕 =====')
 
         await db.commit()
         await db.refresh(graph)
         return graph
+
+    async def suggest_domain(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        paper_ids: list[int],
+    ) -> list[dict]:
+        """AI 感知：分析论文内容，推荐归属到已有知识域或建议新建域。
+
+        返回格式: [{"domain_id": int|null, "domain_name": str, "match_type": "existing"|"new", "reason": str}]
+        """
+        # 1. 加载论文信息
+        papers = (
+            await db.execute(select(Paper).where(Paper.id.in_(paper_ids), Paper.user_id == user_id))
+        ).scalars().all()
+        if not papers:
+            return []
+
+        paper_snapshots = []
+        for p in papers:
+            info = (
+                await db.execute(select(PaperExtractedInfo).where(PaperExtractedInfo.paper_id == p.id))
+            ).scalar_one_or_none()
+            paper_snapshots.append({
+                'paper_id': p.id,
+                'title': p.title or p.original_filename,
+                'keywords': p.keywords or '',
+                'abstract': (info.abstract or '')[:500] if info else '',
+                'research_question': (info.research_question or '')[:300] if info else '',
+            })
+
+        # 2. 加载用户已有知识域
+        domains = (
+            await db.execute(select(KnowledgeDomain).where(KnowledgeDomain.user_id == user_id))
+        ).scalars().all()
+        domain_list = [{'id': d.id, 'name': d.name} for d in domains]
+
+        # 3. 构建 LLM prompt — 要求返回 JSON
+        domain_names = [d['name'] for d in domain_list]
+        domain_names_str = ', '.join(f'"{n}"' for n in domain_names) if domain_names else '（用户尚无任何知识域）'
+
+        prompt = f"""分析以下论文，判断它们最适合归入用户的哪个已有知识域，或者是否需要新建知识域。
+
+用户已有知识域: [{domain_names_str}]
+
+论文列表:
+{dumps(paper_snapshots)}
+
+请严格返回 JSON 数组（不要 Markdown 代码块），每个元素格式：
+{{"domain_id": 数字或null, "domain_name": "域名称", "match_type": "existing或new", "reason": "一句话理由"}}
+
+规则：
+- match_type="existing" 时，domain_id 必须是上述已有域的 id，domain_name 也必须与已有域名完全一致
+- match_type="new" 时，domain_id 为 null，domain_name 是你建议新建的域名称（2-6个字，精准概括论文核心领域）
+- 如果多篇论文属于不同领域，可以返回多个建议
+- 最多返回 3 个建议，按置信度从高到低排列
+- reason 用中文，20字以内
+"""
+        try:
+            text = await self.llm.async_chat(
+                [
+                    {'role': 'system', 'content': '你是学术领域分类专家，精准判断论文所属研究领域。只返回 JSON 数组，不含任何 Markdown 标记。'},
+                    {'role': 'user', 'content': prompt},
+                ],
+                temperature=0.0,
+                max_tokens=600,
+            )
+            raw = text.strip()
+            if raw.startswith('```'):
+                raw = raw.strip('`')
+                raw = raw.replace('json\n', '', 1).replace('JSON\n', '', 1).strip()
+            suggestions = loads(raw, default=[])
+            if isinstance(suggestions, dict):
+                suggestions = [suggestions]
+            if not isinstance(suggestions, list):
+                suggestions = []
+        except Exception:
+            suggestions = []
+
+        # 4. 如果没有结果，基于关键词做简单兜底
+        if not suggestions and domain_list:
+            all_keywords = ' '.join([p['keywords'] + ' ' + p['title'] for p in paper_snapshots]).lower()
+            # 简单关键词匹配
+            for d in domain_list:
+                if d['name'].lower() in all_keywords or any(
+                    kw in d['name'].lower() for kw in all_keywords.split()
+                ):
+                    suggestions.append({
+                        'domain_id': d['id'],
+                        'domain_name': d['name'],
+                        'match_type': 'existing',
+                        'reason': '关键词匹配',
+                    })
+                    break
+
+        if not suggestions:
+            # 完全无匹配 — 从论文标题提取建议域名
+            title = papers[0].title or papers[0].original_filename
+            suggestions.append({
+                'domain_id': None,
+                'domain_name': _extract_domain_name_from_title(title),
+                'match_type': 'new',
+                'reason': '新领域，建议创建知识域',
+            })
+
+        return suggestions
 
     def _fallback_graph_from_infos(self, infos: list[PaperExtractedInfo]) -> dict:
         nodes: list[dict] = []
@@ -260,9 +564,9 @@ Input: {dumps(payload)}
             fields = [
                 ('task', info.research_question, 'studies'),
                 ('method', info.method, 'uses'),
-                ('dataset', info.experiment_data, 'evaluates_on'),
-                ('result', info.main_results, 'reports'),
-                ('innovation', info.innovations, 'contributes'),
+                ('dataset', info.experiment_data, 'evaluated_on'),
+                ('result', info.main_results, 'achieves'),
+                ('innovation', info.innovations, 'proposes'),
                 ('limitation', info.limitations, 'has_limitation'),
             ]
             for node_type, value, relation in fields:
@@ -273,3 +577,66 @@ Input: {dumps(payload)}
                 add_edge(paper_title, node_name, relation)
 
         return {'nodes': nodes, 'edges': edges}
+
+
+# ============================================================
+# 辅助函数
+# ============================================================
+
+def _validate_relation(source_type: str | None, relation_type: str) -> bool:
+    """校验关系类型是否与源实体类型兼容（反幻觉规则引擎）。
+    不兼容的组合直接拒绝，防止 LLM 产出无意义三元组。
+
+    Returns:
+        True = 通过校验, False = 丢弃这条边
+    """
+    # 所有类型都允许的基础关系
+    universal_allowed = {'belongs_to', 'related_to'}
+
+    # 各实体类型允许作为 source 发出的关系
+    allowed_by_source: dict[str, set[str]] = {
+        'paper': {
+            'uses', 'studies', 'achieves', 'proposes', 'compares_with',
+            'evaluated_on', 'has_limitation', 'improves_upon',
+        },
+        'method': {
+            'uses', 'achieves', 'evaluated_on', 'compares_with',
+            'improves_upon', 'belongs_to',
+        },
+        'author': {'proposes', 'uses'},
+        'task': {'studies', 'evaluated_on'},
+        'dataset': {'evaluated_on', 'uses'},
+    }
+
+    if not source_type or not relation_type:
+        return True  # 信息不足时放行
+
+    allowed = allowed_by_source.get(source_type)
+    if allowed is None:
+        return True  # 未知类型放行（如 innovation, result, limitation 等）
+
+    return relation_type in allowed or relation_type in universal_allowed
+
+def _extract_domain_name_from_title(title: str) -> str:
+    """从论文标题中提取可能的领域关键词作为建议域名。
+
+    简单规则：取冒号或'在...中的应用'之前的第一个短语。
+    """
+    title = (title or '').strip()
+    if not title:
+        return '新建研究领域'
+
+    # 常见分隔符后的部分是子领域，之前的是大方向
+    for sep in (':', '：', '——', '—'):
+        idx = title.find(sep)
+        if idx > 0:
+            candidate = title[:idx].strip()
+            if 2 <= len(candidate) <= 10:
+                return candidate
+            # 取最后几个词
+            words = candidate.replace('-', ' ').split()
+            if len(words) >= 2:
+                return words[-2] + words[-1]
+
+    # 无分隔符，取前 8 个字
+    return title[:8] if len(title) > 8 else title

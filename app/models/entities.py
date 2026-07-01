@@ -169,13 +169,32 @@ class ModelCallStat(Base):
     p95_latency_ms: Mapped[float] = mapped_column(Float, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
+class KnowledgeDomain(Base):
+    __tablename__ = 'knowledge_domains'
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    icon: Mapped[str] = mapped_column(String(50), default='folder')
+    parent_domain_id: Mapped[int | None] = mapped_column(ForeignKey('knowledge_domains.id'))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
 class KnowledgeGraph(Base):
     __tablename__ = 'knowledge_graphs'
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    domain_id: Mapped[int | None] = mapped_column(ForeignKey('knowledge_domains.id'), index=True)
     paper_id: Mapped[int | None] = mapped_column(ForeignKey('papers.id'), index=True)
     name: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+class KnowledgeGraphPaper(Base):
+    __tablename__ = 'knowledge_graph_papers'
+    __table_args__ = (UniqueConstraint('graph_id', 'paper_id', name='uq_graph_paper'),)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    graph_id: Mapped[int] = mapped_column(ForeignKey('knowledge_graphs.id'), index=True)
+    paper_id: Mapped[int] = mapped_column(ForeignKey('papers.id'), index=True)
 
 class GraphNode(Base):
     __tablename__ = 'graph_nodes'
@@ -184,6 +203,7 @@ class GraphNode(Base):
     entity_type: Mapped[str] = mapped_column(String(50), index=True)
     name: Mapped[str] = mapped_column(String(300))
     properties: Mapped[str | None] = mapped_column(Text)
+    embedding_vector: Mapped[str | None] = mapped_column(Text)  # JSON: BGE向量，用于实体对齐
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 class GraphEdge(Base):
@@ -337,3 +357,16 @@ class VectorDBSnapshot(Base):
     recall_rate: Mapped[float | None] = mapped_column(Float, default=1)
     health_score: Mapped[float | None] = mapped_column(Integer, default=100)
     created_at: Mapped[datetime] = mapped_column('recorded_at', DateTime, default=utcnow)
+
+
+class ExplorationTask(Base):
+    """用户点击推荐后的探索记录"""
+    __tablename__ = 'exploration_tasks'
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey('knowledge_domains.id'), index=True)
+    concept: Mapped[str] = mapped_column(String(300))
+    source: Mapped[str] = mapped_column(String(20), default='relation')  # relation / llm
+    status: Mapped[str] = mapped_column(String(20), default='clicked')  # clicked / paper_uploaded / completed
+    paper_id: Mapped[int | None] = mapped_column(ForeignKey('papers.id'), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
