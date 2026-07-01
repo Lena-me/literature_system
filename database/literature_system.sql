@@ -93,7 +93,7 @@ DROP TABLE IF EXISTS `content_items`;
 CREATE TABLE `content_items` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `paper_id` bigint NOT NULL,
-  `item_type` enum('paragraph','heading','abstract','figure_caption','table_caption','reference','equation') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `item_type` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'paragraph/heading/abstract/figure_caption/table/formula/footnote/list 等',
   `level` tinyint DEFAULT NULL COMMENT '标题层级，非标题为NULL',
   `content` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
   `page_number` smallint DEFAULT NULL,

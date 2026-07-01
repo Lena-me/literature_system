@@ -20,6 +20,9 @@ export default defineConfig(({ mode }) => {
       outDir: appMode === 'admin' ? 'dist-admin' : 'dist-user',
       target: 'es2020',
       chunkSizeWarningLimit: 1800
+    },
+    optimizeDeps: {
+      include: ['neovis.js']
     }
   }
 })

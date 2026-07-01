@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
 
+    # Neo4j
+    neo4j_uri: str = 'bolt://127.0.0.1:7687'
+    neo4j_user: str = 'neo4j'
+    neo4j_password: str = 'neo4j'
+    neo4j_max_connection_pool_size: int = 10
+    neo4j_connection_acquisition_timeout: int = 30
+
     # Demo
     demo_admin_username: str = 'admin'
     demo_admin_password: str = 'admin123456'

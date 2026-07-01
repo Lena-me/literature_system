@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user
 from app.db.mysql import AsyncSessionLocal, get_db
-from app.models import Paper, QAMessage, QASession, QASessionPaper, User
+from app.models import Paper, QAMessage, QAMessageSource, QASession, QASessionPaper, TextChunk, User
 from app.schemas import QAAskIn, SessionCreateIn, SessionUpdateIn
 from app.services.quota_service import QuotaService
 from app.services.rag_service import RAGService
@@ -156,7 +156,37 @@ async def messages(
     if limit > 0:
         q = q.limit(limit).offset(offset)
     rows = (await db.execute(q)).scalars().all()
-    return [{'id': x.id, 'role': x.role, 'content': x.content, 'created_at': x.created_at} for x in rows]
+
+    # ★ 批量查询所有消息的来源引用
+    message_ids = [x.id for x in rows]
+    sources_map: dict[int, list[dict]] = {mid: [] for mid in message_ids}
+    if message_ids:
+        src_q = (
+            select(QAMessageSource, TextChunk.chunk_text)
+            .outerjoin(TextChunk, QAMessageSource.chunk_id == TextChunk.id)
+            .where(QAMessageSource.message_id.in_(message_ids))
+        )
+        src_rows = (await db.execute(src_q)).all()
+        for src, chunk_text in src_rows:
+            sources_map[src.message_id].append({
+                'paper_id': src.paper_id,
+                'page_number': src.page_number,
+                'section_title': src.section_title,
+                'text': chunk_text or src.snippet,
+                'snippet': src.snippet,
+                'similarity_score': src.similarity_score,
+            })
+
+    return [
+        {
+            'id': x.id,
+            'role': x.role,
+            'content': x.content,
+            'created_at': x.created_at,
+            'sources': sources_map.get(x.id, []),
+        }
+        for x in rows
+    ]
 
 # ========== 自动生成标题 ==========
 
@@ -166,21 +196,31 @@ class GenerateTitleIn(PydanticBaseModel):
 @router.post('/sessions/{session_id}/generate-title')
 async def generate_title(session_id: int, data: GenerateTitleIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     """根据首条消息自动生成会话标题"""
+    import logging
+    logger = logging.getLogger(__name__)
     session = await db.get(QASession, session_id)
     if not session or session.user_id != user.id:
         raise HTTPException(404, '会话不存在')
     try:
         llm = OpenAICompatibleLLM()
-        title = await llm.async_chat(
-            messages=[{'role': 'user', 'content': f"请将用户的这句话提炼为一个不超过10个字的极简会话标题。只输出标题纯文本，不要带书名号、引号或任何标点。用户提问：{data.first_message}"}],
-            temperature=0.3, max_tokens=20,
+        raw = await llm.async_chat(
+            messages=[
+                {'role': 'system', 'content': '你是会话标题提炼助手。根据用户提问生成不超过10个字的极简中文标题。只输出标题纯文本，不要任何额外内容。'},
+                {'role': 'user', 'content': f'用户提问：{data.first_message}'},
+            ],
+            temperature=0.3, max_tokens=50,
         )
-        session.title = title.strip()
-        await db.commit()
-        await db.refresh(session)
+        title = (raw or '').strip()
+        logger.info('[generate-title] session_id=%s raw=%r stripped=%r', session_id, raw, title)
+        if title and len(title) <= 20:
+            session.title = title
+            await db.commit()
+            await db.refresh(session)
+        else:
+            logger.warning('[generate-title] 标题无效（为空或过长），保持原标题: %s', session.title)
         return {'title': session.title}
-    except Exception:
-        # LLM 失败不回退，保留原标题
+    except Exception as e:
+        logger.warning('[generate-title] 生成失败: %s', e, exc_info=True)
         return {'title': session.title}
 
 # ========== 推荐问题 ==========
