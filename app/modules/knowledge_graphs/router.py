@@ -5,8 +5,6 @@ from app.core.dependencies import get_current_user
 from app.db.mysql import get_db
 from app.models import (
     ExplorationTask,
-    GraphEdge,
-    GraphNode,
     KnowledgeDomain,
     KnowledgeGraph,
     KnowledgeGraphPaper,
@@ -31,7 +29,6 @@ from app.schemas import (
     RecommendationOut,
 )
 from app.services.generation_service import GenerationService
-from app.services.entity_merge_service import EntityMergeService
 from app.services.recommendation_service import RecommendationService
 from app.utils.json_utils import loads
 
@@ -218,31 +215,34 @@ async def get_domain_overview(
         )
     ) or 0
 
-    # ★ 节点/边数
+    # ★ 节点/边数 + 实体类型分布 — 从 Neo4j 单次会话统计
     node_count = 0
     edge_count = 0
+    type_dist: dict[str, int] = {}
     if graph_ids:
-        node_count = (await db.scalar(
-            select(func.count(GraphNode.id)).where(GraphNode.graph_id.in_(graph_ids))
-        )) or 0
-        edge_count = (await db.scalar(
-            select(func.count(GraphEdge.id)).where(GraphEdge.graph_id.in_(graph_ids))
-        )) or 0
+        from app.db.neo4j_client import neo4j_manager
 
-    # ★ 推荐/探索数
-    recommendation_count = (await db.scalar(
-        select(func.count(ExplorationTask.id)).where(ExplorationTask.domain_id == domain_id)
-    )) or 0
+        async with neo4j_manager.driver.session() as neo4j_session:
+            nc_result = await neo4j_session.run(
+                "MATCH (n:Entity) WHERE n.graph_id IN $graph_ids RETURN count(n) AS cnt",
+                {'graph_ids': graph_ids},
+            )
+            node_count = (await nc_result.single())['cnt']
 
-    # ★ 实体类型分布（用于树形知识地图）
-    type_rows = [] if not graph_ids else (
-        await db.execute(
-            select(GraphNode.entity_type, func.count(GraphNode.id))
-            .where(GraphNode.graph_id.in_(graph_ids))
-            .group_by(GraphNode.entity_type)
-        )
-    ).all()
-    type_dist: dict[str, int] = {row[0]: row[1] for row in type_rows}
+            ec_result = await neo4j_session.run(
+                "MATCH (:Entity)-[r]->(:Entity) WHERE r.graph_id IN $graph_ids RETURN count(r) AS cnt",
+                {'graph_ids': graph_ids},
+            )
+            edge_count = (await ec_result.single())['cnt']
+
+            td_result = await neo4j_session.run(
+                "MATCH (n:Entity) WHERE n.graph_id IN $graph_ids "
+                "UNWIND labels(n) AS label "
+                "WITH label WHERE label <> 'Entity' "
+                "RETURN label, count(*) AS cnt ORDER BY cnt DESC",
+                {'graph_ids': graph_ids},
+            )
+            type_dist = {r['label'].lower(): r['cnt'] async for r in td_result}
 
     # ★ 覆盖率（基于实体类型多样性）：覆盖率 = 去重实体类型数 / (去重类型数 + 基准期望数)
     unique_types = len(type_dist)
@@ -257,6 +257,11 @@ async def get_domain_overview(
         missing_concepts=[],  # 留空，由前端通过 /recommendations 填充
     )
 
+    # ★ 推荐/探索数（仍从 MySQL 统计）
+    recommendation_count = (await db.scalar(
+        select(func.count(ExplorationTask.id)).where(ExplorationTask.domain_id == domain_id)
+    )) or 0
+
     return OverviewOutV2(
         domain=DomainOut(
             id=domain.id, name=domain.name, description=domain.description,
@@ -270,6 +275,8 @@ async def get_domain_overview(
     )
 
 # ==================== 实体融合 ====================
+#   NOTE: Neo4j MERGE 已实现全局实体去重，MySQL GraphNode-based 融合路由暂时跳过。
+#         如需恢复旧的 MySQL 融合逻辑，请确认 GraphNode 表仍在写入数据。
 
 @router.get('/domains/{domain_id}/merge-suggestions', response_model=MergeSuggestionOut)
 async def get_merge_suggestions(
@@ -277,14 +284,11 @@ async def get_merge_suggestions(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """获取域内所有待确认的模糊匹配（相似度 0.65~0.85 的节点对）。"""
+    """已迁移至 Neo4j，当前版本不再需要此功能。"""
     domain = await db.get(KnowledgeDomain, domain_id)
     if not domain or domain.user_id != user.id:
         raise HTTPException(status_code=404, detail='知识域不存在')
-
-    svc = EntityMergeService()
-    pairs = await svc.get_pending_merge_suggestions(db, domain_id)
-    return MergeSuggestionOut(suggestions=pairs)
+    return MergeSuggestionOut(suggestions=[])
 
 @router.post('/domains/{domain_id}/merge', response_model=MergeResultOut)
 async def merge_entities(
@@ -293,29 +297,11 @@ async def merge_entities(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """手动将 source 节点合并到 target 节点。"""
+    """已迁移至 Neo4j，当前版本不再需要此功能。"""
     domain = await db.get(KnowledgeDomain, domain_id)
     if not domain or domain.user_id != user.id:
         raise HTTPException(status_code=404, detail='知识域不存在')
-
-    source = await db.get(GraphNode, data.source_node_id)
-    target = await db.get(GraphNode, data.target_node_id)
-    if not source or not target:
-        raise HTTPException(status_code=404, detail='节点不存在')
-
-    # 确认两个节点都在该域下
-    if source.graph_id and target.graph_id:
-        sg = await db.get(KnowledgeGraph, source.graph_id)
-        tg = await db.get(KnowledgeGraph, target.graph_id)
-        if not sg or not tg or sg.domain_id != domain_id or tg.domain_id != domain_id:
-            raise HTTPException(status_code=400, detail='节点不属于此知识域')
-
-    svc = EntityMergeService()
-    result = await svc.merge_entities(db, data.source_node_id, data.target_node_id)
-    return MergeResultOut(
-        merged_edges=result['merged_edges'],
-        deleted_duplicates=result['deleted_duplicates'],
-    )
+    return MergeResultOut(merged_edges=0, deleted_duplicates=0)
 
 # ==================== 知识推荐 ====================
 
@@ -399,37 +385,65 @@ async def get_graph(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """查询知识图谱详情 — 元数据从 MySQL，节点/边从 Neo4j。"""
     graph = await db.get(KnowledgeGraph, graph_id)
     if not graph or graph.user_id != user.id:
         raise HTTPException(status_code=404, detail='知识图谱不存在')
 
-    nodes = (
-        await db.execute(select(GraphNode).where(GraphNode.graph_id == graph_id))
-    ).scalars().all()
-    edges = (
-        await db.execute(select(GraphEdge).where(GraphEdge.graph_id == graph_id))
-    ).scalars().all()
+    from app.db.neo4j_client import neo4j_manager
+
+    async with neo4j_manager.driver.session() as neo4j_session:
+        # ---------- 查询节点 ----------
+        nodes_result = await neo4j_session.run(
+            "MATCH (n:Entity) WHERE n.graph_id = $graph_id "
+            "RETURN elementId(n) AS id, labels(n) AS labels, "
+            "n.name AS name, n.properties AS properties, "
+            "n.domain_id AS domain_id, n.milvus_id AS milvus_id",
+            {'graph_id': graph_id},
+        )
+        node_records = [r.data() async for r in nodes_result]
+
+        # 从 labels 中提取 entity_type（排除 'Entity' label）
+        nodes = []
+        for rec in node_records:
+            raw_labels: list[str] = rec['labels']
+            entity_type = 'paper'
+            for lbl in raw_labels:
+                if lbl != 'Entity':
+                    entity_type = lbl.lower()
+                    break
+            nodes.append({
+                'id': rec['id'],
+                'type': entity_type,
+                'name': rec['name'],
+                'properties': loads(rec['properties'], {}),
+            })
+
+        # ---------- 查询关系 ----------
+        edges_result = await neo4j_session.run(
+            "MATCH (s:Entity)-[r]->(t:Entity) "
+            "WHERE r.graph_id = $graph_id "
+            "RETURN elementId(r) AS id, elementId(s) AS source, elementId(t) AS target, "
+            "type(r) AS relation_type, r.properties AS properties",
+            {'graph_id': graph_id},
+        )
+        edge_records = [r.data() async for r in edges_result]
+
+        edges = [
+            {
+                'id': rec['id'],
+                'source': rec['source'],
+                'target': rec['target'],
+                'relation_type': rec['relation_type'],
+                'properties': loads(rec['properties'], {}),
+            }
+            for rec in edge_records
+        ]
+
     return {
         'id': graph.id,
         'name': graph.name,
         'domain_id': graph.domain_id,
-        'nodes': [
-            {
-                'id': n.id,
-                'type': n.entity_type,
-                'name': n.name,
-                'properties': loads(n.properties, {}),
-            }
-            for n in nodes
-        ],
-        'edges': [
-            {
-                'id': e.id,
-                'source': e.source_node_id,
-                'target': e.target_node_id,
-                'relation_type': e.relation_type,
-                'properties': loads(e.properties, {}),
-            }
-            for e in edges
-        ],
+        'nodes': nodes,
+        'edges': edges,
     }

@@ -1,12 +1,16 @@
+import os
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Docker Compose 通过 env_file 注入环境变量，以此区分 env 文件
+_env_file = '.env.docker' if os.getenv('APP_ENV') == 'docker' else '.env'
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file='.env',
+        env_file=_env_file,
         env_file_encoding='utf-8',
         extra='ignore',
     )
@@ -84,6 +88,13 @@ class Settings(BaseSettings):
     llm_model: str = 'deepseek-v4-pro'
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
+
+    # Neo4j
+    neo4j_uri: str = 'bolt://127.0.0.1:7687'
+    neo4j_user: str = 'neo4j'
+    neo4j_password: str = 'neo4j'
+    neo4j_max_connection_pool_size: int = 10
+    neo4j_connection_acquisition_timeout: int = 30
 
     # Demo
     demo_admin_username: str = 'admin'

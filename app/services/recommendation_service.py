@@ -12,13 +12,11 @@
 """
 from __future__ import annotations
 
-from collections import defaultdict
-
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
-from app.models import GraphEdge, GraphNode, KnowledgeDomain, KnowledgeGraph
+from app.models import KnowledgeDomain, KnowledgeGraph
 from app.utils.json_utils import loads
 
 
@@ -32,15 +30,15 @@ class RecommendationService:
     async def relation_based_recommend(
         self, db: AsyncSession, domain_id: int, top_k: int = 5,
     ) -> list[dict]:
-        """基于图关系推理的确定性推荐。
+        """基于图关系推理的确定性推荐，从 Neo4j 查询桥接概念。
 
-        算法：两两检查用户已有节点，找到它们共同连接的"中间节点"。
-        如果该中间节点不在用户已有集合中 → 推荐。
+        算法：找到域内被至少2个已有节点指向的中间节点，
+        该中间节点即为"桥接概念"。
 
         Returns:
             [{'concept': str, 'entity_type': str, 'bridge_nodes': [str], 'reason': str}]
         """
-        # 1. 获取域下所有节点和边
+        # 1. 获取域下所有图谱ID
         graph_ids_result = await db.execute(
             select(KnowledgeGraph.id).where(KnowledgeGraph.domain_id == domain_id)
         )
@@ -48,84 +46,69 @@ class RecommendationService:
         if not graph_ids:
             return []
 
-        nodes = (await db.execute(
-            select(GraphNode).where(GraphNode.graph_id.in_(graph_ids))
-        )).scalars().all()
+        from app.db.neo4j_client import neo4j_manager
 
-        if len(nodes) < 3:
-            return []  # 至少需要3个节点才能产生桥接
+        async with neo4j_manager.driver.session() as neo4j_session:
+            # 2. 加载域内所有节点名和类型
+            nodes_result = await neo4j_session.run(
+                "MATCH (n:Entity) WHERE n.graph_id IN $graph_ids "
+                "RETURN n.name AS name, labels(n) AS labels",
+                {'graph_ids': graph_ids},
+            )
+            node_records = [r.data() async for r in nodes_result]
+            if len(node_records) < 3:
+                return []
 
-        # node_id → GraphNode 映射
-        node_by_id: dict[int, GraphNode] = {n.id: n for n in nodes}
-        all_node_ids = set(node_by_id.keys())
+            domain_entity_names: set[str] = set()
+            node_info: dict[str, str] = {}  # name → entity_type
+            for rec in node_records:
+                name = rec['name']
+                domain_entity_names.add(name)
+                # 提取 entity_type
+                for lbl in rec['labels']:
+                    if lbl != 'Entity':
+                        node_info[name] = lbl.lower()
+                        break
+                if name not in node_info:
+                    node_info[name] = 'paper'
 
-        # 2. 加载所有边，构建邻接关系
-        edges = (await db.execute(
-            select(GraphEdge).where(GraphEdge.graph_id.in_(graph_ids))
-        )).scalars().all()
-
-        # adj_in[node_id] = 哪些节点通过边指向 node_id
-        adj_in: dict[int, set[int]] = defaultdict(set)
-        # adj_out[node_id] = node_id 通过边指向哪些节点
-        adj_out: dict[int, set[int]] = defaultdict(set)
-
-        for e in edges:
-            adj_out[e.source_node_id].add(e.target_node_id)
-            adj_in[e.target_node_id].add(e.source_node_id)
-
-        # 3. 找桥接节点：被至少2个已有节点共同指向，且自身不在已有集合中
-        #    注意：这里"已有节点"就是 all_node_ids（域内所有节点都是用户的）
-        bridge_candidates: list[dict] = []
-        scored: dict[int, float] = {}
-
-        for node_id, incoming in adj_in.items():
-            if node_id not in all_node_ids:
-                continue
-            # 已有节点指向的节点（即邻接）
-            for target_id in adj_out.get(node_id, set()):
-                if target_id not in all_node_ids:
-                    continue
-                # 找同时指向 target_id 的其他节点
-                other_sources = adj_in.get(target_id, set()) & all_node_ids
-                if len(other_sources) >= 2 and node_id in other_sources:
-                    other_sources.discard(node_id)
-                    # node_id 和其他源节点共享 target_id 这个"共同邻居"
-                    for other_id in other_sources:
-                        # 找出 node_id 和 other_id 共同连接的目标
-                        common_targets = (
-                            adj_out.get(node_id, set())
-                            & adj_out.get(other_id, set())
-                        )
-                        for ct in common_targets:
-                            if ct in all_node_ids and ct != node_id and ct != other_id:
-                                # 这个 ct 是 node_id 和 other_id 都连接的"桥接概念"
-                                # 如果 ct 作为桥节点出现频次高，推荐优先级高
-                                scored[ct] = scored.get(ct, 0) + 1.0
-
-        # 按得分排序
-        sorted_candidates = sorted(
-            scored.items(), key=lambda x: x[1], reverse=True
-        )
+            # 3. 查找桥接概念：被 ≥2 个域内节点共同连接的中间节点
+            #    MATCH (a:Entity)-[:USES|STUDIES|...]->(bridge:Entity)<-[:USES|STUDIES|...]-(b:Entity)
+            #    WHERE a.graph_id IN $graph_ids AND b.graph_id IN $graph_ids
+            bridges_result = await neo4j_session.run(
+                "MATCH (a:Entity)-[r1]->(bridge:Entity)<-[r2]-(b:Entity) "
+                "WHERE a.graph_id IN $graph_ids AND b.graph_id IN $graph_ids "
+                "  AND a.name <> b.name "
+                "  AND r1.graph_id IN $graph_ids "
+                "  AND r2.graph_id IN $graph_ids "
+                "RETURN bridge.name AS concept, labels(bridge) AS labels, "
+                "  a.name AS source_a, b.name AS source_b, "
+                "  count(*) AS score "
+                "ORDER BY score DESC LIMIT $top_k",
+                {'graph_ids': graph_ids, 'top_k': top_k},
+            )
+            bridge_records = [r.data() async for r in bridges_result]
 
         results: list[dict] = []
         seen_names: set[str] = set()
-        for node_id, score in sorted_candidates[:top_k]:
-            node = node_by_id.get(node_id)
-            if not node or node.name in seen_names:
+        for rec in bridge_records:
+            concept = rec['concept']
+            if concept in seen_names:
                 continue
-            seen_names.add(node.name)
+            seen_names.add(concept)
 
-            # 找是哪两个节点通过它连接
-            sources = list(adj_in.get(node_id, set()) & all_node_ids)[:2]
-            bridge_names = [node_by_id[s].name for s in sources if s in node_by_id]
+            entity_type = 'paper'
+            for lbl in rec['labels']:
+                if lbl != 'Entity':
+                    entity_type = lbl.lower()
+                    break
 
             results.append({
-                'node_id': node_id,
-                'concept': node.name,
-                'entity_type': node.entity_type,
-                'score': round(score, 1),
-                'bridge_nodes': bridge_names,
-                'reason': f'你已覆盖{"和".join(bridge_names[:2])}，它们都与"{node.name}"相关',
+                'concept': concept,
+                'entity_type': entity_type,
+                'score': rec['score'],
+                'bridge_nodes': [rec['source_a'], rec['source_b']],
+                'reason': f'你已覆盖"{rec["source_a"]}"和"{rec["source_b"]}"，它们都与"{concept}"相关',
                 'source': 'relation',
             })
 
@@ -138,10 +121,7 @@ class RecommendationService:
     async def llm_based_recommend(
         self, db: AsyncSession, domain_id: int, top_k: int = 5,
     ) -> list[dict]:
-        """基于 LLM 的探索性推荐。
-
-        将用户已覆盖的实体列表发给 LLM，让 LLM 推荐缺失的核心概念。
-        """
+        """基于 LLM 的探索性推荐，从 Neo4j 获取域内实体列表。"""
         # 获取域信息和已有实体
         domain = await db.get(KnowledgeDomain, domain_id)
         graph_ids_result = await db.execute(
@@ -151,18 +131,28 @@ class RecommendationService:
         if not graph_ids:
             return []
 
-        nodes = (await db.execute(
-            select(GraphNode).where(GraphNode.graph_id.in_(graph_ids))
-        )).scalars().all()
-        if not nodes:
+        from app.db.neo4j_client import neo4j_manager
+
+        async with neo4j_manager.driver.session() as neo4j_session:
+            nodes_result = await neo4j_session.run(
+                "MATCH (n:Entity) WHERE n.graph_id IN $graph_ids "
+                "RETURN n.name AS name, labels(n) AS labels "
+                "LIMIT 50",
+                {'graph_ids': graph_ids},
+            )
+            node_records = [r.data() async for r in nodes_result]
+
+        if not node_records:
             return []
 
-        # 按类型分组
+        # 按类型分组构建实体列表
         entity_list: list[str] = []
-        for n in nodes:
-            label = n.name
-            if n.entity_type and n.entity_type != 'concept':
-                label += f'({n.entity_type})'
+        for rec in node_records:
+            label = rec['name']
+            for lbl in rec['labels']:
+                if lbl != 'Entity' and lbl.lower() != 'concept':
+                    label += f'({lbl.lower()})'
+                    break
             entity_list.append(label)
 
         # 构建 prompt

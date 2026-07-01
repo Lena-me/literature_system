@@ -18,6 +18,9 @@ export default defineConfig(({ mode }) => {
     build: {
       target: 'es2020',
       chunkSizeWarningLimit: 1800
+    },
+    optimizeDeps: {
+      include: ['neovis.js']
     }
   }
 })
