@@ -98,6 +98,7 @@ class Settings(BaseSettings):
     llm_model: str = 'deepseek-v4-pro'
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
+    enable_llm_extract: bool = False
 
     # Neo4j
     neo4j_uri: str = 'bolt://127.0.0.1:7687'
