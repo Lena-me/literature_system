@@ -183,7 +183,7 @@ function statusLabel(s: string | null | undefined): string {
     case 'processing':
     case 'parsing': return '解析中'
     case 'pending': return '等待中'
-    default: return '未解析'
+    default: return '解析中'
   }
 }
 
