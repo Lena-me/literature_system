@@ -1,10 +1,20 @@
 import { http } from './client'
 import type { KnowledgeGraph, KnowledgeDomain, DomainOverview, DomainSuggestion, MergeSuggestion, MergeResult, CoverageInfo, RegionRecommendation } from '@/types/domain'
 
+export interface GraphListItem {
+  id: number
+  name: string
+  domain_id: number | null
+  paper_count: number
+  created_at: string
+}
+
 export const knowledgeApi = {
   // 知识图谱
   create: (payload: { paper_ids: number[]; name?: string; domain_id?: number }) =>
     http.post<any, KnowledgeGraph>('/knowledge-graphs', payload),
+  list: (domainId?: number) =>
+    http.get<any, GraphListItem[]>('/knowledge-graphs', { params: domainId !== undefined ? { domain_id: domainId } : {} }),
   get: (id: number) =>
     http.get<any, KnowledgeGraph>(`/knowledge-graphs/graph/${id}`),
 

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { knowledgeApi } from '@/api/knowledge'
+import { knowledgeApi, type GraphListItem } from '@/api/knowledge'
 import { papersApi } from '@/api/papers'
 import GraphCanvas from '@/components/reader/GraphCanvas.vue'
 import type { KnowledgeGraph, KnowledgeDomain, DomainSuggestion, MergeSuggestion, RegionRecommendation } from '@/types/domain'
@@ -133,9 +133,36 @@ function closeBuildModal() {
   paperSearchQuery.value = ''
 }
 
+async function loadGraphHistory() {
+  try {
+    const apiList = await knowledgeApi.list()
+    // 读取 localStorage 中缓存的额外元数据（nodeCount/edgeCount）
+    let localMeta: Record<number, any> = {}
+    try {
+      const cached = JSON.parse(localStorage.getItem('graph_ids') || '[]')
+      for (const item of cached) {
+        if (item.id) localMeta[item.id] = item
+      }
+    } catch { /* */ }
+
+    graphHistory.value = apiList.map(g => ({
+      id: g.id,
+      name: g.name,
+      domainId: g.domain_id,
+      paperCount: g.paper_count,
+      nodeCount: localMeta[g.id]?.nodeCount ?? 0,
+      edgeCount: localMeta[g.id]?.edgeCount ?? 0,
+      updatedAt: localMeta[g.id]?.updatedAt || g.created_at,
+    }))
+  } catch {
+    // 降级：从 localStorage 读取
+    try { graphHistory.value = JSON.parse(localStorage.getItem('graph_ids') || '[]') } catch { /* */ }
+  }
+}
+
 onMounted(async () => {
-  try { graphHistory.value = JSON.parse(localStorage.getItem('graph_ids') || '[]') } catch { /* */ }
   await loadDomains()
+  await loadGraphHistory()
 
   try {
     const res: any = await papersApi.list({ limit: 100 })
@@ -250,6 +277,7 @@ async function handleCreate() {
     graph.value = kg
     console.log('[GraphView:create] kg.id =', kg.id, '| kg.nodes =', kg.nodes?.length, '| kg.edges =', kg.edges?.length)
     saveToHistory(kg.id, kg.name, kg)
+    await loadGraphHistory() // 从API刷新列表
     router.replace({ query: { id: kg.id } })
     showBuildModal.value = false
     paperSearchQuery.value = ''

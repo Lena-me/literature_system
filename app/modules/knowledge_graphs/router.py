@@ -364,6 +364,41 @@ async def explore_concept(
 
 # ==================== 知识图谱 ====================
 
+@router.get('')
+async def list_graphs(
+    domain_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """列出用户的所有知识图谱（可按知识域筛选）。"""
+    stmt = select(KnowledgeGraph).where(KnowledgeGraph.user_id == user.id)
+    if domain_id is not None:
+        stmt = stmt.where(KnowledgeGraph.domain_id == domain_id)
+    stmt = stmt.order_by(KnowledgeGraph.created_at.desc())
+
+    graphs = (await db.execute(stmt)).scalars().all()
+
+    results = []
+    for g in graphs:
+        # 统计该图谱关联的论文数
+        paper_cnt = (
+            await db.scalar(
+                select(func.count(KnowledgeGraphPaper.paper_id)).where(
+                    KnowledgeGraphPaper.graph_id == g.id
+                )
+            )
+        ) or 0
+        results.append({
+            'id': g.id,
+            'name': g.name,
+            'domain_id': g.domain_id,
+            'paper_count': paper_cnt,
+            'created_at': g.created_at.isoformat(),
+        })
+
+    return results
+
+
 @router.post('')
 async def create_graph(
     data: GraphCreateIn,
