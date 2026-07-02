@@ -30,7 +30,7 @@ export const authApi = {
       }) => http.post<any, TokenOut>('/auth/register', {
         username: payload.username,
         password: payload.password,
-        confirm_password: payload.password,
+        confirm_password: payload.confirm_password,
         email: payload.email,
         phone: payload.phone,
         code: payload.code

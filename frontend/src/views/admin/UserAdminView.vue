@@ -207,7 +207,7 @@ function getRowClassName({ row }: { row: any }) {
         <el-table-column prop="username" label="用户名" />
         <el-table-column prop="phone" label="手机号" width="130" />
         <el-table-column prop="email" label="邮箱" min-width="280" />
-        <el-table-column prop="status" label="状态" width="110">
+        <el-table-column prop="status" label="状态" width="80">
           <template #header>
             <span class="sort-header" @click="toggleSort('status')">
               状态

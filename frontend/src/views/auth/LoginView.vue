@@ -64,18 +64,27 @@ async function submit() {
   else {
     if (form.password !== form.confirm_password) return ElMessage.warning('两次密码不一致')
     if (!form.code) return ElMessage.warning('请输入验证码')
-    await auth.register({
-      username: form.username,
-      password: form.password,
-      confirm_password: form.confirm_password,
-      email: form.email,
-      phone: form.phone,
-      code: form.code
-    })
-    ElMessage.success('注册成功')
-    mode.value = 'login'
+    try {
+      auth.logout()
+      localStorage.removeItem('access_token')
+      sessionStorage.removeItem('access_token')
+      await authApi.register({
+        username: form.username,
+        password: form.password,
+        confirm_password: form.confirm_password,
+        email: form.email,
+        phone: form.phone,
+        code: form.code
+      })
+      ElMessage.success('注册成功，即将跳转到登录页面')
+      setTimeout(() => {
+        window.location.replace('/login')
+      }, 2000)
+    } catch (error: any) {
+      console.error('注册失败:', error)
+      ElMessage.error('注册失败: ' + (error?.response?.data?.detail || error?.message || '未知错误'))
+    }
   }
-
 }
 </script>
 <template>
