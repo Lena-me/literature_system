@@ -57,8 +57,6 @@ class MinerUParser:
             str(output_dir),
         ]
 
-        if settings.mineru_backend:
-            cmd.extend(['-b', settings.mineru_backend])
         if settings.mineru_method:
             cmd.extend(['-m', settings.mineru_method])
         if settings.mineru_language:
@@ -115,6 +113,7 @@ class MinerUParser:
                 for idx, page in enumerate(pages)
                 if page.get('text')
             ]
+        content_items = self._post_process_items(content_items)
 
         metadata = self._extract_metadata(markdown_text, content_items, filename)
         return {
@@ -580,6 +579,116 @@ class MinerUParser:
 
         return authors
 
+    def _post_process_items(self, items: list[dict]) -> list[dict]:
+        """
+        对 MinerU 提取的初步数据进行后置清洗：剔除目录、修复标题降维、合并断行与引用
+        """
+        cleaned_items = []
+
+        for item in items:
+            # 仅处理文本相关的 block
+            if item.get('item_type') not in ('paragraph', 'heading', 'list'):
+                cleaned_items.append(item)
+                continue
+
+            text = str(item.get('content', '')).strip()
+            if not text:
+                continue
+
+            # ==========================================
+            # 1. 剔除目录 (TOC 污染清洗)
+            # ==========================================
+            if re.search(r'(?:\.{3,}|…{2,})\s*\d+$', text):
+                continue
+            if re.match(r'^(目录|Contents?|图目录|表目录)$', text, re.I):
+                continue
+
+            # ==========================================
+            # 2. 封面及声明页碎片清洗
+            # ==========================================
+            text_no_space = text.replace(' ', '')
+            if len(text_no_space) < 30 and re.match(
+                    r'^(分类号|UDC|密级|学校代码|学号|指导教师|专业名称|学位类别|作者姓名|学院|答辩委员会|答辩日期|原创性声明|授权使用说明)',
+                    text_no_space):
+                continue
+
+            if len(text) < 15 and not re.search(r'[。！？：:;.!?]$', text) and (
+                    '学位' in text or text in ['公开', '保密', '内部']):
+                continue
+
+            # ==========================================
+            # 3. 标题强升维
+            # ==========================================
+            if item.get('item_type') in ('paragraph', 'list') and len(text) < 100 and not re.search(r'[。！？;.!?]$',
+                                                                                                    text):
+                if re.match(r'^第[一二三四五六七八九十\d]+章\s*[\u4e00-\u9fa5a-zA-Z]', text):
+                    item['item_type'] = 'heading'
+                    item['level'] = 1
+                elif re.match(r'^\d+\.\d+\.\d+\s*[\u4e00-\u9fa5a-zA-Z]', text):
+                    item['item_type'] = 'heading'
+                    item['level'] = 3
+                elif re.match(r'^\d+\.\d+\s*[\u4e00-\u9fa5a-zA-Z]', text):
+                    item['item_type'] = 'heading'
+                    item['level'] = 2
+                elif re.match(r'^\d+\.\s+[\u4e00-\u9fa5a-zA-Z]', text):
+                    item['item_type'] = 'heading'
+                    item['level'] = 1
+                elif re.match(r'^[IVX]+\.\s+[A-Z\s]+$', text):
+                    item['item_type'] = 'heading'
+                    item['level'] = 1
+
+            item['content'] = text
+            cleaned_items.append(item)
+
+        # ==========================================
+        # 4. 硬回车断行与引用割裂合并
+        # ==========================================
+        final_items = []
+        for item in cleaned_items:
+            curr_type = item.get('item_type')
+
+            # 放宽合并条件：只要上一项和当前项是段落或“假列表”，就允许考察合并
+            if final_items and curr_type in ('paragraph', 'list') and final_items[-1].get('item_type') in (
+            'paragraph', 'list'):
+                prev_text = final_items[-1]['content'].strip()
+                curr_text = item['content'].strip()
+
+                # 特征判定 1：前一段结尾没有句子终结符（兼容了结尾带有右括号、右引号的复杂情况）
+                ends_without_period = not re.search(r'[。！？：:;.!?]["”’\'\)\]）】]?$', prev_text)
+
+                # 特征判定 2：当前段落以引用标记开头 (如 [20], [1, 2-4])
+                starts_with_citation = bool(re.match(r'^\[\s*\d+\s*(?:[,\-]\s*\d+\s*)*\]', curr_text))
+
+                # 特征判定 3：当前段落完全是一个独立的引用标记 (如 "[20]" 或 "[20]。")
+                is_standalone_citation = bool(re.match(r'^\[\s*\d+\s*(?:[,\-]\s*\d+\s*)*\][。！？.!?]?$', curr_text))
+
+                # 特征判定 4：当前段落以小写字母开头，明显是半句话
+                starts_with_lowercase = bool(re.match(r'^[a-z]', curr_text))
+
+                should_merge = False
+
+                if ends_without_period:
+                    should_merge = True
+                elif starts_with_citation or is_standalone_citation:
+                    # 只要开头是引用，无视前文标点，强制吸附过来！
+                    should_merge = True
+                elif starts_with_lowercase:
+                    should_merge = True
+
+                if should_merge:
+                    # 将误识别为 list 的情况强行纠正回 paragraph
+                    final_items[-1]['item_type'] = 'paragraph'
+
+                    # 拼接逻辑：如果是中英混排，自动补全空格
+                    if re.search(r'[a-zA-Z0-9]$', prev_text) and re.match(r'^[a-zA-Z0-9\[\(]', curr_text):
+                        final_items[-1]['content'] = f"{prev_text} {curr_text}"
+                    else:
+                        final_items[-1]['content'] = f"{prev_text}{curr_text}"
+                    continue
+
+            final_items.append(item)
+
+        return final_items
     def _stringify_mineru_value(self, value) -> str:
         if value is None:
             return ''

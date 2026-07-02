@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # Document Parser
     document_parser: str = 'grobid'  # grobid / mineru
-    mineru_command: str = 'mineru'
+    mineru_command: str = 'magic-pdf'
     mineru_backend: str = 'pipeline'
     mineru_method: str = 'auto'
     mineru_language: str | None = 'ch'

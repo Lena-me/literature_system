@@ -101,11 +101,11 @@ services:
       --wait_timeout=28800
       --interactive_timeout=28800
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-upaper_user", "-ppaper_pass"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-prootpass"]
       interval: 5s
       timeout: 3s
       retries: 20
-      start_period: 20s
+      start_period: 30s
     volumes:
       - mysql_data:/var/lib/mysql
       - ./database/literature_system.sql:/docker-entrypoint-initdb.d/01_literature_system.sql:ro
