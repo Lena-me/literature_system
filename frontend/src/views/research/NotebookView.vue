@@ -10,12 +10,14 @@ import MessageList from '@/components/notebook/MessageList.vue'
 import ChatInput from '@/components/notebook/ChatInput.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
 import SuggestedQuestions from '@/components/notebook/SuggestedQuestions.vue'
+import MultiPaperComparePanel from '@/components/notebook/MultiPaperComparePanel.vue'
 
 const route = useRoute()
 const notebook = useNotebookStore()
 
 // SourceBar ref — expose openPicker
 const sourceBarRef = ref<InstanceType<typeof SourceBar> | null>(null)
+const showComparePanel = ref(false)
 
 // ——— Drag & Drop ———
 const isDragOver = ref(false)
@@ -76,6 +78,14 @@ function onChatInputOpenLibraryPicker() {
 
 function onChatInputFilesUploaded(ids: number[]) {
   // Files already added to session inside ChatInput
+}
+
+function openComparePanel() {
+  if (notebook.activeSources.length < 2) {
+    ElMessage.warning('请先在当前会话中挂载至少 2 篇文献')
+    return
+  }
+  showComparePanel.value = true
 }
 
 // ——— ReadingDrawer ———
@@ -172,6 +182,14 @@ function onOldUrlCleanup(url: string) {
     <template v-else>
       <div class="top-bar">
         <SourceBar ref="sourceBarRef" @chip-click="onChipClick" />
+        <button
+          class="compare-entry"
+          :disabled="notebook.activeSources.length < 2"
+          @click="openComparePanel"
+        >
+          <span>多文献对比</span>
+          <b>{{ notebook.activeSources.length }}</b>
+        </button>
       </div>
       <div class="chat-body">
         <!-- ★ 会话切换 loading -->
@@ -225,6 +243,13 @@ function onOldUrlCleanup(url: string) {
         </div>
       </div>
     </Transition>
+
+    <MultiPaperComparePanel
+      :visible="showComparePanel"
+      :papers="notebook.activeSources"
+      @close="showComparePanel = false"
+      @source-click="onSourceClick"
+    />
   </div>
 </template>
 
@@ -278,7 +303,52 @@ function onOldUrlCleanup(url: string) {
 .dnd-fade-leave-to { opacity: 0; }
 
 /* ===== 侧边栏展开按钮 ===== */
-.top-bar { display: flex; align-items: center; }
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--academic-border);
+}
+
+.top-bar :deep(.source-bar) {
+  flex: 1;
+  border-bottom: none;
+}
+
+.compare-entry {
+  margin-right: 16px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--academic-border);
+  background: var(--academic-primary);
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: var(--shadow-soft);
+  white-space: nowrap;
+}
+
+.compare-entry b {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.compare-entry:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
 
 /* ===== 欢迎页 ===== */
 .welcome-screen {

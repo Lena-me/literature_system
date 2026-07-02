@@ -34,6 +34,8 @@ class VerifyCodeIn(BaseModel):
     purpose: Literal['register', 'reset_password'] = 'register'
     code: str = Field(min_length=6, max_length=6)
 
+VerificationCodeIn = VerifyCodeIn
+
 class ResetPasswordIn(BaseModel):
     token: str
     password: str = Field(min_length=6, max_length=18)
@@ -116,6 +118,10 @@ class CompareIn(BaseModel):
     paper_ids: list[int] = Field(min_length=2, max_length=5)
     dimensions: list[str] | None = None
     name: str | None = None
+
+class CompareNameIn(BaseModel):
+    paper_ids: list[int] = Field(min_length=2, max_length=5)
+    dimensions: list[str] | None = None
 
 class GraphCreateIn(BaseModel):
     paper_ids: list[int] = Field(min_length=1, max_length=5)
@@ -248,6 +254,7 @@ class SchedulerConfigIn(BaseModel):
 class EvidenceMatrixIn(BaseModel):
     paper_ids: list[int] = Field(min_length=1, max_length=10)
     question: str | None = None
+    dimensions: list[str] | None = None
 
 class ResearchRadarIn(BaseModel):
     paper_ids: list[int] = Field(min_length=1, max_length=10)
