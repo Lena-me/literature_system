@@ -61,6 +61,74 @@ class GenerationService:
         await db.refresh(report)
         return report
 
+    async def suggest_compare_name(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        paper_ids: list[int],
+        dimensions: list[str] | None,
+    ) -> str:
+        papers = (
+            await db.execute(
+                select(Paper).where(
+                    Paper.id.in_(paper_ids),
+                    Paper.user_id == user_id,
+                    Paper.is_deleted == False,
+                )
+            )
+        ).scalars().all()
+
+        paper_map = {p.id: p for p in papers}
+        ordered_papers = [paper_map[pid] for pid in paper_ids if pid in paper_map]
+
+        if len(ordered_papers) < 2:
+            raise ValueError('At least 2 accessible, non-deleted papers are required for comparison.')
+
+        titles = [p.title or p.original_filename or f'Paper {p.id}' for p in ordered_papers]
+        dimension_labels = {
+            'research_question': '研究问题',
+            'method': '方法模型',
+            'experiment_data': '实验数据',
+            'metrics': '评价指标',
+            'main_results': '主要结果',
+            'innovations': '创新点',
+            'limitations': '局限性',
+            'future_work': '未来方向',
+        }
+        dim_text = '、'.join(dimension_labels.get(x, x) for x in (dimensions or [])) or '研究问题、方法和结果'
+        fallback = f'多文献对比：{titles[0][:24]} 等 {len(titles)} 篇'
+
+        prompt = f"""请根据以下文献信息，为一次多文献对比任务生成一个简洁中文记录名称。
+
+要求：
+1. 不超过 32 个中文字符或 60 个英文字符；
+2. 不要使用引号、编号、Markdown；
+3. 名称要体现多文献对比主题，而不是只复制第一篇论文标题；
+4. 如果论文主题差异较大，可以概括为“多文献对比：主题A 与 主题B”。
+
+文献标题：{dumps(titles)}
+对比维度：{dim_text}
+"""
+
+        try:
+            text = await self.llm.async_chat(
+                [
+                    {'role': 'system', 'content': '你为科研文献分析任务生成简洁、准确的中文标题。'},
+                    {'role': 'user', 'content': prompt},
+                ],
+                temperature=0.2,
+                max_tokens=120,
+            )
+            name = text.strip().strip('`').strip().strip('"').strip("'")
+            if '\n' in name:
+                name = name.splitlines()[0].strip()
+            if name.lower().startswith('json'):
+                name = name[4:].strip()
+            name = name.replace('标题：', '').replace('名称：', '').strip()
+            return (name or fallback)[:80]
+        except Exception:
+            return fallback[:80]
+
     async def compare_papers(
         self,
         db: AsyncSession,
@@ -69,29 +137,149 @@ class GenerationService:
         dimensions: list[str] | None,
         name: str | None,
     ) -> ComparisonResult:
-        infos = (
-            await db.execute(select(PaperExtractedInfo).where(PaperExtractedInfo.paper_id.in_(paper_ids)))
+        requested_ids = []
+        for paper_id in paper_ids:
+            if paper_id not in requested_ids:
+                requested_ids.append(paper_id)
+
+        accessible_papers = (
+            await db.execute(
+                select(Paper).where(
+                    Paper.id.in_(requested_ids),
+                    Paper.user_id == user_id,
+                    Paper.is_deleted == False,
+                )
+            )
         ).scalars().all()
-        payload = [{k: v for k, v in x.__dict__.items() if not k.startswith('_')} for x in infos]
-        prompt = (
-            'Compare multiple papers horizontally. Return JSON only with fields: '
-            'comparison_table, difference_analysis, trend_summary, future_direction. '
-            f'Dimensions: {dimensions or ["research question", "method", "dataset", "metrics", "conclusion"]}. '
-            f'Input: {dumps(payload)}'
-        )
+        paper_map = {p.id: p for p in accessible_papers}
+        accessible_ids = [pid for pid in requested_ids if pid in paper_map]
+
+        if len(accessible_ids) < 2:
+            raise ValueError('At least 2 accessible, non-deleted papers are required for comparison.')
+
+        infos = (
+            await db.execute(select(PaperExtractedInfo).where(PaperExtractedInfo.paper_id.in_(accessible_ids)))
+        ).scalars().all()
+        info_map = {x.paper_id: x for x in infos}
+        usable_infos = [info_map[pid] for pid in accessible_ids if pid in info_map]
+
+        if len(usable_infos) < 2:
+            raise ValueError('At least 2 papers with structured extraction results are required for comparison.')
+
+        dimension_meta = {
+            'research_question': {'label': '研究问题', 'fields': ['research_question', 'abstract']},
+            'method': {'label': '方法 / 模型', 'fields': ['method']},
+            'experiment_data': {'label': '数据集 / 实验对象', 'fields': ['experiment_data']},
+            'metrics': {'label': '评价指标', 'fields': ['experiment_data', 'main_results']},
+            'main_results': {'label': '主要结果', 'fields': ['main_results']},
+            'innovations': {'label': '创新点', 'fields': ['innovations']},
+            'limitations': {'label': '局限性', 'fields': ['limitations']},
+            'future_work': {'label': '未来方向', 'fields': ['future_work']},
+        }
+        selected_dimensions = dimensions or [
+            'research_question',
+            'method',
+            'experiment_data',
+            'main_results',
+            'innovations',
+            'limitations',
+        ]
+
+        def clean_text(value: object, limit: int = 1200) -> str:
+            if value is None:
+                return '-'
+            text = str(value).strip()
+            if not text or text.lower() in {'null', 'none', '[]', '{}'}:
+                return '-'
+            return text[:limit]
+
+        papers_meta = []
+        for idx, info in enumerate(usable_infos, start=1):
+            paper = paper_map.get(info.paper_id)
+            title = (
+                getattr(paper, 'title', None)
+                or getattr(info, 'title', None)
+                or getattr(paper, 'original_filename', None)
+                or f'Paper {info.paper_id}'
+            )
+            papers_meta.append({'key': f'paper_{idx}', 'paper_id': info.paper_id, 'title': title})
+
+        comparison_table = []
+        for dim in selected_dimensions:
+            meta = dimension_meta.get(dim, {'label': dim, 'fields': [dim]})
+            row = {'dimension': meta['label'], 'dimension_key': dim}
+
+            for idx, info in enumerate(usable_infos, start=1):
+                values = []
+                for field in meta['fields']:
+                    value = clean_text(getattr(info, field, None))
+                    if value != '-':
+                        values.append(value)
+
+                if not values:
+                    abstract = clean_text(getattr(info, 'abstract', None), limit=600)
+                    if dim in {'research_question', 'method', 'main_results', 'innovations'} and abstract != '-':
+                        values.append(f'未单独抽取该字段，可参考摘要：{abstract}')
+
+                row[f'paper_{idx}'] = '\n'.join(values) if values else '-'
+
+            comparison_table.append(row)
+
+        summary_prompt = f"""You are comparing multiple research papers.
+
+Based only on the structured comparison table below, generate JSON only, without Markdown fences.
+
+Required JSON fields:
+{{
+  "difference_analysis": "Compare the key differences among the papers.",
+  "trend_summary": "Summarize the research trend reflected by these papers.",
+  "future_direction": "Suggest future research directions."
+}}
+
+Papers:
+{dumps(papers_meta)}
+
+Comparison table:
+{dumps(comparison_table)}
+"""
         text = await self.llm.async_chat(
             [
-                {'role': 'system', 'content': 'You compare research papers and return JSON only.'},
-                {'role': 'user', 'content': prompt},
+                {'role': 'system', 'content': 'You compare research papers and return valid JSON only.'},
+                {'role': 'user', 'content': summary_prompt},
             ],
             temperature=0.1,
-            max_tokens=3500,
+            max_tokens=2500,
         )
-        result = loads(text, default={'raw': text})
+        clean = text.strip()
+        if clean.startswith('```'):
+            clean = clean.strip('`').strip()
+            if clean.lower().startswith('json'):
+                clean = clean[4:].strip()
+
+        summary = loads(clean, default={})
+        if not isinstance(summary, dict):
+            summary = {}
+
+        final_name = (name or '').strip()
+        if not final_name:
+            final_name = await self.suggest_compare_name(
+                db,
+                user_id,
+                [x.paper_id for x in usable_infos],
+                selected_dimensions,
+            )
+
+        result = {
+            'papers': papers_meta,
+            'comparison_table': comparison_table,
+            'difference_analysis': summary.get('difference_analysis', ''),
+            'trend_summary': summary.get('trend_summary', ''),
+            'future_direction': summary.get('future_direction', ''),
+        }
         obj = ComparisonResult(
             user_id=user_id,
-            name=name or 'Multi-paper comparison',
-            paper_ids=dumps(paper_ids),
+            name=final_name,
+            paper_ids=dumps([x.paper_id for x in usable_infos]),
             result_json=dumps(result),
         )
         db.add(obj)

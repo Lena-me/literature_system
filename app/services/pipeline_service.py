@@ -28,7 +28,7 @@ class PaperPipelineService:
         self.parser = get_document_parser()
         self.embedding = BGEEmbedding()
         self.vdb = MilvusChunkStore()
-        self.llm = OpenAICompatibleLLM()
+        self.llm = OpenAICompatibleLLM() if settings.enable_llm_extract else None
 
     def parse_extract_vectorize(self, paper_id: int) -> None:
         paper = self._load_paper_snapshot(paper_id)
@@ -205,7 +205,7 @@ class PaperPipelineService:
                 result['publication_year'] = crossref.get('publication_year') or result.get('publication_year')
                 result['journal_conf'] = crossref.get('journal_conf') or result.get('journal_conf')
 
-        llm_result = self._extract_info_with_llm(parsed)
+        llm_result = self._extract_info_with_llm(parsed) if settings.enable_llm_extract else {}
         supplement_fields = [
             'title',
             'authors',
@@ -377,6 +377,8 @@ JSON 示例：
 </text>"""
 
         try:
+            if self.llm is None:
+                return {}
             text = self.llm.chat(
                 [{'role': 'system', 'content': '你只输出可解析 JSON。'},
                  {'role': 'user', 'content': prompt}],
