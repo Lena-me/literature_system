@@ -2,22 +2,39 @@ FROM python:3.11-slim
 WORKDIR /app
 ENV PYTHONDONTWRITECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 
-# 系统依赖层
-RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
-    sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+# 系统依赖层（替换为清华镜像源）
+RUN rm -rf /etc/apt/sources.list.d/* && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/debian trixie main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/debian trixie-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/debian-security trixie-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends build-essential curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Python 依赖层（requirements.txt 变更时才会重建）
+# ============================================================
+# Python 基础依赖（不含 magic-pdf，避免依赖冲突）
+# ============================================================
 COPY requirements.txt /app/requirements.txt
 
-# 使用 BuildKit 缓存挂载，pip 下载缓存持久化
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --extra-index-url https://download.pytorch.org/whl/cpu \
     -r /app/requirements.txt
+
+# ============================================================
+# MinerU (magic-pdf) — 单独安装以隔离依赖冲突
+# ============================================================
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    magic-pdf paddlepaddle ultralytics opencv-python-headless && \
+    # magic-pdf 会升级以下包 → 强制锁回兼容版本
+    pip install \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    "numpy>=1.21.6,<2.0.0" \
+    "transformers==4.47.1" \
+    "tokenizers>=0.21,<0.22" \
+    "opencv-python-headless<4.10"
 
 # 代码层
 COPY app /app/app
