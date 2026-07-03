@@ -143,6 +143,7 @@ class GrobidPyMuPDFParser:
             with os.fdopen(fd, 'wb') as tmp:
                 tmp.write(pdf_bytes)
             with pdfplumber.open(tmp_path) as pdf:
+
                 for page_no, page in enumerate(pdf.pages, start=1):
                     for idx, table in enumerate(page.extract_tables() or []):
                         rows = ['\t'.join(cell or '' for cell in row) for row in table]
@@ -152,6 +153,7 @@ class GrobidPyMuPDFParser:
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
         return tables
 
     def _text(self, node: ET.Element) -> str:

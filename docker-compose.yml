@@ -97,6 +97,7 @@ services:
     container_name: paper_neo4j
     environment:
       NEO4J_AUTH: neo4j/neo4jadmin
+
     ports:
       - "7474:7474"
       - "7687:7687"

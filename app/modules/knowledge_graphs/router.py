@@ -398,7 +398,6 @@ async def list_graphs(
 
     return results
 
-
 @router.post('')
 async def create_graph(
     data: GraphCreateIn,

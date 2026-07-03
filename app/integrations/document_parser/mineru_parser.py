@@ -127,6 +127,7 @@ class MinerUParser:
 
         if settings.mineru_backend:
             cmd.extend(['-b', settings.mineru_backend])
+
         if settings.mineru_method:
             cmd.extend(['-m', settings.mineru_method])
         if settings.mineru_language:
@@ -211,6 +212,11 @@ class MinerUParser:
         return ''
 
     def _load_content_json(self, output_dir: Path):
+
+        """
+        MinerU emits content_list/content_list_v2 plus intermediate files such
+        as middle/model. Prefer content_list outputs for stable reading order.
+        """
         json_files = list(output_dir.rglob('*.json'))
         if not json_files:
             return None
@@ -289,6 +295,7 @@ class MinerUParser:
                 )
                 raw_body = block.get('table_body') or block.get('html') or block.get('content') or block.get('text') or ''
                 body = self._format_table_body(raw_body)
+
                 footnote = self._stringify_mineru_value(block.get('table_footnote') or '')
                 table_text = normalize_text('\n'.join(x for x in [caption, body, footnote] if x))
                 if not table_text:
@@ -344,6 +351,7 @@ class MinerUParser:
                     }
                 )
                 order += 1
+
                 continue
 
             text = self._stringify_mineru_value(
@@ -454,6 +462,7 @@ class MinerUParser:
                     }
                 )
                 order += 1
+
                 i += 1
                 continue
 
@@ -476,6 +485,7 @@ class MinerUParser:
                 content_items.append(
                     {
                         'item_type': 'table',
+
                         'level': None,
                         'content': table_text,
                         'page_number': None,
@@ -607,7 +617,6 @@ class MinerUParser:
         return image_data
 
     # ============================================================
-
     def _extract_metadata(self, markdown_text: str, content_items: list[dict], filename: str) -> dict:
         title = ''
 
@@ -855,12 +864,10 @@ class MinerUParser:
         final_items = []
         for item in cleaned_items:
             curr_type = item.get('item_type')
-
             if final_items and curr_type in ('paragraph', 'list') and final_items[-1].get('item_type') in (
             'paragraph', 'list'):
                 prev_text = final_items[-1]['content'].strip()
                 curr_text = item['content'].strip()
-
                 ends_without_period = not re.search(r'[。！？：:;.!?]["\u201c\u201d\'\u2019\)\]）】]?$', prev_text)
                 starts_with_citation = bool(re.match(r'^\[\s*\d+(?:\s*[,，\-]\s*\d+)*\]', curr_text))
                 is_standalone_citation = bool(re.match(r'^\[\s*\d+(?:\s*[,，\-]\s*\d+)*\][。！？.!?]?$', curr_text))
@@ -888,7 +895,6 @@ class MinerUParser:
                     not re.match(r'^\[\s*\d+', curr_text)
                     and self._EN_REF_CONTINUATION_RE.search(curr_text)
                 )
-
                 should_merge = False
 
                 if ends_without_period:

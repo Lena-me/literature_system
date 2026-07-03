@@ -2,7 +2,11 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+<<<<<<< HEAD
 import { knowledgeApi, type GraphListItem } from '@/api/knowledge'
+=======
+import { knowledgeApi } from '@/api/knowledge'
+>>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
 import { papersApi } from '@/api/papers'
 import GraphCanvas from '@/components/reader/GraphCanvas.vue'
 import type { KnowledgeGraph, KnowledgeDomain, DomainSuggestion, MergeSuggestion, RegionRecommendation } from '@/types/domain'
@@ -133,6 +137,7 @@ function closeBuildModal() {
   paperSearchQuery.value = ''
 }
 
+<<<<<<< HEAD
 async function loadGraphHistory() {
   try {
     const apiList = await knowledgeApi.list()
@@ -163,6 +168,11 @@ async function loadGraphHistory() {
 onMounted(async () => {
   await loadDomains()
   await loadGraphHistory()
+=======
+onMounted(async () => {
+  try { graphHistory.value = JSON.parse(localStorage.getItem('graph_ids') || '[]') } catch { /* */ }
+  await loadDomains()
+>>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
 
   try {
     const res: any = await papersApi.list({ limit: 100 })
@@ -277,7 +287,10 @@ async function handleCreate() {
     graph.value = kg
     console.log('[GraphView:create] kg.id =', kg.id, '| kg.nodes =', kg.nodes?.length, '| kg.edges =', kg.edges?.length)
     saveToHistory(kg.id, kg.name, kg)
+<<<<<<< HEAD
     await loadGraphHistory() // 从API刷新列表
+=======
+>>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
     router.replace({ query: { id: kg.id } })
     showBuildModal.value = false
     paperSearchQuery.value = ''

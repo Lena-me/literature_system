@@ -6,6 +6,7 @@ import re
 from html import unescape
 from pathlib import Path
 
+
 import fitz
 import httpx
 from sqlalchemy import delete, select
@@ -59,6 +60,7 @@ class PaperPipelineService:
         self._build_vector_index(paper_id)
         self._set_paper_status(paper_id, 'completed')
         logger.info('[paper=%s] Pipeline completed', paper_id)
+
 
     def _load_paper_snapshot(self, paper_id: int) -> dict:
         with celery_db() as db:
