@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
+import mk from 'markdown-it-katex'
 import { papersApi } from '@/api/papers'
 import type { ContentItem } from '@/types/domain'
 import PdfReader from '@/components/reader/PdfReader.vue'
@@ -17,13 +18,13 @@ const activeTab = ref<'markdown' | 'graph'>('markdown')
 const splitPercent = ref(50) // 左侧百分比
 const dragging = ref(false)
 
-// ── Markdown 渲染器 ──
+// ── Markdown 渲染器（挂载 KaTeX 插件以支持 $$...$$ / $...$ 数学公式）──
 const md = new MarkdownIt({
-  html: false,
+  html: true,
   breaks: true,
   linkify: true,
   typographer: true,
-})
+}).use(mk)
 
 // ── 结构化章节（按 heading 分组折叠视图） ──
 interface Section {
@@ -64,25 +65,25 @@ const structuredSections = computed<Section[]>(() => {
   return sections
 })
 
-// 渲染单个 ContentItem 为 HTML
-function renderItemHtml(item: ContentItem): string {
-  const type = (item as any).type || (item as any).item_type || ''
-  const text = item.content || ''
-  switch (type) {
-    case 'code':
-      return '<pre><code>' + escapeHtml(text) + '</code></pre>'
-    case 'table':
-      return text // 已是 Markdown table
-    case 'image':
-      return `<img src="${escapeHtml(text)}" alt="${escapeHtml(text)}" style="max-width:100%" />`
-    case 'heading':
-      return '<p><strong>' + escapeHtml(text) + '</strong></p>'
-    case 'list_item':
-      return '<p>' + escapeHtml(text) + '</p>'
-    default:
-      // paragraph 等 → 用 MarkdownIt 渲染内联格式
-      return md.renderInline(text) ? md.render(text) : '<p>' + escapeHtml(text) + '</p>'
-  }
+// 章节级完整 Markdown 渲染流 ──
+function renderSectionHtml(children: ContentItem[]): string {
+  // 1. 将散落的数据库碎片，重新拼装成连续的 Markdown 文档流
+  const combinedMarkdown = children.map(item => {
+    const type = (item as any).type || (item as any).item_type || ''
+    const text = (item.content || '').trim()
+
+    // 还原标题的 Markdown 语义
+    if (type === 'heading') {
+      const level = (item as any).level || 1
+      return '#'.repeat(level) + ' ' + text
+    }
+
+    // 公式/表格/图片等直接回填（后端已输出标准 Markdown 语法）
+    return text
+  }).join('\n\n') // 双换行确保 Markdown 标准块之间的隔离
+
+  // 2. 一次性交给 markdown-it（内置 KaTeX 插件）解析完整的 AST
+  return md.render(combinedMarkdown)
 }
 
 function escapeHtml(s: string): string {
@@ -254,14 +255,7 @@ defineExpose({ open })
                         <span class="acc-title">{{ sec.title }}</span>
                         <span v-if="sec.children.length" class="acc-count">{{ sec.children.length }}</span>
                       </summary>
-                      <div class="acc-content">
-                        <div
-                          v-for="(child, ci) in sec.children"
-                          :key="ci"
-                          class="acc-item"
-                          v-html="renderItemHtml(child)"
-                        ></div>
-                      </div>
+                      <div class="acc-content" v-html="renderSectionHtml(sec.children)"></div>
                     </details>
                   </template>
                   <div v-else class="pane-empty">暂无解析内容</div>
@@ -693,9 +687,35 @@ defineExpose({ open })
 }
 
 /* Image */
-.markdown-body :deep(img) {
+.acc-content :deep(img) {
   max-width: 100%;
+  height: auto;
   border-radius: 8px;
+  margin: 10px 0;
+}
+
+/* KaTeX formula blocks */
+.acc-content :deep(.katex-display) {
+  margin: 14px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.acc-content :deep(.katex) {
+  font-size: 1.08em;
+}
+
+/* formula-block fallback */
+.acc-content :deep(.formula-block) {
+  background: #F8FAFC;
+  border-left: 3px solid #3B82F6;
+  padding: 10px 14px;
+  margin: 10px 0;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: #334155;
+  border-radius: 0 8px 8px 0;
+  overflow-x: auto;
 }
 
 /* Bold / Italic */

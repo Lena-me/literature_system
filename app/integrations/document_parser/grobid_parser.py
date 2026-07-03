@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import tempfile
 import xml.etree.ElementTree as ET
 import httpx
@@ -135,16 +136,22 @@ class GrobidPyMuPDFParser:
 
     def _parse_tables_with_pdfplumber(self, pdf_bytes: bytes) -> list[dict]:
         tables: list[dict] = []
-        with tempfile.NamedTemporaryFile(suffix='.pdf') as tmp:
-            tmp.write(pdf_bytes);
-            tmp.flush()
-            with pdfplumber.open(tmp.name) as pdf:
+        tmp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'runtime', 'tmp')
+        os.makedirs(tmp_dir, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(suffix='.pdf', dir=tmp_dir)
+        try:
+            with os.fdopen(fd, 'wb') as tmp:
+                tmp.write(pdf_bytes)
+            with pdfplumber.open(tmp_path) as pdf:
                 for page_no, page in enumerate(pdf.pages, start=1):
                     for idx, table in enumerate(page.extract_tables() or []):
                         rows = ['\t'.join(cell or '' for cell in row) for row in table]
                         tables.append(
                             {'type': 'table', 'caption': f'Table extracted on page {page_no}', 'page_number': page_no,
                              'extracted_text': '\n'.join(rows), 'order_index': idx})
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
         return tables
 
     def _text(self, node: ET.Element) -> str:

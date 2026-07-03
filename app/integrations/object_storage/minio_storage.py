@@ -38,3 +38,10 @@ class MinioStorage:
 
     def presigned_pdf_url(self, object_key: str, expires_seconds: int = 3600) -> str:
         return self.client.presigned_get_object(settings.minio_bucket_papers, object_key, expires=timedelta(seconds=expires_seconds))
+
+    def export_public_url(self, object_key: str) -> str:
+        """拼接 paper-exports 桶的永久公开访问 URL。
+        要求 MinIO 控制台将 paper-exports 桶设为 Public Read 策略。
+        """
+        scheme = 'https' if settings.minio_secure else 'http'
+        return f'{scheme}://{settings.minio_endpoint}/{settings.minio_bucket_exports}/{object_key}'

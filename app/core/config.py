@@ -55,8 +55,8 @@ class Settings(BaseSettings):
     grobid_base_url: str = 'http://127.0.0.1:8070'
 
     # Document Parser
-    document_parser: str = 'grobid'  # grobid / mineru
-    mineru_command: str = 'magic-pdf'
+    document_parser: str = 'hybrid'  # grobid / mineru / hybrid
+    mineru_command: str = 'mineru'
     mineru_backend: str = 'pipeline'
     mineru_method: str = 'auto'
     mineru_language: str | None = 'ch'

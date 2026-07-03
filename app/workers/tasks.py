@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from sqlalchemy import select
@@ -8,6 +9,8 @@ from app.db.mysql import celery_db
 from app.models import Paper, ParseTask
 from app.services.pipeline_service import PaperPipelineService
 from app.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name='app.workers.tasks.process_paper_pipeline')

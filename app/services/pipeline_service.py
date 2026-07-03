@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from html import unescape
+from pathlib import Path
 
 import fitz
 import httpx
@@ -20,6 +22,7 @@ from app.utils.json_utils import dumps, loads
 from app.utils.text_utils import semantic_chunks
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class PaperPipelineService:
@@ -31,21 +34,31 @@ class PaperPipelineService:
         self.llm = OpenAICompatibleLLM() if settings.enable_llm_extract else None
 
     def parse_extract_vectorize(self, paper_id: int) -> None:
+        logger.info('[paper=%s] Pipeline started', paper_id)
         paper = self._load_paper_snapshot(paper_id)
         self._set_paper_status(paper_id, 'parsing')
 
+        logger.info('[paper=%s] Downloading PDF from MinIO...', paper_id)
         pdf_bytes = self.storage.get_pdf(paper['object_key'])
+        logger.info('[paper=%s] PDF downloaded (%d bytes), parsing with %s...', paper_id, len(pdf_bytes), settings.document_parser)
         parsed = self.parser.parse(pdf_bytes, paper['original_filename'])
+        logger.info('[paper=%s] Parsing done, %d content items, %d figures/tables', paper_id, len(parsed.get('content_items', [])), len(parsed.get('figures_tables', [])))
+
+        # 将 MinerU 提取的图片上传到 MinIO，替换本地路径为可访问 URL
+        self._upload_and_replace_images(parsed, paper_id)
 
         self._replace_parsed_content(paper_id, parsed)
         self._set_paper_status(paper_id, 'extracting')
 
+        logger.info('[paper=%s] Extracting metadata...', paper_id)
         extracted = self._extract_info_hybrid(parsed, pdf_bytes)
         self._save_extracted_info(paper_id, parsed, extracted)
 
         self._set_paper_status(paper_id, 'vectorizing')
+        logger.info('[paper=%s] Building vector index...', paper_id)
         self._build_vector_index(paper_id)
         self._set_paper_status(paper_id, 'completed')
+        logger.info('[paper=%s] Pipeline completed', paper_id)
 
     def _load_paper_snapshot(self, paper_id: int) -> dict:
         with celery_db() as db:
@@ -62,6 +75,102 @@ class PaperPipelineService:
                 'original_filename': paper.original_filename,
                 'title': paper.title,
             }
+
+    def _upload_and_replace_images(self, parsed: dict, paper_id: int) -> None:
+        """将 MinerU 提取的图片上传到 MinIO，替换本地路径为永久公开 URL 存入数据库。"""
+        image_data: dict[str, bytes] = parsed.pop('_image_data', {}) or {}
+        if not image_data:
+            logger.info('[paper=%s] No images to upload', paper_id)
+            return
+
+        # 上传并建立双映射：{原始路径: URL} + {文件名: URL}，用文件名做兜底匹配
+        path_map: dict[str, str] = {}       # 原始路径 → URL
+        basename_map: dict[str, str] = {}   # 文件名 → URL
+        uploaded = 0
+
+        for idx, (orig_path, img_bytes) in enumerate(image_data.items()):
+            ext = Path(orig_path).suffix or '.png'
+            object_key = f'papers/{paper_id}/images/{idx:03d}{ext}'
+            try:
+                content_type = 'image/jpeg' if ext.lower() in ('.jpg', '.jpeg') else 'image/png'
+                self.storage.put_export(object_key, img_bytes, content_type)
+                url = self.storage.export_public_url(object_key)
+                # 主映射：原始路径（已标准化 \ → /）
+                path_map[orig_path] = url
+                # 兜底映射：仅用文件名匹配（适配绝对路径/相对路径不一致的情况）
+                basename_map[Path(orig_path).name] = url
+                logger.debug('[paper=%s] Image uploaded: %s -> %s, basename=%s', paper_id, object_key, url, Path(orig_path).name)
+                uploaded += 1
+            except Exception as e:
+                logger.warning('[paper=%s] Failed to upload image %s: %s', paper_id, orig_path, e)
+
+        if not path_map:
+            logger.warning('[paper=%s] All image uploads failed', paper_id)
+            return
+
+        logger.info('[paper=%s] Uploaded %d/%d images to MinIO', paper_id, uploaded, len(image_data))
+
+        # ── 替换 content_items 中的路径 ──
+        replaced_content = 0
+        for item in parsed.get('content_items', []):
+            if item.get('item_type') == 'table':
+                continue
+            content = item.get('content', '')
+            if not content:
+                continue
+
+            updated = self._replace_image_urls_in_text(content, path_map, basename_map)
+            if updated != content:
+                replaced_content += 1
+            item['content'] = updated
+
+        # ── 替换 figures_tables 中的路径（image_path + extracted_text）──
+        replaced_ft = 0
+        for ft in parsed.get('figures_tables', []):
+            if ft.get('type') != 'figure':
+                continue
+            # 1) image_path 字段
+            old_img = ft.get('image_path')
+            if old_img:
+                normalized_img = (old_img or '').replace('\\', '/')
+                if normalized_img in path_map:
+                    ft['image_path'] = path_map[normalized_img]
+                    replaced_ft += 1
+                else:
+                    # 文件名兜底
+                    name = Path(normalized_img).name
+                    if name and name in basename_map:
+                        ft['image_path'] = basename_map[name]
+                        replaced_ft += 1
+
+            # 2) extracted_text 中也可能有本地路径
+            ext_text = ft.get('extracted_text', '')
+            if ext_text:
+                updated_text = self._replace_image_urls_in_text(ext_text, path_map, basename_map)
+                if updated_text != ext_text:
+                    ft['extracted_text'] = updated_text
+                    replaced_ft += 1
+
+        logger.info('[paper=%s] Replaced paths in %d content items + %d figure entries', paper_id, replaced_content, replaced_ft)
+
+    @staticmethod
+    def _replace_image_urls_in_text(text: str, path_map: dict[str, str], basename_map: dict[str, str]) -> str:
+        """在文本中查找 Markdown 图片语法 ![...](xxx)，将 xxx 替换为 MinIO URL。
+        支持两种匹配策略：1) 完整路径精确替换 2) 文件名兜底替换。"""
+        def replace_match(m: re.Match) -> str:
+            alt = m.group(1)
+            url = m.group(2).replace('\\', '/')
+            # 策略1：完整路径精确匹配
+            if url in path_map:
+                return f'![{alt}]({path_map[url]})'
+            # 策略2：文件名兜底
+            name = Path(url).name
+            if name and name in basename_map:
+                return f'![{alt}]({basename_map[name]})'
+            return m.group(0)
+
+        # 匹配 ![任意caption](任意path)，path 支持绝对路径、反斜杠、空格
+        return re.sub(r'!\[(.*?)\]\((.*?)\)', replace_match, text)
 
     def _set_paper_status(self, paper_id: int, status: str) -> None:
         with celery_db() as db:
