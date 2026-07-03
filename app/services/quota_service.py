@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+
+BEIJING_TZ = timezone(timedelta(hours=8))
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select, update
@@ -40,7 +42,7 @@ class QuotaService:
         2. running 超过 60 分钟，自动 failed；
         3. running 但 start_time 为空，也视为异常任务。
         """
-        now = datetime.utcnow()
+        now = datetime.now(BEIJING_TZ)
         queued_deadline = now - timedelta(minutes=30)
         running_deadline = now - timedelta(minutes=60)
 

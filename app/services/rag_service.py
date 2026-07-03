@@ -472,43 +472,48 @@ class RAGService:
         session_id: int | None,
         top_k: int | None,
     ):
-        session = await self._get_or_create_session(db, user_id, question, paper_ids, session_id)
-        user_msg = QAMessage(session_id=session.id, role='user', content=question)
-        db.add(user_msg)
-        await db.flush()
+        try:
+            session = await self._get_or_create_session(db, user_id, question, paper_ids, session_id)
+            user_msg = QAMessage(session_id=session.id, role='user', content=question)
+            db.add(user_msg)
+            await db.flush()
 
-        yield {'type': 'session', 'session_id': session.id}
+            yield {'type': 'session', 'session_id': session.id}
 
-        ranked: list[dict] | None = None
-        async for item in self._retrieve_ranked_stream(db, question, paper_ids, top_k):
-            if isinstance(item, str):
-                yield {'type': 'status', 'stage': item}
-            else:
-                ranked = item
+            ranked: list[dict] | None = None
+            async for item in self._retrieve_ranked_stream(db, question, paper_ids, top_k):
+                if isinstance(item, str):
+                    yield {'type': 'status', 'stage': item}
+                else:
+                    ranked = item
 
-        yield {'type': 'status', 'stage': 'generating'}
-        context, citable_ranked = self._build_context(ranked or [])
-        prompt = _USER_PROMPT_TEMPLATE.format(question=question, context=context)
-        answer_parts: list[str] = []
-        async for piece in self.llm.stream_chat(
-            [{'role': 'system', 'content': _SYSTEM_PROMPT}, {'role': 'user', 'content': prompt}],
-            temperature=0.35,
-        ):
-            answer_parts.append(piece)
-            yield {'type': 'delta', 'content': piece}
-        answer = ''.join(answer_parts)
-        cited_sources = self._sources_cited_in_answer(answer, citable_ranked)
-        if cited_sources:
-            cited_sources = await enrich_qa_sources(db, cited_sources, answer_text=answer)
+            yield {'type': 'status', 'stage': 'generating'}
+            context, citable_ranked = self._build_context(ranked or [])
+            prompt = _USER_PROMPT_TEMPLATE.format(question=question, context=context)
+            answer_parts: list[str] = []
+            async for piece in self.llm.stream_chat(
+                [{'role': 'system', 'content': _SYSTEM_PROMPT}, {'role': 'user', 'content': prompt}],
+                temperature=0.35,
+            ):
+                answer_parts.append(piece)
+                yield {'type': 'delta', 'content': piece}
+            answer = ''.join(answer_parts)
+            cited_sources = self._sources_cited_in_answer(answer, citable_ranked)
+            if cited_sources:
+                cited_sources = await enrich_qa_sources(db, cited_sources, answer_text=answer)
 
-        yield {'type': 'sources', 'sources': cited_sources}
+            yield {'type': 'sources', 'sources': cited_sources}
 
-        assistant_msg = QAMessage(session_id=session.id, role='assistant', content=answer)
-        db.add(assistant_msg)
-        await db.flush()
-        await self._add_message_sources(db, assistant_msg.id, cited_sources)
-        await db.commit()
-        yield {'type': 'done', 'session_id': session.id, 'answer': answer, 'sources': cited_sources}
+            assistant_msg = QAMessage(session_id=session.id, role='assistant', content=answer)
+            db.add(assistant_msg)
+            await db.flush()
+            await self._add_message_sources(db, assistant_msg.id, cited_sources)
+            await db.commit()
+            yield {'type': 'done', 'session_id': session.id, 'answer': answer, 'sources': cited_sources}
+        except Exception as exc:
+            logger.error('ask_stream failed: %s', exc, exc_info=True)
+            yield {'type': 'error', 'error': str(exc)}
+
 
     async def suggest_questions(self, db: AsyncSession, session_id: int) -> dict:
         pids = list(

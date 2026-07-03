@@ -1,12 +1,25 @@
 from functools import lru_cache
+import os
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def get_env_file():
+    env = os.getenv('APP_ENV', 'development')
+    if env == 'local':
+        return '.env.local'
+    elif env == 'docker':
+        return '.env.docker'
+    elif env == 'gpu':
+        return '.env.gpu'
+    else:
+        return '.env'
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file='.env',
+        env_file=get_env_file(),
         env_file_encoding='utf-8',
         extra='ignore',
     )

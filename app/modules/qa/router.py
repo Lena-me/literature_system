@@ -25,11 +25,16 @@ async def ask(data: QAAskIn, db: AsyncSession = Depends(get_db), user: User = De
 async def ask_stream(data: QAAskIn, user: User = Depends(get_current_user)):
     await QuotaService().check_daily_qa(user)
     async def gen():
-        # 流式生成器内自行管理 db session，避免 FastAPI 依赖注入在
-        # StreamingResponse 返回后过早关闭 session。
-        async with AsyncSessionLocal() as db:
-            async for event in get_rag_service().ask_stream(db, user.id, data.question, data.paper_ids, data.session_id, data.top_k):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        try:
+            # 流式生成器内自行管理 db session，避免 FastAPI 依赖注入在
+            # StreamingResponse 返回后过早关闭 session。
+            async with AsyncSessionLocal() as db:
+                async for event in get_rag_service().ask_stream(db, user.id, data.question, data.paper_ids, data.session_id, data.top_k):
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error('ask-stream generator failed: %s', e, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
     return StreamingResponse(
         gen(),
         media_type='text/event-stream',

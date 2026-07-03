@@ -136,7 +136,6 @@ function closeBuildModal() {
 async function loadGraphHistory() {
   try {
     const apiList = await knowledgeApi.list()
-    // 读取 localStorage 中缓存的额外元数据（nodeCount/edgeCount）
     let localMeta: Record<number, any> = {}
     try {
       const cached = JSON.parse(localStorage.getItem('graph_ids') || '[]')
@@ -155,7 +154,6 @@ async function loadGraphHistory() {
       updatedAt: localMeta[g.id]?.updatedAt || g.created_at,
     }))
   } catch {
-    // 降级：从 localStorage 读取
     try { graphHistory.value = JSON.parse(localStorage.getItem('graph_ids') || '[]') } catch { /* */ }
   }
 }
@@ -277,7 +275,7 @@ async function handleCreate() {
     graph.value = kg
     console.log('[GraphView:create] kg.id =', kg.id, '| kg.nodes =', kg.nodes?.length, '| kg.edges =', kg.edges?.length)
     saveToHistory(kg.id, kg.name, kg)
-    await loadGraphHistory() // 从API刷新列表
+    await loadGraphHistory()
     router.replace({ query: { id: kg.id } })
     showBuildModal.value = false
     paperSearchQuery.value = ''
@@ -316,7 +314,7 @@ function saveToHistory(id: number, name: string, kg?: KnowledgeGraph) {
   const safeName = name || `图谱 #${id}`
   const exists = graphHistory.value.find(h => h.id === id)
   const meta = kg ? {
-    paperCount: kg.paper_count ?? (kg as any).paper_ids?.length,
+    paperCount: (kg as any).paper_count ?? (kg as any).paper_ids?.length,
     nodeCount: kg.nodes?.length,
     edgeCount: kg.edges?.length,
   } : {}

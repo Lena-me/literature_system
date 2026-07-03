@@ -183,6 +183,80 @@ class PaperPipelineService:
                 paper.parse_status = status
             db.commit()
 
+    def _truncate_text(self, text, max_length: int = 1048576) -> str:
+        if text is None:
+            return ''
+        text = str(text)
+        if len(text) > max_length:
+            return text[:max_length] + '... [truncated]'
+        return text
+
+    @staticmethod
+    def _normalize_content_item_type(value: object) -> str:
+        raw = str(value or 'paragraph').strip().lower()
+        aliases = {
+            'text': 'paragraph',
+            'para': 'paragraph',
+            'section': 'heading',
+            'title': 'heading',
+            'equation': 'formula',
+            'math': 'formula',
+            'image': 'figure_caption',
+            'figure': 'figure_caption',
+            'caption': 'figure_caption',
+            'ref': 'reference',
+            'refs': 'reference',
+            'bibliography': 'reference',
+        }
+        item_type = aliases.get(raw, raw)
+        allowed = {
+            'paragraph',
+            'heading',
+            'abstract',
+            'table',
+            'figure_caption',
+            'formula',
+            'list',
+            'reference',
+            'footnote',
+        }
+        return item_type if item_type in allowed else 'paragraph'
+
+    @staticmethod
+    def _reference_to_text(ref: object) -> str:
+        if ref is None:
+            return ''
+
+        if isinstance(ref, dict):
+            parts = []
+            authors = ref.get('authors') or ref.get('author')
+            year = ref.get('year') or ref.get('date')
+            title = ref.get('title')
+            venue = ref.get('venue') or ref.get('journal') or ref.get('booktitle')
+            doi = ref.get('doi')
+            raw = ref.get('raw') or ref.get('text') or ref.get('content')
+
+            if authors:
+                if isinstance(authors, (list, tuple)):
+                    authors = ', '.join(str(x) for x in authors if x)
+                parts.append(str(authors))
+            if year:
+                parts.append(str(year))
+            if title:
+                parts.append(str(title))
+            if venue:
+                parts.append(str(venue))
+            if doi:
+                parts.append(f'DOI: {doi}')
+
+            if parts:
+                return ' '.join(parts).strip()
+            if raw:
+                return str(raw).strip()
+            return str(ref).strip()
+
+        return str(ref).strip()
+
     def _replace_parsed_content(self, paper_id: int, parsed: dict) -> None:
         with celery_db() as db:
             paper = db.get(Paper, paper_id)
@@ -193,25 +267,61 @@ class PaperPipelineService:
             db.execute(delete(FiguresTable).where(FiguresTable.paper_id == paper_id))
             db.execute(delete(ContentItem).where(ContentItem.paper_id == paper_id))
 
-            for item in parsed.get('content_items') or []:
+            max_order = 0
+            saved_content_items = 0
+
+            for idx, item in enumerate(parsed.get('content_items') or []):
+                raw_order = item.get('order_index')
+                try:
+                    order_index = int(raw_order) if raw_order is not None else idx
+                except Exception:
+                    order_index = idx
+
+                content = self._truncate_text(item.get('content', ''))
+                if not str(content).strip():
+                    continue
+
                 db.add(ContentItem(
                     paper_id=paper_id,
-                    item_type=item.get('item_type', 'paragraph'),
+                    item_type=self._normalize_content_item_type(item.get('item_type', 'paragraph')),
                     level=item.get('level'),
-                    content=item.get('content', ''),
+                    content=content,
                     bbox=item.get('bbox'),
                     page_number=item.get('page_number'),
-                    order_index=item.get('order_index', 0),
+                    order_index=order_index,
                 ))
+                saved_content_items += 1
+                max_order = max(max_order, order_index + 1)
+
+            saved_references = 0
+            seen_refs: set[str] = set()
+            for ref_index, ref in enumerate(parsed.get('references') or []):
+                ref_text = ' '.join(self._reference_to_text(ref).split())
+                if not ref_text:
+                    continue
+                dedup_key = ref_text[:300]
+                if dedup_key in seen_refs:
+                    continue
+                seen_refs.add(dedup_key)
+
+                db.add(ContentItem(
+                    paper_id=paper_id,
+                    item_type='reference',
+                    level=None,
+                    content=self._truncate_text(ref_text),
+                    page_number=None,
+                    order_index=max_order + ref_index,
+                ))
+                saved_references += 1
 
             for item in parsed.get('figures_tables') or []:
                 db.add(FiguresTable(
                     paper_id=paper_id,
                     type=item.get('type', 'table'),
-                    caption=item.get('caption'),
+                    caption=self._truncate_text(item.get('caption')),
                     page_number=item.get('page_number'),
                     image_path=item.get('image_path'),
-                    extracted_text=item.get('extracted_text'),
+                    extracted_text=self._truncate_text(item.get('extracted_text')),
                     order_index=item.get('order_index', 0),
                 ))
 
@@ -223,6 +333,12 @@ class PaperPipelineService:
                 paper.keywords = dumps(meta.get('keywords'))
 
             db.commit()
+            logger.info(
+                '[paper=%s] Parsed content saved: %d content items, %d references',
+                paper_id,
+                saved_content_items,
+                saved_references,
+            )
 
     @staticmethod
     def _extract_pdf_embedded_metadata(pdf_bytes: bytes) -> dict:

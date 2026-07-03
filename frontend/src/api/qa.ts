@@ -7,14 +7,19 @@ export const qaApi = {
     const res = await fetch(`${API_PREFIX}/qa/ask-stream`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(payload) })
     if (!res.ok || !res.body) throw new Error(await res.text())
     const reader = res.body.getReader(); const decoder = new TextDecoder('utf-8'); let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read(); if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const parts = buffer.split('\n\n'); buffer = parts.pop() || ''
-      for (const part of parts) {
-        const line = part.split('\n').find(x => x.startsWith('data:'))
-        if (line) onEvent(JSON.parse(line.slice(5).trim()))
+    try {
+      while (true) {
+        const { done, value } = await reader.read(); if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n'); buffer = parts.pop() || ''
+        for (const part of parts) {
+          const line = part.split('\n').find(x => x.startsWith('data:'))
+          if (line) onEvent(JSON.parse(line.slice(5).trim()))
+        }
       }
+    } catch (e) {
+      console.error('[qaApi] Stream read error:', e)
+      onEvent({ type: 'error', error: '连接中断，请重试' })
     }
   },
   // ===== Session CRUD =====

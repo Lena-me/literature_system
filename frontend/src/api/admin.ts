@@ -62,6 +62,9 @@ export const adminApi = {
   saveModel: (payload: Record<string, any>) =>
     http.post<any, { id: number }>('/model-configs', payload),
 
+  updateModel: (id: number, payload: Record<string, any>) =>
+    http.put<any, { message: string }>(`/model-configs/${id}`, payload),
+
   // ===================== 任务调度模块 =====================
   /**
    * 获取任务列表

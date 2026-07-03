@@ -112,8 +112,8 @@ onUnmounted(() => {
 // ── 分类 API ──
 async function loadCategories() {
   try {
-    const res = await papersApi.categories()
-    categories.value = (res || []).map((c: any) => ({ id: c.id, name: c.name }))
+    const { data } = await papersApi.categories()
+    categories.value = (data || []).map((c: any) => ({ id: c.id, name: c.name }))
   } catch { /* ignore */ }
 }
 
@@ -121,11 +121,11 @@ async function addCategory() {
   const name = newCategoryName.value.trim()
   if (!name) return
   try {
-    const res = await papersApi.createCategory(name)
-    categories.value.unshift({ id: res.id, name: res.name })
+    const { data } = await papersApi.createCategory(name)
+    categories.value.unshift({ id: data.id, name: data.name })
     newCategoryName.value = ''
     showNewCategory.value = false
-    activeCategory.value = res.id
+    activeCategory.value = data.id
   } catch { /* ignore */ }
 }
 
@@ -184,7 +184,6 @@ function statusLabel(s: string | null | undefined): string {
     case 'parsing': return '解析中'
     case 'pending': return '等待中'
     default: return '解析中'
-
   }
 }
 

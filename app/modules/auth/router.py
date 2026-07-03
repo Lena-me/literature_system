@@ -1,6 +1,9 @@
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+BEIJING_TZ = timezone(timedelta(hours=8))
 
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.mysql import get_db
@@ -99,10 +102,8 @@ async def login(data: LoginIn, request: Request, db: AsyncSession = Depends(get_
 
     # last_login_at / audit 不是核心登录路径。失败不能导致登录失败。
     try:
-        from datetime import datetime
-
         user.last_login_ip = request.client.host if request.client else None
-        user.last_login_at = datetime.utcnow()
+        user.last_login_at = datetime.now(BEIJING_TZ)
         await write_audit(db, user.id, 'auth', 'login', '用户登录', ip=user.last_login_ip)
         await db.commit()
     except Exception:

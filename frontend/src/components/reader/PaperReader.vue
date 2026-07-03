@@ -871,6 +871,11 @@ defineExpose({ open })
   overflow-x: auto;
 }
 
+.markdown-body :deep(img) {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
 /* Bold / Italic */
 .markdown-body :deep(strong) {
   color: #0F172A;

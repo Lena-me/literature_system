@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, date
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,37 @@ async def create_record(data: LearningRecordIn, db: AsyncSession = Depends(get_d
     obj = LearningRecord(user_id=user.id, paper_id=data.paper_id, event_type=data.event_type, event_data=dumps(data.event_data or {}))
     db.add(obj); await db.commit(); await db.refresh(obj)
     return {'id': obj.id}
+
+def _generate_upload_heatmap_data(db_result: list[tuple]) -> dict:
+    upload_counts: dict[str, int] = {}
+    for row in db_result:
+        dt, count = row
+        if isinstance(dt, datetime):
+            dt = dt.date()
+        date_str = dt.strftime('%Y-%m-%d')
+        upload_counts[date_str] = int(count)
+
+    today = date.today()
+    months = []
+    for i in range(11, -1, -1):
+        month_start = (today - timedelta(days=i * 30)).replace(day=1)
+        months.append(month_start.strftime('%Y-%m'))
+
+    month_data: dict[str, list[int]] = {}
+    for month_str in months:
+        year, month = map(int, month_str.split('-'))
+        days_in_month = (datetime(year, month + 1, 1) - timedelta(days=1)).day if month < 12 else 31
+        month_data[month_str] = [0] * days_in_month
+        for day in range(1, days_in_month + 1):
+            date_str = f'{year:04d}-{month:02d}-{day:02d}'
+            if date_str in upload_counts:
+                month_data[month_str][day - 1] = upload_counts[date_str]
+
+    return {
+        'months': months,
+        'data': month_data,
+        'max_value': max(upload_counts.values(), default=1),
+    }
 
 @router.get('/overview')
 async def overview(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
@@ -34,6 +66,16 @@ async def overview(db: AsyncSession = Depends(get_db), user: User = Depends(get_
                         keyword_cloud[name] = keyword_cloud.get(name, 0) + 1
     if not keyword_cloud:
         keyword_cloud = {'RAG': 8, 'Agent': 6, '文献解析': 7, '知识图谱': 5, '实验复现': 4}
+
+    today = date.today()
+    one_year_ago = today - timedelta(days=365)
+    upload_stats = (await db.execute(
+        select(func.date(Paper.upload_time), func.count())
+        .where(Paper.user_id == user.id, Paper.is_deleted == False, Paper.upload_time >= one_year_ago)
+        .group_by(func.date(Paper.upload_time))
+    )).all()
+    heatmap_data = _generate_upload_heatmap_data(upload_stats)
+
     record_items = [{'id': r.id, 'paper_id': r.paper_id, 'event_type': r.event_type, 'event_data': loads(r.event_data,{}), 'created_at': r.created_at} for r in records]
     return {
         'paper_count': paper_count,
@@ -42,4 +84,5 @@ async def overview(db: AsyncSession = Depends(get_db), user: User = Depends(get_
         'records': record_items,
         'recent_records': record_items,
         'keyword_cloud': keyword_cloud,
+        'upload_heatmap': heatmap_data,
     }

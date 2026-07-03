@@ -195,9 +195,14 @@ export const useNotebookStore = defineStore('notebook', () => {
               assistant.sources = event.sources
             }
           }
+          if (event.type === 'error') {
+            assistant.content = `❌ 对话失败：${event.error}`
+          }
           await nextTick()
         }
       )
+    } catch (e: any) {
+      assistant.content = `❌ 对话失败：${e?.message || '未知错误'}`
     } finally {
       isStreaming.value = false
       // ★ 发送消息后，清除该会话缓存，下次切换会重新拉取最新消息

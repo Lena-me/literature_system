@@ -40,7 +40,7 @@ async function restoreBackup(id: number) {
   await load()
 }
 
-function formatKey(key: string) {
+function formatKey(key: string | number) {
   const map: Record<string, string> = {
     total_vectors: '总向量数',
     used_memory_mb: '已用内存(MB)',
@@ -65,7 +65,7 @@ function formatKey(key: string) {
     'recall rate': '召回率',
     'health score': '健康评分'
   }
-  return map[key] || key
+  return map[String(key)] || String(key)
 }
 </script>
 
