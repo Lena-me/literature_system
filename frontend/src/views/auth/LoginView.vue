@@ -12,13 +12,12 @@ const router = useRouter();
 const auth = useAuthStore();
 const mode = ref<'login'|'register'>('login')
 const form = reactive({
-  account: 'admin',
+  phone: '',
   username: '',
-  password: 'admin123456',
+  password: '',
   confirm_password: '',
   name: '',
   email: '',
-  phone: '',
   code: ''
 })
 // 根据 mode 切换标题
@@ -118,6 +117,7 @@ async function submit() {
     <!-- 右侧表单 -->
     <section class="login-card glass fade-slide">
       <h2>{{ title }}</h2>
+      <p class="title-gap"></p>
 
       <el-form label-position="top" @submit.prevent>
         <!-- 登录显示手机号 -->
@@ -173,6 +173,7 @@ async function submit() {
 
 <style scoped>
 .login-page { position:relative; overflow:hidden; display:grid; grid-template-columns: 1.1fr 460px; gap: 48px; align-items:center; padding: 70px 8vw; }
+.title-gap {margin: 0 0 24px 0;}
 .grid { position:absolute; inset:0; background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 48px 48px; mask-image: radial-gradient(circle at center, #000, transparent 72%); }
 .aurora { position:absolute; width:360px; height:360px; border-radius:50%; filter: blur(50px); opacity:.45; animation: floatY 8s infinite; }.a1{background:#66e7ff; left:8%; top:4%}.a2{background:#8a7cff; right:8%; bottom:8%; animation-delay:1s}.hero,.login-card{position:relative;z-index:1}.hero h1{font-size:62px;line-height:1.05;max-width:860px;margin:34px 0 18px;letter-spacing:-2px}.hero p{color:rgba(238,246,255,.72);font-size:18px;max-width:720px;line-height:1.9}.hero-cards{display:flex;gap:16px;margin-top:34px}.hero-cards div{padding:18px 22px;border-radius:20px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)}.hero-cards b{font-size:24px;display:block}.hero-cards span{color:var(--muted);font-size:13px}.login-card{border-radius:30px;padding:34px}h2{margin:0;font-size:28px}.subtitle{color:var(--muted);margin-bottom:24px}.submit{width:100%;margin-top:8px}.switches{display:flex;justify-content:center;gap:18px;margin-top:18px}.switches button{background:transparent;border:0;color:var(--brand);cursor:pointer}@media (max-width: 960px){.login-page{grid-template-columns:1fr;padding:40px 22px}.hero h1{font-size:42px}.login-card{max-width:520px}}
 </style>
