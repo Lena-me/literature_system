@@ -687,7 +687,6 @@ defineExpose({ open })
 }
 
 /* Image */
-<<<<<<< HEAD
 .acc-content :deep(img) {
   max-width: 100%;
   height: auto;
