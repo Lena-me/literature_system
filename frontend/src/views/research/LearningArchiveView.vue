@@ -1,11 +1,125 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
+import 'echarts-wordcloud'
 import StatCard from '@/components/common/StatCard.vue'
 import { featuresApi } from '@/api/features'
+import { PieChart, Cloudy } from '@element-plus/icons-vue'
 
 const overview = ref<any>({ paper_count:0, report_count:0, qa_count:0, records:[], recent_records:[] })
 const chartRef = ref<HTMLDivElement | null>(null)
+const chartInstance = ref<echarts.ECharts | null>(null)
+const displayMode = ref<'pie' | 'wordcloud'>('pie')
+
+const colors = [
+  '#6366f1',
+  '#8b5cf6',
+  '#ec4899',
+  '#f43f5e',
+  '#f97316',
+  '#eab308',
+  '#22c55e',
+  '#14b8a6',
+  '#06b6d4',
+  '#3b82f6',
+]
+
+function getSortedKeywords(limit: number): [string, number][] {
+  const keywordCloud = overview.value.keyword_cloud || { RAG:8, Agent:6, '文献解析':10, '方法复现':7, '数据集':6, '知识图谱':9, '实验复现':5, '数据分析':4 }
+  const data = Object.entries(keywordCloud) as [string, number][]
+  return data
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+}
+
+function renderPieChart() {
+  if (!chartRef.value) return
+  if (chartInstance.value) {
+    chartInstance.value.dispose()
+  }
+  chartInstance.value = echarts.init(chartRef.value)
+  const data = getSortedKeywords(6)
+  chartInstance.value.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item',
+      formatter: '{b}: {c} 次',
+    },
+    series: [{
+      type: 'pie',
+      radius: ['45%', '72%'],
+      data: data.map(([name, value], index) => ({ 
+        name, 
+        value,
+        itemStyle: {
+          color: colors[index % colors.length],
+          borderColor: '#fff',
+          borderWidth: 2,
+        }
+      })),
+      label: {
+        color: '#334155',
+        fontSize: 13,
+      },
+    }],
+  })
+}
+
+function renderWordCloud() {
+  if (!chartRef.value) return
+  if (chartInstance.value) {
+    chartInstance.value.dispose()
+  }
+  chartInstance.value = echarts.init(chartRef.value)
+  const data = getSortedKeywords(10)
+  const maxValue = Math.max(...data.map(d => d[1]))
+  chartInstance.value.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item',
+      formatter: '{b}: {c} 次',
+    },
+    series: [{
+      type: 'wordCloud',
+      gridSize: 8,
+      sizeRange: [16, 56],
+      rotationRange: [-45, 45],
+      rotationStep: 15,
+      shape: 'circle',
+      width: chartRef.value.clientWidth,
+      height: chartRef.value.clientHeight,
+      drawOutOfBound: false,
+      textStyle: {
+        fontFamily: 'Microsoft YaHei, sans-serif',
+        fontWeight: 'bold',
+        color: () => colors[Math.floor(Math.random() * colors.length)],
+      },
+      emphasis: {
+        focus: 'self',
+        textStyle: {
+          shadowBlur: 10,
+          shadowColor: 'rgba(0, 0, 0, 0.3)',
+        },
+      },
+      data: data.map(([name, value], index) => ({
+        name,
+        value,
+        textStyle: {
+          fontSize: 16 + (value / maxValue) * 40,
+          color: colors[index % colors.length],
+        },
+      })),
+    }],
+  })
+}
+
+function render() {
+  if (displayMode.value === 'pie') {
+    renderPieChart()
+  } else {
+    renderWordCloud()
+  }
+}
 
 onMounted(async () => {
   overview.value = await featuresApi.overview()
@@ -13,28 +127,9 @@ onMounted(async () => {
   setTimeout(render, 100)
 })
 
-function render() {
-  if (!chartRef.value) return
-  const chart = echarts.init(chartRef.value)
-  const data = Object.entries(overview.value.keyword_cloud || { RAG:8, Agent:6, '文献解析':10, '方法复现':7, '数据集':6 })
-  chart.setOption({
-    backgroundColor: 'transparent',
-    tooltip: {},
-    series: [{
-      type: 'pie',
-      radius: ['45%', '72%'],
-      data: data.map(([name, value]) => ({ name, value })),
-      label: {
-        color: '#334155',
-        fontSize: 13,
-      },
-      itemStyle: {
-        borderColor: '#fff',
-        borderWidth: 2,
-      },
-    }],
-  })
-}
+watch(displayMode, () => {
+  setTimeout(render, 50)
+})
 </script>
 
 <template>
@@ -49,7 +144,27 @@ function render() {
 
     <section class="grid2">
       <div class="card">
-        <h3>关键词分布</h3>
+        <div class="card-header">
+          <h3>关键词分布</h3>
+          <div class="mode-switch">
+            <button 
+              class="switch-btn" 
+              :class="{ active: displayMode === 'pie' }"
+              @click="displayMode = 'pie'"
+            >
+              <PieChart class="icon" />
+              <span>环形图</span>
+            </button>
+            <button 
+              class="switch-btn" 
+              :class="{ active: displayMode === 'wordcloud' }"
+              @click="displayMode = 'wordcloud'"
+            >
+              <Cloudy class="icon" />
+              <span>词云</span>
+            </button>
+          </div>
+        </div>
         <div ref="chartRef" class="chart" />
       </div>
       <div class="card">
@@ -104,18 +219,59 @@ function render() {
   min-height: 440px;
 }
 
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
 .card h3 {
   font-size: 16px;
   font-weight: 600;
   color: var(--academic-text-main);
-  margin-bottom: 16px;
+  margin: 0;
+}
+
+.mode-switch {
+  display: flex;
+  background: var(--academic-canvas);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.switch-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--academic-text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.switch-btn:hover {
+  color: var(--academic-text-main);
+}
+
+.switch-btn.active {
+  background: var(--academic-primary);
+  color: #fff;
+}
+
+.switch-btn .icon {
+  width: 16px;
+  height: 16px;
 }
 
 .chart {
   height: 380px;
 }
 
-/* ===== 操作记录 ===== */
 .records-list {
   display: flex;
   flex-direction: column;
