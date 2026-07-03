@@ -7,7 +7,6 @@ import { authApi } from '@/api/auth';
 
 const router = useRouter();
 const loading = ref(false)
-const codeLoading = ref(false)
 
 const form = reactive({
     token: '',
@@ -35,9 +34,9 @@ const validatePassword = () => {
     }
     
     // 密码复杂性校验
-    // if (!/(?=.*[a-zA-Z])(?=.*\d)/.test(form.password)) {
-    //     return ElMessage.warning('密码必须同时包含字母和数字')
-    // }
+    if (!/(?=.*[a-zA-Z])(?=.*\d)/.test(form.password)) {
+        return '密码必须同时包含字母和数字'
+    }
     return ''
 }
 
