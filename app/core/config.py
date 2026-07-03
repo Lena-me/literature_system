@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     chunk_overlap: int = 120
     top_k: int = 8
     rerank_top_n: int = 5
+    rag_search_multiplier: int = 3
+    rag_rerank_pool_max: int = 12
+    rag_enable_reranker: bool = True
+    rag_fast_multi_paper: bool = False
+    rag_chunk_context_max_chars: int = 900
+    rag_rerank_text_max_chars: int = 384
 
     # 验证码、账号锁定、资源配额、分片上传
     verification_code_ttl_seconds: int = 300

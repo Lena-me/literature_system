@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
-<<<<<<< HEAD
-import mk from 'markdown-it-katex'
-=======
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
+import 'katex/dist/katex.min.css'
 import { papersApi } from '@/api/papers'
 import type { ContentItem } from '@/types/domain'
 import PdfReader from '@/components/reader/PdfReader.vue'
+import {
+  isMixedFormulaBlock,
+  looksLikeBareLatex,
+  normalizeLatexForKatex,
+  prepareMarkdownForRender,
+  renderBareLatexBlock,
+  renderKatexHtml,
+  renderMathInMarkdownHtml,
+} from '@/utils/mathRender'
 
 const props = defineProps<{ paperId: number; paperTitle: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -20,24 +26,15 @@ const loading = ref(false)
 const activeTab = ref<'markdown' | 'graph'>('markdown')
 const splitPercent = ref(50) // 左侧百分比
 const dragging = ref(false)
+const pdfReaderRef = ref<InstanceType<typeof PdfReader> | null>(null)
 
-<<<<<<< HEAD
-// ── Markdown 渲染器（挂载 KaTeX 插件以支持 $$...$$ / $...$ 数学公式）──
+// ── Markdown 渲染器（公式在 md.render 之后由 renderMathInMarkdownHtml 注入）──
 const md = new MarkdownIt({
   html: true,
   breaks: true,
   linkify: true,
   typographer: true,
-}).use(mk)
-=======
-// ── Markdown 渲染器 ──
-const md = new MarkdownIt({
-  html: false,
-  breaks: true,
-  linkify: true,
-  typographer: true,
 })
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
 
 // ── 结构化章节（按 heading 分组折叠视图） ──
 interface Section {
@@ -78,51 +75,79 @@ const structuredSections = computed<Section[]>(() => {
   return sections
 })
 
-<<<<<<< HEAD
-// 章节级完整 Markdown 渲染流 ──
-function renderSectionHtml(children: ContentItem[]): string {
-  // 1. 将散落的数据库碎片，重新拼装成连续的 Markdown 文档流
-  const combinedMarkdown = children.map(item => {
-    const type = (item as any).type || (item as any).item_type || ''
-    const text = (item.content || '').trim()
-
-    // 还原标题的 Markdown 语义
-    if (type === 'heading') {
-      const level = (item as any).level || 1
-      return '#'.repeat(level) + ' ' + text
-    }
-
-    // 公式/表格/图片等直接回填（后端已输出标准 Markdown 语法）
-    return text
-  }).join('\n\n') // 双换行确保 Markdown 标准块之间的隔离
-
-  // 2. 一次性交给 markdown-it（内置 KaTeX 插件）解析完整的 AST
-  return md.render(combinedMarkdown)
-=======
-// 渲染单个 ContentItem 为 HTML
+// ── 单个 Block 的 Markdown 渲染（逐块渲染，保留坐标事件） ──
 function renderItemHtml(item: ContentItem): string {
   const type = (item as any).type || (item as any).item_type || ''
-  const text = item.content || ''
-  switch (type) {
-    case 'code':
-      return '<pre><code>' + escapeHtml(text) + '</code></pre>'
-    case 'table':
-      return text // 已是 Markdown table
-    case 'image':
-      return `<img src="${escapeHtml(text)}" alt="${escapeHtml(text)}" style="max-width:100%" />`
-    case 'heading':
-      return '<p><strong>' + escapeHtml(text) + '</strong></p>'
-    case 'list_item':
-      return '<p>' + escapeHtml(text) + '</p>'
-    default:
-      // paragraph 等 → 用 MarkdownIt 渲染内联格式
-      return md.renderInline(text) ? md.render(text) : '<p>' + escapeHtml(text) + '</p>'
+  const text = (item.content || '').trim()
+
+  if (type === 'heading') {
+    const level = (item as any).level || 1
+    return md.render('#'.repeat(level) + ' ' + text)
   }
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
+
+  // 裸 LaTeX 段落（无 $$ 包裹，旧数据或未升维的公式块）
+  if (looksLikeBareLatex(text)) {
+    return renderBareLatexBlock(text)
+  }
+
+  const isDisplayFormula =
+    type === 'formula' || (text.startsWith('$$') && text.endsWith('$$'))
+
+  if (isDisplayFormula && !isMixedFormulaBlock(text)) {
+    const inner = text.replace(/^\$\$|\$\$$/g, '').trim()
+    const html = renderKatexHtml(inner, true)
+    return html.includes('class="katex"')
+      ? `<div class="formula-display">${html}</div>`
+      : md.render(normalizeLatexForKatex(`$$\n${inner}\n$$`))
+  }
+
+  if (isDisplayFormula && isMixedFormulaBlock(text)) {
+    const inner = text.replace(/^\$\$\n?|\n?\$\$$/g, '').trim()
+    return renderMathInMarkdownHtml(md.render(prepareMarkdownForRender(inner)))
+  }
+
+  return renderMathInMarkdownHtml(md.render(prepareMarkdownForRender(text)))
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+// ── 点击 Block → 左侧 PDF 联动高亮并滚动 ──
+function parseContentBbox(raw: unknown): [number, number, number, number] | null {
+  if (Array.isArray(raw) && raw.length === 4) {
+    const nums = raw.map(v => Number(v))
+    if (nums.every(v => Number.isFinite(v))) {
+      return nums as [number, number, number, number]
+    }
+  }
+  if (raw && typeof raw === 'object') {
+    const box = raw as Record<string, unknown>
+    if ('left' in box && 'top' in box && 'width' in box && 'height' in box) {
+      const left = Number(box.left)
+      const top = Number(box.top)
+      const width = Number(box.width)
+      const height = Number(box.height)
+      if ([left, top, width, height].every(v => Number.isFinite(v))) {
+        return [left, top, left + width, top + height]
+      }
+    }
+  }
+  return null
+}
+
+function handleBlockClick(item: ContentItem) {
+  const pageNum = item.page_number
+  if (!pageNum) return
+
+  const pdfReader = pdfReaderRef.value as InstanceType<typeof PdfReader> | null
+  if (!pdfReader) return
+
+  const bbox = parseContentBbox((item as any).bbox)
+  if (bbox && typeof (pdfReader as any).highlightAndScrollTo === 'function') {
+    ;(pdfReader as any).highlightAndScrollTo(pageNum, bbox)
+    return
+  }
+
+  if (typeof (pdfReader as any).jumpTo === 'function') {
+    ;(pdfReader as any).jumpTo(pageNum)
+  }
 }
 
 // ── 加载 ──
@@ -240,6 +265,7 @@ defineExpose({ open })
               <div class="pane-body">
                 <PdfReader
                   v-if="pdfUrl"
+                  ref="pdfReaderRef"
                   :url="pdfUrl"
                 />
                 <div v-else class="pane-empty">暂无 PDF 文件</div>
@@ -290,18 +316,16 @@ defineExpose({ open })
                         <span class="acc-title">{{ sec.title }}</span>
                         <span v-if="sec.children.length" class="acc-count">{{ sec.children.length }}</span>
                       </summary>
-<<<<<<< HEAD
-                      <div class="acc-content" v-html="renderSectionHtml(sec.children)"></div>
-=======
                       <div class="acc-content">
                         <div
-                          v-for="(child, ci) in sec.children"
-                          :key="ci"
-                          class="acc-item"
-                          v-html="renderItemHtml(child)"
+                          v-for="(item, idx) in sec.children"
+                          :key="idx"
+                          class="clickable-block"
+                          :class="{ 'has-locate': item.page_number }"
+                          @click="handleBlockClick(item)"
+                          v-html="renderItemHtml(item)"
                         ></div>
                       </div>
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
                     </details>
                   </template>
                   <div v-else class="pane-empty">暂无解析内容</div>
@@ -634,6 +658,24 @@ defineExpose({ open })
   color: #475569;
 }
 
+/* ── 可点击 Block（逐块渲染，保留坐标联动事件） ── */
+.clickable-block {
+  margin-bottom: 0.8em;
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
+  cursor: default;
+}
+
+.clickable-block.has-locate {
+  cursor: pointer;
+}
+
+.clickable-block.has-locate:hover {
+  background-color: rgba(59, 130, 246, 0.08);
+  outline: 1px dashed rgba(59, 130, 246, 0.35);
+  outline-offset: 2px;
+}
+
 .acc-item {
   margin-bottom: 1em;
 }
@@ -674,6 +716,7 @@ defineExpose({ open })
   border-collapse: collapse;
   margin: 10px 0;
   font-size: 13px;
+  table-layout: auto;
 }
 
 .acc-content :deep(th) {
@@ -683,12 +726,27 @@ defineExpose({ open })
   text-align: left;
   padding: 8px 12px;
   border: 1px solid #E2E8F0;
+  vertical-align: middle;
 }
 
 .acc-content :deep(td) {
-  padding: 6px 12px;
+  padding: 8px 12px;
   border: 1px solid #E2E8F0;
   color: #334155;
+  vertical-align: middle;
+  line-height: 1.5;
+}
+
+/* 公式列略宽，类别列保持紧凑 */
+.acc-content :deep(th:last-child),
+.acc-content :deep(td:last-child) {
+  min-width: 0;
+}
+
+.acc-content :deep(th:first-child),
+.acc-content :deep(td:first-child) {
+  width: 28%;
+  white-space: nowrap;
 }
 
 .acc-content :deep(tr:nth-child(even) td) {
@@ -733,7 +791,6 @@ defineExpose({ open })
 }
 
 /* Image */
-<<<<<<< HEAD
 .acc-content :deep(img) {
   max-width: 100%;
   height: auto;
@@ -742,6 +799,13 @@ defineExpose({ open })
 }
 
 /* KaTeX formula blocks */
+.acc-content :deep(.formula-display) {
+  margin: 14px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+
 .acc-content :deep(.katex-display) {
   margin: 14px 0;
   overflow-x: auto;
@@ -749,7 +813,49 @@ defineExpose({ open })
 }
 
 .acc-content :deep(.katex) {
-  font-size: 1.08em;
+  font-size: 1.05em;
+}
+
+/* 行内公式：避免与中文重叠，保持垂直居中 */
+.acc-content :deep(.math-inline) {
+  display: inline;
+  line-height: normal;
+  vertical-align: middle;
+  margin: 0 0.1em;
+  padding: 0;
+}
+
+.acc-content :deep(.math-inline--cell) {
+  display: inline;
+  overflow: visible;
+}
+
+.acc-content :deep(.katex:not(.katex-display)) {
+  display: inline-block;
+  line-height: normal;
+  vertical-align: middle;
+  text-indent: 0;
+}
+
+/* 表格内公式：略缩小、无滚动条，自然换行 */
+.acc-content :deep(td .math-inline--cell),
+.acc-content :deep(th .math-inline--cell) {
+  display: inline;
+  overflow: visible;
+  max-width: none;
+}
+
+.acc-content :deep(td .katex),
+.acc-content :deep(th .katex) {
+  font-size: 0.95em;
+  white-space: normal;
+  max-width: 100%;
+}
+
+.acc-content :deep(td .katex-display),
+.acc-content :deep(th .katex-display) {
+  margin: 0;
+  text-align: left;
 }
 
 /* formula-block fallback */
@@ -763,11 +869,6 @@ defineExpose({ open })
   color: #334155;
   border-radius: 0 8px 8px 0;
   overflow-x: auto;
-=======
-.markdown-body :deep(img) {
-  max-width: 100%;
-  border-radius: 8px;
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
 }
 
 /* Bold / Italic */

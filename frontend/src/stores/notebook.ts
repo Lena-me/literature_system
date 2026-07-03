@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { qaApi } from '@/api/qa'
-import type { ChatMessage, KnowledgeDomain, SessionDetail, SessionPaper, SessionSummary, Source } from '@/types/domain'
+import type { ChatMessage, KnowledgeDomain, SessionDetail, SessionPaper, SessionSummary, Source, StreamStage } from '@/types/domain'
 
 export const useNotebookStore = defineStore('notebook', () => {
   const router = useRouter()
@@ -164,7 +164,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     activeMessages.value.push({ role: 'user', content: question })
     isStreaming.value = true
 
-    const assistant: ChatMessage = { role: 'assistant', content: '', sources: [] }
+    const assistant: ChatMessage = { role: 'assistant', content: '', sources: [], streamStage: 'embedding' }
     activeMessages.value.push(assistant)
 
     try {
@@ -181,11 +181,19 @@ export const useNotebookStore = defineStore('notebook', () => {
           if (event.type === 'sources') {
             assistant.sources = event.sources
           }
+          if (event.type === 'status' && event.stage) {
+            assistant.streamStage = event.stage as StreamStage
+          }
           if (event.type === 'delta') {
+            if (event.content) assistant.streamStage = undefined
             assistant.content += event.content
           }
           if (event.type === 'done') {
+            assistant.streamStage = undefined
             assistant.content = event.answer || assistant.content
+            if (event.sources?.length) {
+              assistant.sources = event.sources
+            }
           }
           await nextTick()
         }
@@ -200,9 +208,14 @@ export const useNotebookStore = defineStore('notebook', () => {
       await loadSessions()
 
       // ★ 首条消息后自动生成标题
-      if (isFirstMessage && activeSessionId.value && isDefaultTitle(activeSessionDetail.value?.title || '')) {
-        console.log('[auto-title] 触发标题生成', { sessionId: activeSessionId.value, question })
-        autoGenerateTitle(activeSessionId.value, question)
+      const sessionId = activeSessionId.value
+      if (isFirstMessage && sessionId) {
+        const listed = sessions.value.find(s => s.id === sessionId)
+        const currentTitle = listed?.title || activeSessionDetail.value?.title || ''
+        if (isDefaultTitle(currentTitle)) {
+          console.log('[auto-title] 触发标题生成', { sessionId, question })
+          await autoGenerateTitle(sessionId, question)
+        }
       }
     }
   }
@@ -221,7 +234,19 @@ export const useNotebookStore = defineStore('notebook', () => {
       console.log('[auto-title] 请求后端生成标题...')
       const res = await qaApi.generateSessionTitle(sessionId, message)
       console.log('[auto-title] 后端返回标题:', res.title)
-      updateSessionTitle(sessionId, res.title)
+      if (res.title) {
+        updateSessionTitle(sessionId, res.title)
+        detailCache.delete(sessionId)
+        if (activeSessionId.value === sessionId) {
+          try {
+            const detail = await qaApi.getSession(sessionId)
+            activeSessionDetail.value = detail
+            detailCache.set(sessionId, detail)
+          } catch {
+            // 列表标题已更新，详情刷新失败可忽略
+          }
+        }
+      }
     } catch (e: any) {
       console.warn('[auto-title] 生成失败（静默）:', e?.message || e)
     }

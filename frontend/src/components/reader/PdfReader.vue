@@ -61,6 +61,10 @@ interface PageHighlight {
 
 const highlights = shallowRef<PageHighlight[]>([])
 
+// ── 联动高亮（临时，来自右侧读者点击） ──
+const activeLinkHighlight = shallowRef<{ pageNum: number; rect: HighlightRect } | null>(null)
+let linkHighlightTimer: ReturnType<typeof setTimeout> | null = null
+
 // ============================================================================
 // 悬浮菜单状态（Zotero-style）
 // ============================================================================
@@ -113,6 +117,7 @@ watch(() => props.highlightText, async () => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onGlobalMouseDown)
+  clearLinkHighlight()
   destroyObserver()
   cancelAllTasks()
   try { doc?.destroy?.() } catch {}
@@ -456,6 +461,19 @@ async function renderAnnotationLayer(pageNum: number) {
       layer.appendChild(box)
     }
   }
+
+  // ── 联动高亮（临时，来自右侧内容块点击） ──
+  const linkHl = activeLinkHighlight.value
+  if (linkHl && linkHl.pageNum === pageNum) {
+    const { rect } = linkHl
+    const box = document.createElement('div')
+    box.className = 'link-highlight-box'
+    box.style.left = `${rect.left * 100}%`
+    box.style.top = `${rect.top * 100}%`
+    box.style.width = `${rect.width * 100}%`
+    box.style.height = `${rect.height * 100}%`
+    layer.appendChild(box)
+  }
 }
 
 async function refreshAnnotationLayers() {
@@ -651,6 +669,81 @@ async function jumpTo(page: number, _text?: string) {
   await scrollToPage(target)
 }
 
+// ── 联动高亮：接收物理坐标 bbox [x0, y0, x1, y1]，翻页并绘制临时高亮 ──
+async function highlightAndScrollTo(pageNum: number, bbox: [number, number, number, number]) {
+  if (!doc || !bbox || bbox.length !== 4) return
+
+  // 清除上一次的联动高亮
+  clearLinkHighlight()
+
+  const targetPage = Math.min(Math.max(pageNum, 1), totalPages.value || 1)
+
+  // 1. 获取目标页 scale=1.0 时的 viewport（PDF 原始坐标参考）
+  const page = await doc.getPage(targetPage)
+  const vp = page.getViewport({ scale: 1.0 })
+  const vpW = vp.width
+  const vpH = vp.height
+  if (vpW <= 0 || vpH <= 0) return
+
+  // 2. 坐标转换：支持 0~1 比例坐标（MinerU）或 PDF 绝对坐标
+  const [x0, y0, x1, y1] = bbox
+  const isNormalized = [x0, y0, x1, y1].every(v => v >= 0 && v <= 1)
+  let left: number
+  let top: number
+  let width: number
+  let height: number
+
+  if (isNormalized) {
+    left = x0
+    top = y0
+    width = x1 - x0
+    height = y1 - y0
+  } else {
+    left = x0 / vpW
+    width = (x1 - x0) / vpW
+    top = 1 - (y1 / vpH)
+    height = (y1 - y0) / vpH
+  }
+
+  // 限制坐标在有效范围 [0, 1]
+  const clamp = (v: number) => Math.max(0, Math.min(1, v))
+  const rect: HighlightRect = {
+    left: clamp(left),
+    top: clamp(top),
+    width: clamp(width),
+    height: clamp(height),
+  }
+
+  // 3. 赋值联动高亮
+  activeLinkHighlight.value = { pageNum: targetPage, rect }
+
+  // 4. 滚动到目标页
+  await scrollToPage(targetPage)
+
+  // 5. 等待渲染完成后触发 annotationLayer 更新
+  await nextTick()
+
+  // 6. 渲染高亮层
+  await renderAnnotationLayer(targetPage)
+
+  // 7. 3 秒后自动清除临时高亮
+  linkHighlightTimer = setTimeout(() => {
+    clearLinkHighlight()
+  }, 3000)
+}
+
+function clearLinkHighlight() {
+  if (linkHighlightTimer) {
+    clearTimeout(linkHighlightTimer)
+    linkHighlightTimer = null
+  }
+  if (activeLinkHighlight.value) {
+    const prevPage = activeLinkHighlight.value.pageNum
+    activeLinkHighlight.value = null
+    renderAnnotationLayer(prevPage)
+  }
+}
+
 // ============================================================================
 // Ref 回调（Vue 动态 ref）
 // ============================================================================
@@ -679,7 +772,15 @@ function setAnnotationLayerRef(pageNum: number, el: any) {
   }
 }
 
-defineExpose({ jumpTo })
+async function whenReady(timeoutMs = 15000): Promise<boolean> {
+  const start = Date.now()
+  while (!doc && Date.now() - start < timeoutMs) {
+    await new Promise(resolve => setTimeout(resolve, 80))
+  }
+  return !!doc
+}
+
+defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
 </script>
 
 <template>
@@ -924,6 +1025,23 @@ defineExpose({ jumpTo })
 .annotationLayer :deep(.highlight-delete-btn:hover) {
   background: #e53935;
   border-color: #e53935;
+}
+
+/* ── 联动高亮框（临时，呼吸闪烁动画） ── */
+.annotationLayer :deep(.link-highlight-box) {
+  position: absolute;
+  border-radius: 3px;
+  pointer-events: none;
+  background: rgba(59, 130, 246, 0.25);
+  border: 2px solid rgba(59, 130, 246, 0.7);
+  animation: targetFlash 1.2s ease-in-out 3;
+  z-index: 5;
+}
+
+@keyframes targetFlash {
+  0%   { background: rgba(59, 130, 246, 0.45); border-color: rgba(59, 130, 246, 0.9); }
+  50%  { background: rgba(59, 130, 246, 0.10); border-color: rgba(59, 130, 246, 0.3); }
+  100% { background: rgba(59, 130, 246, 0.45); border-color: rgba(59, 130, 246, 0.9); }
 }
 
 /* ===================================================================

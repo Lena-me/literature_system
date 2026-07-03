@@ -107,8 +107,13 @@ class GrobidPyMuPDFParser:
                 items.append({'item_type': 'paragraph', 'level': None, 'content': text, 'page_number': None,
                               'order_index': order})
             elif tag == 'formula':
+                # Grobid 提取的公式是裸 LaTeX，需包裹 $$...$$ 才能被前端 KaTeX 渲染
+                formula_text = text.strip()
+                if not (formula_text.startswith('$$') and formula_text.endswith('$$')):
+                    formula_text = '$$\n' + formula_text + '\n$$'
                 items.append(
-                    {'item_type': 'formula', 'level': None, 'content': text, 'page_number': None, 'order_index': order})
+                    {'item_type': 'formula', 'level': None, 'content': formula_text, 'page_number': None,
+                     'order_index': order})
             elif tag == 'list':
                 items.append(
                     {'item_type': 'list', 'level': None, 'content': text, 'page_number': None, 'order_index': order})

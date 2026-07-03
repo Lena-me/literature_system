@@ -28,9 +28,49 @@ export interface Paper {
   publication_year?: number | null
   journal_conf?: string | null
 }
-export interface ContentItem { id: number; type: string; level?: number | null; content: string; page_number?: number | null; order_index: number }
-export interface ChatMessage { id?: number; role: 'user' | 'assistant'; content: string; created_at?: string; sources?: Source[] }
-export interface Source { paper_id: number; page_number?: number; section_title?: string; text?: string; snippet?: string; similarity_score?: number; rerank_score?: number }
+export interface ContentItem { id: number; type: string; level?: number | null; content: string; bbox?: [number, number, number, number] | null; page_number?: number | null; order_index: number }
+export type StreamStage = 'embedding' | 'searching' | 'reranking' | 'generating'
+
+export interface ChatMessage {
+  id?: number
+  role: 'user' | 'assistant'
+  content: string
+  created_at?: string
+  sources?: Source[]
+  /** 流式问答当前阶段（仅 assistant 生成过程中） */
+  streamStage?: StreamStage
+}
+export interface RelatedVisual {
+  id: number
+  type: 'figure' | 'table' | string
+  caption?: string | null
+  page_number?: number | null
+  image_path?: string | null
+  bbox?: [number, number, number, number] | null
+  locate_snippet?: string | null
+  section_id?: number | null
+}
+
+export interface Source {
+  chunk_id?: number
+  paper_id: number
+  page_number?: number
+  section_id?: number | null
+  section_title?: string
+  text?: string
+  snippet?: string
+  similarity_score?: number
+  rerank_score?: number
+  bbox?: [number, number, number, number] | null
+  start_position?: number
+  end_position?: number
+  related_figures?: RelatedVisual[]
+  synthetic?: boolean
+  locate_type?: 'bbox' | 'abstract' | 'page' | 'none' | string
+  locate_snippet?: string
+  ref_index?: number
+  ref_label?: string
+}
 export interface Report { id: number; paper_id: number; title: string; content: any; created_at: string }
 export interface GraphNode { 
   id: number | string

@@ -1,7 +1,6 @@
 import { http } from './client'
 import type { KnowledgeGraph, KnowledgeDomain, DomainOverview, DomainSuggestion, MergeSuggestion, MergeResult, CoverageInfo, RegionRecommendation } from '@/types/domain'
 
-<<<<<<< HEAD
 export interface GraphListItem {
   id: number
   name: string
@@ -10,47 +9,42 @@ export interface GraphListItem {
   created_at: string
 }
 
-=======
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
 export const knowledgeApi = {
   // 知识图谱
   create: (payload: { paper_ids: number[]; name?: string; domain_id?: number }) =>
-    http.post<any, KnowledgeGraph>('/knowledge-graphs', payload),
-<<<<<<< HEAD
+    http.post<KnowledgeGraph>('/knowledge-graphs', payload),
   list: (domainId?: number) =>
-    http.get<any, GraphListItem[]>('/knowledge-graphs', { params: domainId !== undefined ? { domain_id: domainId } : {} }),
-=======
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
+    http.get<GraphListItem[]>('/knowledge-graphs', { params: domainId !== undefined ? { domain_id: domainId } : {} }),
   get: (id: number) =>
-    http.get<any, KnowledgeGraph>(`/knowledge-graphs/graph/${id}`),
+    http.get<KnowledgeGraph>(`/knowledge-graphs/graph/${id}`),
 
   // 知识域
   createDomain: (payload: { name: string; description?: string; icon?: string; parent_domain_id?: number }) =>
-    http.post<any, KnowledgeDomain>('/knowledge-graphs/domains', payload),
+    http.post<KnowledgeDomain>('/knowledge-graphs/domains', payload),
   listDomains: () =>
-    http.get<any, KnowledgeDomain[]>('/knowledge-graphs/domains'),
+    http.get<KnowledgeDomain[]>('/knowledge-graphs/domains'),
   getDomain: (id: number) =>
-    http.get<any, KnowledgeDomain>(`/knowledge-graphs/domains/${id}`),
+    http.get<KnowledgeDomain>(`/knowledge-graphs/domains/${id}`),
   updateDomain: (id: number, payload: { name?: string; description?: string; icon?: string }) =>
-    http.put<any, KnowledgeDomain>(`/knowledge-graphs/domains/${id}`, payload),
+    http.put<KnowledgeDomain>(`/knowledge-graphs/domains/${id}`, payload),
   deleteDomain: (id: number) =>
-    http.delete<any, { message: string }>(`/knowledge-graphs/domains/${id}`),
+    http.delete<{ message: string }>(`/knowledge-graphs/domains/${id}`),
   getDomainOverview: (id: number) =>
-    http.get<any, DomainOverview>(`/knowledge-graphs/domains/${id}/overview`),
+    http.get<DomainOverview>(`/knowledge-graphs/domains/${id}/overview`),
 
   // AI 感知：域推荐
   suggestDomain: (payload: { paper_ids: number[] }) =>
-    http.post<any, { suggestions: DomainSuggestion[] }>('/knowledge-graphs/domains/suggest', payload),
+    http.post<{ suggestions: DomainSuggestion[] }>('/knowledge-graphs/domains/suggest', payload),
 
   // 实体融合
   getMergeSuggestions: (domainId: number) =>
-    http.get<any, { suggestions: MergeSuggestion[] }>(`/knowledge-graphs/domains/${domainId}/merge-suggestions`),
+    http.get<{ suggestions: MergeSuggestion[] }>(`/knowledge-graphs/domains/${domainId}/merge-suggestions`),
   mergeEntities: (domainId: number, payload: { source_node_id: number; target_node_id: number }) =>
-    http.post<any, MergeResult>(`/knowledge-graphs/domains/${domainId}/merge`, payload),
+    http.post<MergeResult>(`/knowledge-graphs/domains/${domainId}/merge`, payload),
 
   // 知识推荐
   getRecommendations: (domainId: number) =>
-    http.get<any, { recommendations: RegionRecommendation[]; source: string }>(`/knowledge-graphs/domains/${domainId}/recommendations`),
+    http.get<{ recommendations: RegionRecommendation[]; source: string }>(`/knowledge-graphs/domains/${domainId}/recommendations`),
   exploreConcept: (domainId: number, payload: { concept: string; source: string }) =>
-    http.post<any, { message: string }>(`/knowledge-graphs/domains/${domainId}/explore`, payload),
+    http.post<{ message: string }>(`/knowledge-graphs/domains/${domainId}/explore`, payload),
 }

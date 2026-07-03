@@ -33,17 +33,35 @@ class OpenAICompatibleLLM:
 
     # === 异步接口（FastAPI 端使用）===
 
-    def _extract_content(self, data: dict) -> str:
+    def _extract_content(self, data: dict, *, content_only: bool = False) -> str:
         """从 LLM 响应中提取文本内容，兼容推理模型（reasoning_content）"""
         msg = data.get('choices', [{}])[0].get('message', {})
-        content = msg.get('content') or ''
-        if not content:
-            reasoning = msg.get('reasoning_content') or ''
-            if reasoning:
-                return reasoning
-        return content
+        content = (msg.get('content') or '').strip()
+        if content:
+            return content
+        if content_only:
+            # 标题等短文本任务：不回退到 reasoning，避免整段思维链被当成标题
+            reasoning = (msg.get('reasoning_content') or '').strip()
+            if not reasoning:
+                return ''
+            lines = [ln.strip() for ln in reasoning.splitlines() if ln.strip()]
+            for candidate in reversed(lines):
+                if 2 <= len(candidate) <= 20:
+                    return candidate
+            return ''
+        reasoning = msg.get('reasoning_content') or ''
+        if reasoning:
+            return reasoning
+        return ''
 
-    async def async_chat(self, messages: list[dict], temperature: float | None = None, max_tokens: int | None = None) -> str:
+    async def async_chat(
+        self,
+        messages: list[dict],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        *,
+        content_only: bool = False,
+    ) -> str:
         url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
         payload = {
             'model': settings.llm_model,
@@ -56,7 +74,7 @@ class OpenAICompatibleLLM:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
-            return self._extract_content(data)
+            return self._extract_content(data, content_only=content_only)
 
     async def stream_chat(self, messages: list[dict], temperature: float | None = None, max_tokens: int | None = None):
         url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"

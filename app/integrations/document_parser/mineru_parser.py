@@ -68,14 +68,17 @@ class MinerUParser:
     # MinerU 经常把公式块误判为 paragraph，丢失了 $$ 包裹。
     # 此正则检测 LaTeX 公式特征命令，用于升维为 formula。
     _FORMULA_SIGNAL_RE = re.compile(
-        r'\\(?:frac|sum|prod|int|lim|log|sqrt|mathrm|mathbb|mathcal|mathbf|'
+        r'\\(?:frac|sum|prod|int|lim|log|sqrt|mathrm|mathbb|mathcal|mathbf|mathit|'
         r'begin|end|tag|label|operatorname|DeclareMathOperator|'
         r'left|right|times|div|pm|nabla|partial|infty|approx|'
-        r'alpha|beta|gamma|delta|epsilon|sigma|lambda|mu|pi|theta|omega|'
+        r'alpha|beta|gamma|delta|epsilon|varepsilon|sigma|lambda|mu|pi|theta|omega|'
+        r'cdot|qquad|quad|in|vert|'
         r'overline|underline|hat|tilde|bar|dot|vec|'
         r'text|textbf|textit|'
         r'Delta|Sigma|Omega|Pi|Gamma|Lambda|Theta|Phi)'
     )
+    _TAG_RE = re.compile(r'\\tag\s*\{([^}]*)\}')
+    _CJK_RE = re.compile(r'[\u4e00-\u9fff]')
     # 匹配结尾有 $$ 但开头没有的孤立公式（MinerU 切割 bug）
     _ORPHAN_CLOSING_RE = re.compile(r'\$\$\s*$')
 
@@ -127,7 +130,6 @@ class MinerUParser:
 
         if settings.mineru_backend:
             cmd.extend(['-b', settings.mineru_backend])
-
         if settings.mineru_method:
             cmd.extend(['-m', settings.mineru_method])
         if settings.mineru_language:
@@ -178,6 +180,7 @@ class MinerUParser:
                     'item_type': 'paragraph',
                     'level': None,
                     'content': page['text'],
+                    'bbox': None,
                     'page_number': page['page_number'],
                     'order_index': idx,
                 }
@@ -212,11 +215,6 @@ class MinerUParser:
         return ''
 
     def _load_content_json(self, output_dir: Path):
-
-        """
-        MinerU emits content_list/content_list_v2 plus intermediate files such
-        as middle/model. Prefer content_list outputs for stable reading order.
-        """
         json_files = list(output_dir.rglob('*.json'))
         if not json_files:
             return None
@@ -244,26 +242,235 @@ class MinerUParser:
                 return data
         return None
 
+    def _flatten_content_json_blocks(self, data) -> list[dict]:
+        """展开 MinerU content_list_v2 的「页 → 块」嵌套结构。"""
+        if isinstance(data, dict):
+            if isinstance(data.get('content_list'), list):
+                raw = data.get('content_list') or []
+            elif isinstance(data.get('pages'), list):
+                blocks: list[dict] = []
+                for page_idx, page in enumerate(data.get('pages') or []):
+                    if isinstance(page, dict):
+                        page_blocks = page.get('blocks') or page.get('content') or []
+                    elif isinstance(page, list):
+                        page_blocks = page
+                    else:
+                        continue
+                    for block in page_blocks:
+                        if isinstance(block, dict):
+                            enriched = dict(block)
+                            enriched.setdefault('page_idx', page_idx)
+                            blocks.append(enriched)
+                return blocks
+            elif isinstance(data.get('blocks'), list):
+                raw = data.get('blocks') or []
+            else:
+                return []
+        elif isinstance(data, list):
+            raw = data
+        else:
+            return []
+
+        if not raw:
+            return []
+
+        if all(isinstance(page, list) for page in raw):
+            blocks = []
+            for page_idx, page in enumerate(raw):
+                for block in page:
+                    if isinstance(block, dict):
+                        enriched = dict(block)
+                        enriched.setdefault('page_idx', page_idx)
+                        blocks.append(enriched)
+            return blocks
+
+        return [block for block in raw if isinstance(block, dict)]
+
+    @staticmethod
+    def _normalize_bbox(bbox) -> list[float] | None:
+        """MinerU bbox 为 0~1000 比例坐标（左上原点），统一存为 [x0,y0,x1,y1]（0~1）。"""
+        if not bbox:
+            return None
+        if isinstance(bbox, dict):
+            if all(k in bbox for k in ('left', 'top', 'width', 'height')):
+                left = float(bbox['left'])
+                top = float(bbox['top'])
+                width = float(bbox['width'])
+                height = float(bbox['height'])
+                return [left, top, left + width, top + height]
+            return None
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            return None
+        try:
+            x0, y0, x1, y1 = (float(v) for v in bbox)
+        except (TypeError, ValueError):
+            return None
+        if max(x0, y0, x1, y1) <= 1.0:
+            return [x0, y0, x1, y1]
+        scale = 1000.0 if max(x0, y0, x1, y1) <= 1000.0 else max(x1, y1)
+        return [x0 / scale, y0 / scale, x1 / scale, y1 / scale]
+
+    def _block_bbox(self, block: dict) -> list[float] | None:
+        return self._normalize_bbox(block.get('bbox'))
+
+    @staticmethod
+    def _normalize_latex_for_katex(latex: str) -> str:
+        """收紧 MinerU 松散 LaTeX，并替换 KaTeX 不支持的 \\tag。"""
+        text = latex.strip()
+        if not text:
+            return text
+
+        text = MinerUParser._TAG_RE.sub(r'\\quad\\text{(\1)}', text)
+        text = re.sub(
+            r'\\(mathit|mathrm|mathbf|mathcal|mathbb|mathfrak|mathsf|mathtt)\s*\{\s*([^}]+?)\s*\}',
+            lambda m: f'\\{m.group(1)}{{{"".join(m.group(2).split())}}}',
+            text,
+        )
+        text = re.sub(
+            r'\\operatorname\s*\*\s*\{\s*([^}]+?)\s*\}',
+            lambda m: f'\\operatorname*{{{"".join(m.group(1).split())}}}',
+            text,
+        )
+        text = re.sub(
+            r'\\operatorname\s*\{\s*([^}]+?)\s*\}',
+            lambda m: f'\\operatorname{{{"".join(m.group(1).split())}}}',
+            text,
+        )
+        text = re.sub(
+            r'_\s*\{\s*([^}]+?)\s*\}',
+            lambda m: f'_{{{"".join(m.group(1).split())}}}',
+            text,
+        )
+        text = re.sub(
+            r'\^\s*\{\s*([^}]+?)\s*\}',
+            lambda m: '^{' + ''.join(m.group(1).split()) + '}',
+            text,
+        )
+        text = re.sub(r'\{\s+', '{', text)
+        text = re.sub(r'\s+\}', '}', text)
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
+
+    def _render_rich_content(self, spans) -> str:
+        """将 v2 JSON 的 paragraph_content / title_content 转为 Markdown 文本。"""
+        if not isinstance(spans, list):
+            return self._stringify_mineru_value(spans)
+
+        parts: list[str] = []
+        for span in spans:
+            if not isinstance(span, dict):
+                continue
+            span_type = str(span.get('type') or '').lower()
+            raw = span.get('content') or span.get('text') or ''
+            if isinstance(raw, dict):
+                raw = self._stringify_mineru_value(raw)
+            text = str(raw)
+            if not text:
+                continue
+            if 'equation_inline' in span_type or span_type in ('inline', 'inline_formula'):
+                latex = self._normalize_latex_for_katex(text)
+                parts.append(f'${latex}$')
+            else:
+                parts.append(text)
+        return normalize_text(''.join(parts))
+
+    def _render_list_content(self, content: dict) -> str:
+        """将 v2 JSON 的 list/index 块转为可读文本列表。"""
+        if not isinstance(content, dict):
+            return ''
+        list_items = content.get('list_items') or []
+        lines: list[str] = []
+        for item in list_items:
+            if not isinstance(item, dict):
+                continue
+            spans = item.get('item_content') or item.get('content') or []
+            if isinstance(spans, dict):
+                if spans.get('item_content') is not None:
+                    spans = spans.get('item_content')
+                elif spans.get('content') is not None:
+                    spans = [spans]
+                else:
+                    spans = []
+            line = self._render_rich_content(spans)
+            if line:
+                lines.append(line)
+        return normalize_text('\n'.join(lines))
+
+    @staticmethod
+    def _extract_image_path(block: dict) -> str | None:
+        """从 MinerU v1/v2 图片块提取相对路径。"""
+        for key in ('img_path', 'image_path', 'path'):
+            val = block.get(key)
+            if val:
+                return str(val).strip()
+        content = block.get('content')
+        if isinstance(content, dict):
+            source = content.get('image_source') or {}
+            if isinstance(source, dict):
+                path = source.get('path')
+                if path:
+                    return str(path).strip()
+        return None
+
+    def _extract_image_caption(self, block: dict, block_content: dict | None = None) -> str:
+        block_content = block_content if isinstance(block_content, dict) else block.get('content')
+        for src in (block.get('img_caption'), block.get('caption'), block.get('text')):
+            cap = self._stringify_mineru_value(src)
+            if cap:
+                return cap
+        if isinstance(block_content, dict):
+            cap_spans = block_content.get('image_caption') or block_content.get('caption')
+            if isinstance(cap_spans, list):
+                return self._render_rich_content(cap_spans)
+            cap = self._stringify_mineru_value(cap_spans)
+            if cap:
+                return cap
+        return ''
+
+    def _extract_image_footnote(self, block: dict, block_content: dict | None = None) -> str:
+        block_content = block_content if isinstance(block_content, dict) else block.get('content')
+        footnote = self._stringify_mineru_value(block.get('img_footnote') or block.get('footnote') or '')
+        if footnote:
+            return footnote
+        if isinstance(block_content, dict):
+            spans = block_content.get('image_footnote') or block_content.get('footnote')
+            if isinstance(spans, list):
+                return self._render_rich_content(spans)
+            return self._stringify_mineru_value(spans)
+        return ''
+
+    @staticmethod
+    def _is_page_metadata_block(block_type: str) -> bool:
+        return any(
+            token in block_type
+            for token in ('page_header', 'page_footer', 'page_number')
+        )
+
+    def _wrap_latex_content(self, latex: str, math_type: str = '') -> str:
+        latex = self._normalize_latex_for_katex(latex)
+        if not latex:
+            return ''
+        if math_type in ('equation_inline', 'inline', 'inline_formula'):
+            return f'${latex}$'
+        return f'$$\n{latex}\n$$'
+
+    @staticmethod
+    def _should_upgrade_paragraph_to_formula(content: str) -> bool:
+        """仅将纯 LaTeX 段落升维为 formula，跳过中英文混排 + 行内公式。"""
+        text = content.strip()
+        if not text or (text.startswith('$$') and text.endswith('$$')):
+            return False
+        if '$' in text:
+            return False
+        if MinerUParser._CJK_RE.search(text):
+            return False
+        return bool(MinerUParser._FORMULA_SIGNAL_RE.search(text))
+
     def _items_from_content_json(self, data) -> tuple[list[dict], list[dict]]:
         if not data:
             return [], []
 
-        if isinstance(data, dict):
-            if isinstance(data.get('content_list'), list):
-                blocks = data.get('content_list') or []
-            elif isinstance(data.get('pages'), list):
-                blocks = []
-                for page in data.get('pages') or []:
-                    if isinstance(page, dict):
-                        blocks.extend(page.get('blocks') or page.get('content') or [])
-            elif isinstance(data.get('blocks'), list):
-                blocks = data.get('blocks') or []
-            else:
-                blocks = []
-        elif isinstance(data, list):
-            blocks = data
-        else:
-            blocks = []
+        blocks = self._flatten_content_json_blocks(data)
 
         content_items: list[dict] = []
         figures_tables: list[dict] = []
@@ -289,14 +496,38 @@ class MinerUParser:
             text_level = block.get('text_level') or block.get('level')
             level = self._to_int(text_level, default=1) if text_level not in (None, '') else None
 
-            if 'table' in block_type:
-                caption = self._stringify_mineru_value(
-                    block.get('table_caption') or block.get('caption') or block.get('text') or ''
-                )
-                raw_body = block.get('table_body') or block.get('html') or block.get('content') or block.get('text') or ''
-                body = self._format_table_body(raw_body)
+            if self._is_page_metadata_block(block_type):
+                continue
 
-                footnote = self._stringify_mineru_value(block.get('table_footnote') or '')
+            nested_content = block.get('content') if isinstance(block.get('content'), dict) else {}
+
+            if 'table' in block_type:
+                caption_spans = (
+                    block.get('table_caption')
+                    or block.get('caption')
+                    or nested_content.get('table_caption')
+                    or block.get('text')
+                    or ''
+                )
+                if isinstance(caption_spans, list):
+                    caption = self._render_rich_content(caption_spans)
+                else:
+                    caption = self._stringify_mineru_value(caption_spans)
+                raw_body = (
+                    block.get('table_body')
+                    or block.get('html')
+                    or nested_content.get('html')
+                    or nested_content.get('table_body')
+                    or (nested_content if nested_content else None)
+                    or block.get('text')
+                    or ''
+                )
+                body = self._format_table_body(raw_body)
+                footnote_spans = block.get('table_footnote') or nested_content.get('table_footnote') or ''
+                if isinstance(footnote_spans, list):
+                    footnote = self._render_rich_content(footnote_spans)
+                else:
+                    footnote = self._stringify_mineru_value(footnote_spans)
                 table_text = normalize_text('\n'.join(x for x in [caption, body, footnote] if x))
                 if not table_text:
                     continue
@@ -315,6 +546,7 @@ class MinerUParser:
                         'item_type': 'table',
                         'level': None,
                         'content': table_text,
+                        'bbox': self._block_bbox(block),
                         'page_number': page_number,
                         'order_index': order,
                     }
@@ -323,12 +555,10 @@ class MinerUParser:
                 continue
 
             if 'image' in block_type or 'figure' in block_type:
-                caption = self._stringify_mineru_value(
-                    block.get('img_caption') or block.get('caption') or block.get('text') or ''
-                )
-                footnote = self._stringify_mineru_value(block.get('img_footnote') or '')
+                caption = self._extract_image_caption(block, nested_content)
+                footnote = self._extract_image_footnote(block, nested_content)
                 extracted_text = normalize_text('\n'.join(x for x in [caption, footnote] if x))
-                image_path = block.get('img_path') or block.get('image_path') or block.get('path')
+                image_path = self._extract_image_path(block)
 
                 figures_tables.append(
                     {
@@ -340,28 +570,112 @@ class MinerUParser:
                         'order_index': len(figures_tables),
                     }
                 )
-                md_image = self._build_image_markdown(caption, image_path)
+                md_image = self._build_image_markdown(caption, image_path, footnote)
                 content_items.append(
                     {
                         'item_type': 'figure',
                         'level': None,
                         'content': md_image,
+                        'bbox': self._block_bbox(block),
                         'page_number': page_number,
                         'order_index': order,
                     }
                 )
                 order += 1
-
                 continue
 
-            text = self._stringify_mineru_value(
-                block.get('text')
-                or block.get('content')
-                or block.get('html')
-                or block.get('caption')
-                or ''
-            )
-            text = normalize_text(text)
+            if 'equation' in block_type or 'formula' in block_type:
+                # MinerU 的 formula/equation 块的 LaTeX 深层嵌套在 content 字典的 math_content 字段中
+                block_content = block.get('content') or {}
+                latex = ''
+                math_type = ''
+                if isinstance(block_content, dict):
+                    # 精准提取 math_content 字段中的 LaTeX 代码
+                    math_content = block_content.get('math_content') or ''
+                    math_type = str(block_content.get('math_type') or block.get('math_type') or '').lower()
+                    if isinstance(math_content, str) and math_content.strip():
+                        latex = math_content.strip()
+                    elif isinstance(math_content, dict):
+                        latex = self._stringify_mineru_value(math_content)
+                    elif isinstance(math_content, list):
+                        latex = ''.join(str(x) for x in math_content if x)
+                    else:
+                        # 兜底：从整个 content 字典提取
+                        latex = self._stringify_mineru_value(block_content)
+                else:
+                    latex = self._stringify_mineru_value(block_content)
+
+                latex = self._wrap_latex_content(latex, math_type)
+                if not latex:
+                    continue
+
+                content_items.append(
+                    {
+                        'item_type': 'formula',
+                        'level': None,
+                        'content': latex,
+                        'bbox': self._block_bbox(block),
+                        'page_number': page_number,
+                        'order_index': order,
+                    }
+                )
+                order += 1
+                continue
+
+            if block_type in ('list', 'index') or (
+                isinstance(nested_content, dict) and nested_content.get('list_items')
+            ):
+                text = self._render_list_content(nested_content)
+                if text:
+                    content_items.append(
+                        {
+                            'item_type': 'paragraph',
+                            'level': None,
+                            'content': text,
+                            'bbox': self._block_bbox(block),
+                            'page_number': page_number,
+                            'order_index': order,
+                        }
+                    )
+                    order += 1
+                continue
+
+            block_content = block.get('content')
+            if isinstance(block_content, dict):
+                if 'paragraph_content' in block_content:
+                    text = self._render_rich_content(block_content.get('paragraph_content'))
+                elif 'title_content' in block_content:
+                    text = self._render_rich_content(block_content.get('title_content'))
+                    title_level = block_content.get('level') or block.get('level') or level
+                    if text:
+                        content_items.append(
+                            {
+                                'item_type': 'heading',
+                                'level': self._to_int(title_level, default=1),
+                                'content': text,
+                                'bbox': self._block_bbox(block),
+                                'page_number': page_number,
+                                'order_index': order,
+                            }
+                        )
+                        order += 1
+                    continue
+                elif block_content.get('list_items'):
+                    text = self._render_list_content(block_content)
+                else:
+                    text = ''
+            else:
+                text = ''
+
+            if not text:
+                text = self._stringify_mineru_value(
+                    block.get('text')
+                    or block_content
+                    or block.get('html')
+                    or block.get('caption')
+                    or ''
+                )
+                text = normalize_text(text)
             if not text:
                 continue
 
@@ -380,6 +694,7 @@ class MinerUParser:
                     'item_type': item_type,
                     'level': item_level,
                     'content': text,
+                    'bbox': self._block_bbox(block),
                     'page_number': page_number,
                     'order_index': order,
                 }
@@ -409,6 +724,7 @@ class MinerUParser:
                     'item_type': 'paragraph',
                     'level': None,
                     'content': text,
+                    'bbox': None,
                     'page_number': None,
                     'order_index': order,
                 }
@@ -427,14 +743,15 @@ class MinerUParser:
             if heading:
                 flush_paragraph()
                 content_items.append(
-                    {
-                        'item_type': 'heading',
-                        'level': len(heading.group(1)),
-                        'content': normalize_text(heading.group(2)),
-                        'page_number': None,
-                        'order_index': order,
-                    }
-                )
+                {
+                    'item_type': 'heading',
+                    'level': len(heading.group(1)),
+                    'content': normalize_text(heading.group(2)),
+                    'bbox': None,
+                    'page_number': None,
+                    'order_index': order,
+                }
+            )
                 order += 1
                 i += 1
                 continue
@@ -442,13 +759,16 @@ class MinerUParser:
             image = re.match(r'^!\[(.*?)\]\((.*?)\)', line)
             if image:
                 flush_paragraph()
+                caption = normalize_text(image.group(1) or '')
+                image_path = image.group(2) or None
+                md_image = self._build_image_markdown(caption, image_path)
                 figures_tables.append(
                     {
                         'type': 'figure',
-                        'caption': normalize_text(image.group(1) or 'Figure extracted by MinerU'),
+                        'caption': caption or 'Figure extracted by MinerU',
                         'page_number': None,
-                        'image_path': image.group(2) or None,
-                        'extracted_text': line,
+                        'image_path': image_path,
+                        'extracted_text': md_image,
                         'order_index': len(figures_tables),
                     }
                 )
@@ -456,13 +776,13 @@ class MinerUParser:
                     {
                         'item_type': 'figure',
                         'level': None,
-                        'content': line,
+                        'content': md_image,
+                        'bbox': None,
                         'page_number': None,
                         'order_index': order,
                     }
                 )
                 order += 1
-
                 i += 1
                 continue
 
@@ -485,9 +805,9 @@ class MinerUParser:
                 content_items.append(
                     {
                         'item_type': 'table',
-
                         'level': None,
                         'content': table_text,
+                        'bbox': None,
                         'page_number': None,
                         'order_index': order,
                     }
@@ -507,15 +827,23 @@ class MinerUParser:
     # ======================== 辅助方法 ========================
 
     @staticmethod
-    def _build_image_markdown(caption: str, image_path) -> str:
-        """将图片组装为标准 Markdown 图片语法 ![caption](image_path)。
-        自动将 Windows 反斜杠转为正斜杠，确保 URL 有效。"""
+    def _build_image_markdown(caption: str, image_path, footnote: str = '') -> str:
+        """组装图片 Markdown：图片行 + 可见图题（与 MinerU 原生 .md 一致）。
+
+        图题放在图片下方独立一行，而不是写在 alt 文本里（alt 在浏览器中不可见）。
+        """
         cap = (caption or '').strip()
+        note = (footnote or '').strip()
         path = str(image_path or '').strip()
         if path:
             path = path.replace('\\', '/')
-            return f'![{cap}]({path})'
-        return cap
+            lines = [f'![]({path})']
+            if cap:
+                lines.append(cap)
+            if note:
+                lines.append(note)
+            return '\n'.join(lines)
+        return normalize_text('\n'.join(x for x in [cap, note] if x))
 
     @staticmethod
     def _format_table_body(raw_body) -> str:
@@ -575,7 +903,7 @@ class MinerUParser:
 
     @staticmethod
     def _collect_output_images(output_dir: Path, figures_tables: list[dict]) -> dict[str, bytes]:
-        """在目录被清理前，收集所有被引用的图片文件内容。"""
+        """解析阶段从 MinerU 输出目录读取图片字节，供 pipeline 上传 MinIO。"""
         import logging
         logger = logging.getLogger(__name__)
 
@@ -595,7 +923,7 @@ class MinerUParser:
             if not img_file.is_absolute():
                 img_file = output_dir / img_file
             if not img_file.is_file():
-                candidates = list(output_dir.rglob(img_file.name))
+                candidates = list(output_dir.rglob(Path(img_path).name))
                 if candidates:
                     img_file = candidates[0]
                 else:
@@ -604,8 +932,7 @@ class MinerUParser:
                     continue
 
             try:
-                # 使用正斜杠作为 key，与 _build_image_markdown 保持一致
-                normalized_key = img_path.replace('\\', '/')
+                normalized_key = str(img_path).replace('\\', '/')
                 image_data[normalized_key] = img_file.read_bytes()
                 found += 1
             except Exception as e:
@@ -617,6 +944,7 @@ class MinerUParser:
         return image_data
 
     # ============================================================
+
     def _extract_metadata(self, markdown_text: str, content_items: list[dict], filename: str) -> dict:
         title = ''
 
@@ -839,6 +1167,18 @@ class MinerUParser:
             item['content'] = text
             cleaned_items.append(item)
 
+        # ---------- 2.4 修复 MinerU 切割错误的行内定界符 ----------
+        for item in cleaned_items:
+            if item.get('item_type') not in ('paragraph', 'list', 'table'):
+                continue
+            content = item.get('content', '')
+            if '$$' in content and '$' in content:
+                item['content'] = re.sub(
+                    r'(\$[^$\n]*?)\$\$(\\[a-zA-Z]+)',
+                    r'\1$ $\2',
+                    content,
+                )
+
         # ---------- 2.5 公式升维：检测被 MinerU 误判为 paragraph 的 LaTeX 公式 ----------
         for item in cleaned_items:
             if item.get('item_type') not in ('paragraph', 'list'):
@@ -848,26 +1188,37 @@ class MinerUParser:
             if not content:
                 continue
 
-            # MinerU 已输出完整 $$...$$ 包裹，只需升维
+            # MinerU 已输出完整 $$...$$ 包裹，只需升维并规范化 LaTeX
             if content.startswith('$$') and content.endswith('$$'):
+                inner = self._normalize_latex_for_katex(content[2:-2])
+                item['content'] = f'$$\n{inner}\n$$'
                 item['item_type'] = 'formula'
                 continue
 
-            # 无 $$ 包裹但有 LaTeX 命令 → 补包裹后升维
-            if self._FORMULA_SIGNAL_RE.search(content):
-                # 去掉尾部可能附着的孤立 $$
+            # 无 $$ 包裹但有 LaTeX 命令 → 补包裹后升维（跳过中英文混排 / 行内公式段落）
+            if self._should_upgrade_paragraph_to_formula(content):
                 content = self._ORPHAN_CLOSING_RE.sub('', content).strip()
-                item['content'] = '$$\n' + content + '\n$$'
+                content = self._normalize_latex_for_katex(content)
+
+                if content.count(r'\tag') > 1:
+                    content = re.sub(r'(\\tag\{[^}]+\})\s*', r'\1 \\\\ \n', content)
+                    content = re.sub(r' \\\\ \n$', '\n', content)
+                    item['content'] = '$$\n\\begin{align}\n' + content + '\\end{align}\n$$'
+                else:
+                    item['content'] = '$$\n' + content + '\n$$'
+
                 item['item_type'] = 'formula'
 
         # ---------- 3. 硬回车断行与引用割裂合并（中英文） ----------
         final_items = []
         for item in cleaned_items:
             curr_type = item.get('item_type')
+
             if final_items and curr_type in ('paragraph', 'list') and final_items[-1].get('item_type') in (
             'paragraph', 'list'):
                 prev_text = final_items[-1]['content'].strip()
                 curr_text = item['content'].strip()
+
                 ends_without_period = not re.search(r'[。！？：:;.!?]["\u201c\u201d\'\u2019\)\]）】]?$', prev_text)
                 starts_with_citation = bool(re.match(r'^\[\s*\d+(?:\s*[,，\-]\s*\d+)*\]', curr_text))
                 is_standalone_citation = bool(re.match(r'^\[\s*\d+(?:\s*[,，\-]\s*\d+)*\][。！？.!?]?$', curr_text))
@@ -895,6 +1246,7 @@ class MinerUParser:
                     not re.match(r'^\[\s*\d+', curr_text)
                     and self._EN_REF_CONTINUATION_RE.search(curr_text)
                 )
+
                 should_merge = False
 
                 if ends_without_period:
@@ -916,6 +1268,10 @@ class MinerUParser:
 
                 if should_merge:
                     final_items[-1]['item_type'] = 'paragraph'
+                    if not final_items[-1].get('page_number') and item.get('page_number'):
+                        final_items[-1]['page_number'] = item.get('page_number')
+                    if not final_items[-1].get('bbox') and item.get('bbox'):
+                        final_items[-1]['bbox'] = item.get('bbox')
                     if re.search(r'[a-zA-Z0-9]$', prev_text) and re.match(r'^[a-zA-Z0-9\[\(]', curr_text):
                         final_items[-1]['content'] = f"{prev_text} {curr_text}"
                     else:
@@ -934,9 +1290,22 @@ class MinerUParser:
         if isinstance(value, list):
             return '\n'.join(self._stringify_mineru_value(x) for x in value if x is not None)
         if isinstance(value, dict):
-            for key in ('text', 'content', 'html', 'caption'):
+            if value.get('list_items'):
+                return self._render_list_content(value)
+            if 'item_content' in value:
+                return self._render_rich_content(value.get('item_content'))
+            for key in ('math_content', 'text', 'content', 'html', 'caption'):
                 if key in value:
                     return self._stringify_mineru_value(value.get(key))
+            for key in (
+                'page_header_content',
+                'page_footer_content',
+                'page_number_content',
+                'title_content',
+                'paragraph_content',
+            ):
+                if key in value:
+                    return self._render_rich_content(value.get(key))
             return json.dumps(value, ensure_ascii=False)
         return str(value)
 

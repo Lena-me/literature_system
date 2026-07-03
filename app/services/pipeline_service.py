@@ -16,11 +16,14 @@ from app.db.mysql import celery_db
 from app.integrations.document_parser.parser_factory import get_document_parser
 from app.integrations.embeddings.bge_embedding import BGEEmbedding
 from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
-from app.integrations.milvus.client import MilvusChunkStore
+from app.integrations.milvus.client import get_milvus_store
 from app.integrations.object_storage.minio_storage import MinioStorage
 from app.models import ContentItem, FiguresTable, Paper, PaperExtractedInfo, TextChunk
 from app.utils.json_utils import dumps, loads
-from app.utils.text_utils import semantic_chunks
+from app.utils.chunk_quality import is_bad_section_title
+from app.utils.content_filter import is_administrative_text, is_likely_cover_image
+from app.utils.mineru_text import unwrap_mineru_json_text
+from app.utils.text_utils import normalize_text, semantic_chunks
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -31,7 +34,7 @@ class PaperPipelineService:
         self.storage = MinioStorage()
         self.parser = get_document_parser()
         self.embedding = BGEEmbedding()
-        self.vdb = MilvusChunkStore()
+        self.vdb = get_milvus_store()
         self.llm = OpenAICompatibleLLM() if settings.enable_llm_extract else None
 
     def parse_extract_vectorize(self, paper_id: int) -> None:
@@ -45,7 +48,6 @@ class PaperPipelineService:
         parsed = self.parser.parse(pdf_bytes, paper['original_filename'])
         logger.info('[paper=%s] Parsing done, %d content items, %d figures/tables', paper_id, len(parsed.get('content_items', [])), len(parsed.get('figures_tables', [])))
 
-        # 将 MinerU 提取的图片上传到 MinIO，替换本地路径为可访问 URL
         self._upload_and_replace_images(parsed, paper_id)
 
         self._replace_parsed_content(paper_id, parsed)
@@ -197,6 +199,7 @@ class PaperPipelineService:
                     item_type=item.get('item_type', 'paragraph'),
                     level=item.get('level'),
                     content=item.get('content', ''),
+                    bbox=item.get('bbox'),
                     page_number=item.get('page_number'),
                     order_index=item.get('order_index', 0),
                 ))
@@ -645,21 +648,33 @@ JSON 示例：
             items = result.scalars().all()
 
         current_section_title = ''
-        section_map: dict[int, str] = {}
+        in_bad_section = False
+        skip_types = {'page_header', 'page_footer', 'page_number'}
+        loaded: list[dict] = []
         for item in items:
             if item.item_type == 'heading':
                 current_section_title = (item.content or '')[:200]
-            section_map[item.id] = current_section_title
-
-        return [
-            {
-                'section_id': x.id,
-                'content': x.content,
-                'page_number': x.page_number,
-                'section_title': section_map.get(x.id, ''),
+                in_bad_section = is_bad_section_title(current_section_title)
+                continue
+            if item.item_type in skip_types or in_bad_section:
+                continue
+            content = unwrap_mineru_json_text(item.content or '').strip()
+            if not content or content.startswith('![]('):
+                continue
+            item_dict = {
+                'section_id': item.id,
+                'content': unwrap_mineru_json_text(item.content or ''),
+                'page_number': item.page_number,
+                'section_title': current_section_title,
+                'order_index': item.order_index,
+                'item_type': item.item_type,
             }
-            for x in items
-        ]
+            if is_administrative_text(content):
+                continue
+            if is_likely_cover_image(item_dict):
+                continue
+            loaded.append(item_dict)
+        return loaded
 
     def _insert_text_chunks(self, paper_id: int, chunks: list[dict], context_prefix: str = '') -> list[dict]:
         if not chunks:
@@ -691,7 +706,7 @@ JSON 示例：
                     'paper_id': paper_id,
                     'page_number': item['model'].page_number,
                     'section_title': (item['chunk'].get('section_title') or '')[:300],
-                    'text': ((context_prefix or '') + item['model'].chunk_text)[:6000],
+                    'text': (item['model'].chunk_text or '')[:6000],
                 }
                 for item in rows
             ]

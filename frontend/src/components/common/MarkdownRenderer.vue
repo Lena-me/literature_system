@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import MarkdownIt from 'markdown-it'
-import mk from 'markdown-it-katex'
 import { computed } from 'vue'
+import 'katex/dist/katex.min.css'
+import { renderChatMarkdownHtml } from '@/utils/mathRender'
 
 const props = defineProps<{ content: string }>()
 
-const md = new MarkdownIt({ html: true, linkify: true, breaks: true }).use(mk)
+const md = new MarkdownIt({ html: true, linkify: true, breaks: true })
 
 const html = computed(() => {
   let raw = props.content || ''
-  // ★ 将 [来源1]、[2] 等引用标记替换为可点击的 sup 角标
-  // 先替换 [来源N]，再替换 [N]（避免 [来源1] 被误匹配两次）
+
+  // 引用角标 [1] / [来源1] — 在公式规范化之前处理，避免与 [ formula ] 冲突
   raw = raw.replace(
     /(?<![\w<])\[来源(\d{1,2})\](?![\w>])/g,
     (_match: string, num: string) => {
@@ -25,7 +26,8 @@ const html = computed(() => {
       return `<sup class="citation-mark" data-source-index="${idx}">[${num}]</sup>`
     },
   )
-  return md.render(raw)
+
+  return renderChatMarkdownHtml(raw, s => md.render(s))
 })
 </script>
 <template><article class="markdown-body" v-html="html" /></template>
@@ -44,6 +46,39 @@ const html = computed(() => {
 .markdown-body :deep(li) { margin: 4px 0; }
 .markdown-body :deep(p) { margin: 8px 0; }
 .markdown-body :deep(hr) { border: none; border-top: 1px solid var(--academic-border); margin: 16px 0; }
+
+.markdown-body :deep(.formula-display) {
+  margin: 12px 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+  text-align: center;
+  background: rgba(37, 99, 235, 0.03);
+  border-radius: 10px;
+}
+
+.markdown-body :deep(.katex-display) {
+  margin: 0.6em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-body :deep(.katex) {
+  font-size: 1.05em;
+}
+
+.markdown-body :deep(.math-inline) {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 0 1px;
+}
+
+.markdown-body :deep(strong .math-inline) {
+  font-weight: 700;
+}
+
+.markdown-body :deep(li .math-inline) {
+  vertical-align: middle;
+}
 
 /* ★ 引用角标样式 */
 .markdown-body :deep(.citation-mark) {

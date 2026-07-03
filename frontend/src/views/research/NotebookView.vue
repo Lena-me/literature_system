@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useNotebookStore } from '@/stores/notebook'
 import { papersApi } from '@/api/papers'
 import { ElMessage } from 'element-plus'
-import type { Source } from '@/types/domain'
+import type { RelatedVisual, Source } from '@/types/domain'
 import SourceBar from '@/components/notebook/SourceBar.vue'
 import MessageList from '@/components/notebook/MessageList.vue'
 import ChatInput from '@/components/notebook/ChatInput.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
+import { navigateSourceInPdf, extractHighlightText, navigateVisualInPdf } from '@/utils/sourceNavigation'
 import SuggestedQuestions from '@/components/notebook/SuggestedQuestions.vue'
 import MultiPaperComparePanel from '@/components/notebook/MultiPaperComparePanel.vue'
 
@@ -107,13 +108,24 @@ async function onSourceClick(source: Source) {
   notebook.openReadingDrawer(
     source.paper_id,
     source.page_number,
-    source.snippet || source.text
+    extractHighlightText(source)
   )
   pdfPage.value = source.page_number || 1
-  pdfHighlight.value = source.snippet || source.text || ''
+  pdfHighlight.value = extractHighlightText(source)
+  drawerTab.value = 'pdf'
   await loadPdf(source.paper_id)
-  await new Promise(r => setTimeout(r, 200))
-  pdfReaderRef.value?.jumpTo?.(pdfPage.value, pdfHighlight.value)
+  await nextTick()
+  await navigateSourceInPdf(pdfReaderRef.value, source, 400)
+}
+
+async function onVisualClick(source: Source, visual: RelatedVisual) {
+  notebook.openReadingDrawer(source.paper_id, visual.page_number, '')
+  pdfPage.value = visual.page_number || 1
+  pdfHighlight.value = ''
+  drawerTab.value = 'pdf'
+  await loadPdf(source.paper_id)
+  await nextTick()
+  await navigateVisualInPdf(pdfReaderRef.value, visual, source.paper_id, 400)
 }
 
 async function loadPdf(paperId: number) {
@@ -199,7 +211,7 @@ function onOldUrlCleanup(url: string) {
         </div>
         <template v-else>
           <SuggestedQuestions />
-          <MessageList @source-click="onSourceClick" />
+          <MessageList @source-click="onSourceClick" @visual-click="onVisualClick" />
         </template>
       </div>
       <ChatInput

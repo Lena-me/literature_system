@@ -66,7 +66,12 @@ def _load_model() -> SentenceTransformer | None:
 
     try:
         _model = SentenceTransformer(local_path, device=settings.embedding_device)
-        logger.info('BGE embedding model loaded: %s (dims=%d)', local_path, _model.get_sentence_embedding_dimension())
+        logger.info(
+            'BGE embedding model loaded: %s (dims=%d, device=%s)',
+            local_path,
+            _model.get_sentence_embedding_dimension(),
+            _model.device,
+        )
         return _model
     except Exception as e:
         _model_load_failed = True

@@ -67,7 +67,8 @@ def _load_model() -> CrossEncoder | None:
 
     try:
         _model = CrossEncoder(local_path, device=settings.reranker_device)
-        logger.info('BGE reranker model loaded: %s', local_path)
+        dev = getattr(getattr(_model, 'model', None), 'device', settings.reranker_device)
+        logger.info('BGE reranker model loaded: %s (device=%s)', local_path, dev)
         return _model
     except Exception as e:
         _model_load_failed = True
@@ -82,10 +83,19 @@ class BGEReranker:
         model = _load_model()
         if model is None:
             raise RuntimeError('BGE reranker model not available')
-        pairs = [(query, c.get('text') or c.get('chunk_text') or c.get('snippet') or '') for c in candidates]
+        max_chars = settings.rag_rerank_text_max_chars
+        pairs = [
+            (
+                query,
+                ((c.get('text') or c.get('chunk_text') or c.get('snippet') or '')[:max_chars]),
+            )
+            for c in candidates
+        ]
         scores = model.predict(pairs).tolist()
         ranked = []
         for item, score in zip(candidates, scores, strict=False):
-            copied = dict(item); copied['rerank_score'] = float(score); ranked.append(copied)
+            copied = dict(item)
+            copied['rerank_score'] = float(score)
+            ranked.append(copied)
         ranked.sort(key=lambda x: x['rerank_score'], reverse=True)
         return ranked[:top_n]

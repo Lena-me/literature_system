@@ -1,10 +1,22 @@
+<script lang="ts">
+import StreamProgress from '@/components/notebook/StreamProgress.vue'
+
+export default {
+  components: { StreamProgress },
+}
+</script>
+
 <script setup lang="ts">
 import { useNotebookStore } from '@/stores/notebook'
-import type { Source } from '@/types/domain'
+import type { RelatedVisual, Source } from '@/types/domain'
+import { visualLabel } from '@/utils/sourceNavigation'
 import MarkdownRenderer from '@/components/common/MarkdownRenderer.vue'
 
 const notebook = useNotebookStore()
-const emit = defineEmits<{ sourceClick: [source: Source] }>()
+const emit = defineEmits<{
+  sourceClick: [source: Source]
+  visualClick: [source: Source, visual: RelatedVisual]
+}>()
 
 interface GroupedChunk extends Source {
   ref_index: number   // 原始 sources 数组中的位置 (0-based)
@@ -35,7 +47,9 @@ function groupSourcesByPaper(sources: Source[]): PaperGroup[] {
   const groups = new Map<number, GroupedChunk[]>()
   sources.forEach((s, i) => {
     if (!groups.has(s.paper_id)) groups.set(s.paper_id, [])
-    groups.get(s.paper_id)!.push({ ...s, ref_index: i, ref_label: `[${i + 1}]` })
+    const refIndex = (s as GroupedChunk).ref_index ?? i
+    const refLabel = (s as GroupedChunk).ref_label ?? `[${i + 1}]`
+    groups.get(s.paper_id)!.push({ ...s, ref_index: refIndex, ref_label: refLabel })
   })
 
   return Array.from(groups.entries()).map(([paper_id, chunks]) => ({
@@ -44,6 +58,29 @@ function groupSourcesByPaper(sources: Source[]): PaperGroup[] {
     chunk_count: chunks.length,
     chunks,
   }))
+}
+
+function collectPaperVisuals(chunks: GroupedChunk[]): RelatedVisual[] {
+  const seen = new Set<number>()
+  const visuals: RelatedVisual[] = []
+  for (const chunk of chunks) {
+    for (const v of chunk.related_figures ?? []) {
+      if (seen.has(v.id)) continue
+      seen.add(v.id)
+      visuals.push(v)
+    }
+  }
+  return visuals
+}
+
+function countPaperVisuals(sources: Source[]): number {
+  const seen = new Set<number>()
+  for (const s of sources) {
+    for (const v of s.related_figures ?? []) {
+      seen.add(v.id)
+    }
+  }
+  return seen.size
 }
 
 /**
@@ -101,59 +138,56 @@ function handleCitationClick(e: MouseEvent) {
 
       <template v-else>
         <div class="bubble assistant-bubble">
-          <MarkdownRenderer :content="m.content || ''" />
+          <StreamProgress v-if="m.streamStage && !m.content" :stage="m.streamStage" />
+          <MarkdownRenderer v-if="m.content" :content="m.content" />
         </div>
 
-        <!-- ★ 聚合引用来源 — 按文献分组，树状结构 -->
-        <div v-if="m.sources?.length" class="sources-section">
+        <!-- ★ 引用图表：点击跳转 PDF 对应位置；正文 [n] 角标仍可定位文字 -->
+        <div v-if="m.sources?.length && countPaperVisuals(m.sources)" class="sources-section">
           <div class="sources-head">
-            <span>📎 引用来源 — {{ m.sources.length }} 个片段 · {{ groupSourcesByPaper(m.sources).length }} 篇文献</span>
+            <span>
+              📎 相关图表 — {{ countPaperVisuals(m.sources) }} 张
+              · {{ groupSourcesByPaper(m.sources).length }} 篇文献
+            </span>
           </div>
 
           <!-- 父级：文献组 -->
           <div
-            v-for="group in groupSourcesByPaper(m.sources)"
+            v-for="group in groupSourcesByPaper(m.sources).filter(g => collectPaperVisuals(g.chunks).length)"
             :key="group.paper_id"
             class="paper-group"
           >
             <div class="paper-group-header">
               <span class="paper-icon">📄</span>
               <span class="paper-group-title">{{ group.paper_title }}</span>
-              <span class="paper-group-meta">{{ group.chunk_count }} 个引用片段</span>
             </div>
 
-            <!-- 子级：Chunk 行 -->
             <div
-              v-for="chunk in group.chunks"
-              :key="chunk.ref_index"
-              class="chunk-row"
-              tabindex="0"
-              role="button"
-              @click="emit('sourceClick', chunk)"
-              @keydown.enter.prevent="emit('sourceClick', chunk)"
+              v-if="collectPaperVisuals(group.chunks).length"
+              class="paper-visuals"
+              @click.stop
             >
-              <!-- 角标 -->
-              <span class="chunk-badge">{{ chunk.ref_label }}</span>
-
-              <!-- 定位信息 -->
-              <span class="chunk-location">
-                第 {{ chunk.page_number || '?' }} 页<span v-if="chunk.section_title"> · {{ chunk.section_title }}</span>
-              </span>
-
-              <!-- ★ 片段文本预览（前 30 字） — 使用 chunk.text 真实内容 -->
-              <span class="chunk-text">
-                {{ (chunk.text || chunk.snippet || '').slice(0, 30) }}{{ (chunk.text || chunk.snippet || '').length > 30 ? '...' : (chunk.text || chunk.snippet) ? '' : '暂无片段内容' }}
-              </span>
+              <button
+                v-for="visual in collectPaperVisuals(group.chunks)"
+                :key="visual.id"
+                type="button"
+                class="visual-card"
+                :title="visual.caption || ''"
+                @click="emit('visualClick', { paper_id: group.paper_id }, visual)"
+              >
+                <img
+                  v-if="visual.image_path"
+                  :src="visual.image_path"
+                  :alt="visual.caption || 'figure'"
+                  class="visual-image"
+                />
+                <div v-else class="visual-placeholder">{{ visual.type === 'table' ? '表' : '图' }}</div>
+                <span class="visual-caption">{{ visualLabel(visual) }}</span>
+              </button>
             </div>
           </div>
         </div>
       </template>
-    </div>
-
-    <!-- ★ 流式中 -->
-    <div v-if="notebook.isStreaming" class="typing-indicator">
-      <span>AI 正在思考</span>
-      <span class="dots"><i>.</i><i>.</i><i>.</i></span>
     </div>
   </div>
 </template>
@@ -222,54 +256,62 @@ function handleCitationClick(e: MouseEvent) {
   min-width: 0;
 }
 
-.paper-group-meta {
-  font-size: 11px;
-  color: var(--academic-text-muted);
-  flex-shrink: 0;
+/* 图表画廊 */
+.paper-visuals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 4px 0 8px;
 }
 
-/* 子级：Chunk 行 */
-.chunk-row {
+.visual-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 140px;
+  padding: 0;
+  border: 1px solid var(--academic-border);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.visual-card:hover {
+  border-color: rgba(37, 99, 235, 0.4);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
+}
+
+.visual-image {
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+  background: #f8fafc;
+}
+
+.visual-placeholder {
+  width: 100%;
+  height: 96px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s;
-  outline: none;
-}
-
-.chunk-row:hover,
-.chunk-row:focus-visible {
-  background: var(--academic-primary-light);
-}
-
-.chunk-badge {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--academic-primary);
-  background: rgba(37, 99, 235, 0.1);
-  padding: 1px 6px;
-  border-radius: 6px;
-  flex-shrink: 0;
-}
-
-.chunk-location {
-  font-size: 12px;
+  justify-content: center;
+  background: #f1f5f9;
   color: var(--academic-text-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
+  font-size: 24px;
+  font-weight: 600;
 }
 
-.chunk-text {
-  font-size: 12px;
-  color: var(--academic-text-body);
+.visual-caption {
+  font-size: 11px;
+  color: var(--academic-text-muted);
+  padding: 6px 8px;
+  line-height: 1.35;
+  text-align: left;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 /* ===== 流式指示 ===== */

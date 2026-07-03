@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 from urllib.parse import quote
@@ -15,14 +16,48 @@ from app.core.dependencies import get_current_user
 from app.db.mysql import get_db
 from app.db.redis import redis_client
 from app.integrations.object_storage.minio_storage import MinioStorage
-from app.models import Category, ContentItem, Paper, ParseTask, User
+from app.models import Category, ContentItem, FiguresTable, Paper, ParseTask, User
 from app.schemas import CategoryIn, ChunkUploadCompleteIn, ChunkUploadInitIn, PaperOut, PaperUpdateIn
 from app.services.quota_service import QuotaService
 from app.utils.json_utils import dumps, loads
+from app.utils.mineru_text import unwrap_mineru_json_text
 from app.workers.celery_app import celery_app
 
 settings = get_settings()
 router = APIRouter(prefix='/papers', tags=['文献管理'])
+
+_FIGURE_IMAGE_LINE_RE = re.compile(r'^!\[[^\]]*\]\(([^)]+)\)\s*$')
+_DEFAULT_FIGURE_CAPTION = 'Figure extracted by MinerU'
+
+
+def _build_figure_content_from_db(content: str, figure: FiguresTable) -> str:
+    """用 figures_tables.image_path（MinIO URL）组装可渲染的图片 Markdown。"""
+    image_url = (figure.image_path or '').strip()
+    if not image_url:
+        return content
+
+    caption_lines: list[str] = []
+    has_image_line = False
+    for line in (content or '').split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _FIGURE_IMAGE_LINE_RE.match(stripped):
+            has_image_line = True
+            continue
+        caption_lines.append(stripped)
+
+    caption = '\n'.join(caption_lines).strip()
+    if not caption:
+        db_caption = (figure.caption or '').strip()
+        if db_caption and db_caption != _DEFAULT_FIGURE_CAPTION:
+            caption = db_caption
+    elif not has_image_line and len(caption_lines) == 1:
+        caption = caption_lines[0]
+
+    if caption:
+        return f'![]({image_url})\n{caption}'
+    return f'![]({image_url})'
 
 
 async def _create_paper_from_bytes(db: AsyncSession, user: User, filename: str, data: bytes) -> Paper:
@@ -320,7 +355,12 @@ async def delete_paper(paper_id: int, db: AsyncSession = Depends(get_db), user: 
 
 
 @router.get('/{paper_id}/content')
-async def paper_content(paper_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def paper_content(
+    paper_id: int,
+    include_all: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     paper = await db.get(Paper, paper_id)
     if not paper or paper.user_id != user.id or paper.is_deleted:
         raise HTTPException(404, '文献不存在')
@@ -330,17 +370,44 @@ async def paper_content(paper_id: int, db: AsyncSession = Depends(get_db), user:
             select(ContentItem).where(ContentItem.paper_id == paper_id).order_by(ContentItem.order_index.asc())
         )
     ).scalars().all()
-    return [
-        {
-            'id': r.id,
-            'type': r.item_type,
-            'level': r.level,
-            'content': r.content,
-            'page_number': r.page_number,
-            'order_index': r.order_index,
-        }
-        for r in rows
-    ]
+    figure_rows = (
+        await db.execute(
+            select(FiguresTable)
+            .where(FiguresTable.paper_id == paper_id, FiguresTable.type == 'figure')
+            .order_by(FiguresTable.order_index.asc())
+        )
+    ).scalars().all()
+    figure_idx = 0
+    result = []
+    for r in rows:
+        content = r.content or ''
+        item_type = r.item_type
+        if item_type == 'figure' and figure_idx < len(figure_rows):
+            figure = figure_rows[figure_idx]
+            figure_idx += 1
+            if figure.image_path:
+                content = _build_figure_content_from_db(content, figure)
+        content = unwrap_mineru_json_text(content)
+        result.append(
+            {
+                'id': r.id,
+                'type': item_type,
+                'item_type': item_type,
+                'level': r.level,
+                'content': content,
+                'bbox': r.bbox,
+                'page_number': r.page_number,
+                'order_index': r.order_index,
+            }
+        )
+
+    if not include_all:
+        from app.utils.content_filter import filter_content_items_for_display
+
+        paper_title = paper.title or paper.original_filename
+        result = filter_content_items_for_display(result, paper_title=paper_title)
+
+    return result
 
 
 @router.post('/{paper_id}/reparse')

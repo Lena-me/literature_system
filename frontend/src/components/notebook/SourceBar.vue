@@ -14,6 +14,7 @@ const paperSearchKeyword = ref('')
 const availablePapers = ref<Paper[]>([])
 const selectedPaperIds = ref<number[]>([])
 const pickerLoading = ref(false)
+const confirming = ref(false)
 
 async function openPicker() {
   selectedPaperIds.value = []
@@ -45,9 +46,19 @@ async function confirmAddPapers() {
     showPicker.value = false
     return
   }
-  await notebook.addSources(selectedPaperIds.value)
+  const count = selectedPaperIds.value.length
+  const ids = [...selectedPaperIds.value]
+  selectedPaperIds.value = []
   showPicker.value = false
-  ElMessage.success(`已添加 ${selectedPaperIds.value.length} 篇文献`)
+  confirming.value = true
+  try {
+    await notebook.addSources(ids)
+    ElMessage.success(`已添加 ${count} 篇文献`)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '添加文献失败')
+  } finally {
+    confirming.value = false
+  }
 }
 
 function removePaperFromSession(paperId: number) {
@@ -65,19 +76,22 @@ defineExpose({ openPicker })
   <div class="source-bar">
     <!-- 文献筹码卡片 -->
     <div class="chips">
-      <button
+      <div
         v-for="paper in notebook.activeSources"
         :key="paper.id"
         class="chip"
         :class="{ 'parsed': paper.parse_status === 'completed' }"
+        role="button"
+        tabindex="0"
         @click="handleChipClick(paper.id)"
+        @keydown.enter.prevent="handleChipClick(paper.id)"
         :title="`${paper.title}${paper.parse_status !== 'completed' ? ' (解析中...)' : ''}`"
       >
         <span class="chip-icon">📄</span>
         <span class="chip-text">{{ paper.title || paper.original_filename }}</span>
         <span v-if="paper.parse_status !== 'completed'" class="chip-status">{{ paper.parse_status }}</span>
-        <button class="chip-remove" @click.stop="removePaperFromSession(paper.id)" title="移出会话">×</button>
-      </button>
+        <button type="button" class="chip-remove" @click.stop="removePaperFromSession(paper.id)" title="移出会话">×</button>
+      </div>
 
       <!-- 添加按钮 -->
       <button class="chip add-chip" @click="openPicker">
@@ -140,8 +154,13 @@ defineExpose({ openPicker })
 
           <div class="picker-actions">
             <span class="selected-count">已选 {{ selectedPaperIds.length }} 篇</span>
-            <button class="confirm-btn" :disabled="selectedPaperIds.length === 0" @click="confirmAddPapers">
-              确认添加
+            <button
+              type="button"
+              class="confirm-btn"
+              :disabled="selectedPaperIds.length === 0 || confirming"
+              @click.stop="confirmAddPapers"
+            >
+              {{ confirming ? '添加中...' : '确认添加' }}
             </button>
           </div>
         </div>
@@ -188,6 +207,11 @@ defineExpose({ openPicker })
   background: var(--academic-primary-light);
   border-color: var(--academic-primary);
   color: var(--academic-primary);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--academic-primary);
+  outline-offset: 2px;
 }
 
 .chip.parsed {

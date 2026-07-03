@@ -1,7 +1,13 @@
 from __future__ import annotations
+
 from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, utility
+
 from app.core.config import get_settings
+
 settings = get_settings()
+
+_store: 'MilvusChunkStore | None' = None
+
 
 class MilvusChunkStore:
     def __init__(self) -> None:
@@ -22,7 +28,11 @@ class MilvusChunkStore:
             ]
             schema = CollectionSchema(fields, description='paper text chunks with BGE vectors')
             collection = Collection(name, schema=schema, shards_num=2)
-            index_params = {'metric_type': settings.milvus_metric_type, 'index_type': settings.milvus_index_type, 'params': {'M': 16, 'efConstruction': 200}}
+            index_params = {
+                'metric_type': settings.milvus_metric_type,
+                'index_type': settings.milvus_index_type,
+                'params': {'M': 16, 'efConstruction': 200},
+            }
             collection.create_index('embedding', index_params)
         collection = Collection(name)
         collection.load()
@@ -45,17 +55,52 @@ class MilvusChunkStore:
         expr = None
         if paper_ids:
             expr = f"paper_id in {[int(x) for x in paper_ids]}"
-        params = {'metric_type': settings.milvus_metric_type, 'params': {'ef': 64}}
-        results = self.collection.search([vector], anns_field='embedding', param=params, limit=limit, expr=expr, output_fields=['chunk_id','paper_id','page_number','section_title','text'])
+        params = {'metric_type': settings.milvus_metric_type, 'params': {'ef': min(48, max(16, limit * 2))}}
+        results = self.collection.search(
+            [vector],
+            anns_field='embedding',
+            param=params,
+            limit=limit,
+            expr=expr,
+            output_fields=['chunk_id', 'paper_id', 'page_number', 'section_title', 'text'],
+        )
         output = []
         for hit in results[0]:
             ent = hit.entity
-            output.append({'chunk_id': ent.get('chunk_id'), 'paper_id': ent.get('paper_id'), 'page_number': ent.get('page_number'), 'section_title': ent.get('section_title'), 'text': ent.get('text'), 'score': float(hit.score)})
+            output.append(
+                {
+                    'chunk_id': ent.get('chunk_id'),
+                    'paper_id': ent.get('paper_id'),
+                    'page_number': ent.get('page_number'),
+                    'section_title': ent.get('section_title'),
+                    'text': ent.get('text'),
+                    'score': float(hit.score),
+                }
+            )
         return output
 
     def flush(self) -> None:
         self.collection.flush()
 
     def stats(self) -> dict:
-        self.collection.flush(); self.collection.load()
-        return {'total_vectors': self.collection.num_entities, 'collection': self.collection.name, 'index_count': len(self.collection.indexes or []), 'shard_count': getattr(self.collection, 'num_shards', 1) or 1, 'storage_mb': 0, 'avg_search_latency_ms': 0, 'p95_search_latency_ms': 0, 'search_success_rate': 1, 'recall_rate': 1, 'health_score': 100}
+        self.collection.flush()
+        self.collection.load()
+        return {
+            'total_vectors': self.collection.num_entities,
+            'collection': self.collection.name,
+            'index_count': len(self.collection.indexes or []),
+            'shard_count': getattr(self.collection, 'num_shards', 1) or 1,
+            'storage_mb': 0,
+            'avg_search_latency_ms': 0,
+            'p95_search_latency_ms': 0,
+            'search_success_rate': 1,
+            'recall_rate': 1,
+            'health_score': 100,
+        }
+
+
+def get_milvus_store() -> MilvusChunkStore:
+    global _store
+    if _store is None:
+        _store = MilvusChunkStore()
+    return _store

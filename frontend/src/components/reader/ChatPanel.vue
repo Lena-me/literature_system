@@ -1,7 +1,15 @@
+<script lang="ts">
+import StreamProgress from '@/components/notebook/StreamProgress.vue'
+
+export default {
+  components: { StreamProgress },
+}
+</script>
+
 <script setup lang="ts">
 import { ref, nextTick } from 'vue'
 import { qaApi } from '@/api/qa'
-import type { ChatMessage, Source } from '@/types/domain'
+import type { ChatMessage, Source, StreamStage } from '@/types/domain'
 import MarkdownRenderer from '@/components/common/MarkdownRenderer.vue'
 const props = defineProps<{ selectedIds: number[] }>()
 const emit = defineEmits<{ report: []; graph: []; compare: []; guide: []; sourceClick: [source: Source] }>()
@@ -17,13 +25,20 @@ async function ask(q?: string) {
   messages.value.push({ role: 'user', content: text })
   loading.value = true
   try {
-    const assistant: ChatMessage = { role: 'assistant', content: '', sources: [] }
+    const assistant: ChatMessage = { role: 'assistant', content: '', sources: [], streamStage: 'embedding' }
     messages.value.push(assistant)
     await qaApi.askStream({ question: text, paper_ids: props.selectedIds, session_id: sessionId.value }, async (event) => {
       if (event.type === 'session') sessionId.value = event.session_id
       if (event.type === 'sources') assistant.sources = event.sources
-      if (event.type === 'delta') assistant.content += event.content
-      if (event.type === 'done') assistant.content = event.answer || assistant.content
+      if (event.type === 'status' && event.stage) assistant.streamStage = event.stage as StreamStage
+      if (event.type === 'delta') {
+        if (event.content) assistant.streamStage = undefined
+        assistant.content += event.content
+      }
+      if (event.type === 'done') {
+        assistant.streamStage = undefined
+        assistant.content = event.answer || assistant.content
+      }
       await nextTick(); box.value?.scrollTo({ top: box.value.scrollHeight, behavior: 'smooth' })
     })
   } finally { loading.value = false }
@@ -49,7 +64,10 @@ defineExpose({ ask })
         <p>答案会附带文献片段来源，方便回溯核验。</p>
       </div>
       <div v-for="(m,i) in messages" :key="i" class="msg" :class="m.role">
-        <div class="bubble"><MarkdownRenderer :content="m.content" /></div>
+        <div class="bubble">
+          <StreamProgress v-if="m.role === 'assistant' && m.streamStage && !m.content" :stage="m.streamStage" />
+          <MarkdownRenderer v-if="m.content" :content="m.content" />
+        </div>
         <div v-if="m.sources?.length" class="sources">
           <el-tag v-for="(s,idx) in m.sources.slice(0,4)" :key="idx" round class="source-tag" @click="emit('sourceClick', s)">paper {{ s.paper_id }} · p.{{ s.page_number || '-' }}</el-tag>
         </div>

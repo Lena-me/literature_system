@@ -1,13 +1,32 @@
-import axios from 'axios'
+import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
 
 export const API_PREFIX = '/api/v1'
 
-export const http = axios.create({
+// 响应拦截器做了 response => response.data 解包，
+// 因此所有 http 方法的实际返回类型是 T 而非 AxiosResponse<T>。
+// 保留第二个泛型 _D 兼容旧代码中的 http.post<any, T>(...) 写法。
+interface UnwrappedInstance extends AxiosInstance {
+  request<T = any, _D = any>(config: AxiosRequestConfig): Promise<T>
+  get<T = any, _D = any>(url: string, config?: AxiosRequestConfig): Promise<T>
+  delete<T = any, _D = any>(url: string, config?: AxiosRequestConfig): Promise<T>
+  head<T = any, _D = any>(url: string, config?: AxiosRequestConfig): Promise<T>
+  options<T = any, _D = any>(url: string, config?: AxiosRequestConfig): Promise<T>
+  post<T = any, _D = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T>
+  put<T = any, _D = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T>
+  patch<T = any, _D = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T>
+}
+
+const rawHttp = axios.create({
   baseURL: API_PREFIX,
-  timeout: 60000,
-  headers: { 'Content-Type': 'application/json' }
+  timeout: 120000,
+  headers: { 'Content-Type': 'application/json' },
 })
+
+/** LLM 相关接口（推荐问题、标题生成等）耗时较长 */
+export const LLM_HTTP_TIMEOUT = 180000
+
+export const http = rawHttp as UnwrappedInstance
 
 http.interceptors.request.use(config => {
   const token = localStorage.getItem('access_token')

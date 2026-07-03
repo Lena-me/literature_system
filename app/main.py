@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import asyncio
+import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -10,6 +12,7 @@ from app.db.mysql import AsyncSessionLocal, create_all_tables
 from app.models import ModelConfig, TaskSchedulerConfig, User
 from app.utils.json_utils import dumps
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 async def seed_initial_data() -> None:
     async with AsyncSessionLocal() as db:
@@ -30,6 +33,9 @@ async def seed_initial_data() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.services.rag_service import warmup_rag_models
+
+    await asyncio.to_thread(warmup_rag_models)
     yield
 
 app = FastAPI(title=settings.app_name, version='1.0.0-doc-strict', lifespan=lifespan)

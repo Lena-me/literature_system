@@ -181,7 +181,7 @@ function initGraph() {
       const nodeData = graph.getNodeData(nodeId)
       if (nodeData) {
         selectedNode.value = nodeData
-        graph.setNodeState(nodeId, 'selected', true)
+        graph.setElementState(nodeId, 'selected', true)
       }
     })
 
@@ -271,7 +271,7 @@ function setGraphData(data: { nodes: GraphNode[]; edges: GraphEdge[] }) {
 // ===========================================================
 function closeSidebar() {
   if (graph && selectedNode.value) {
-    try { graph.setNodeState(selectedNode.value.id, 'selected', false) } catch { /* */ }
+    try { graph.setElementState(selectedNode.value.id, 'selected', false) } catch { /* */ }
   }
   selectedNode.value = null
 }

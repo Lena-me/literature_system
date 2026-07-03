@@ -65,3 +65,5 @@ CREATE TABLE `exploration_tasks` (
   CONSTRAINT `fk_explore_domain` FOREIGN KEY (`domain_id`) REFERENCES `knowledge_domains` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_explore_paper` FOREIGN KEY (`paper_id`) REFERENCES `papers` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE content_items ADD COLUMN bbox JSON NULL

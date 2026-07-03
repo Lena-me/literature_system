@@ -1,4 +1,4 @@
-import { API_PREFIX, http } from './client'
+import { API_PREFIX, http, LLM_HTTP_TIMEOUT } from './client'
 import type { ChatMessage, SessionDetail, SessionSummary, SuggestedQuestions } from '@/types/domain'
 export const qaApi = {
   ask: (payload: { question: string; paper_ids?: number[]; session_id?: number; top_k?: number }) => http.post<any, { session_id: number; answer: string; sources: any[] }>('/qa/ask', payload),
@@ -27,8 +27,17 @@ export const qaApi = {
   deleteSession: (id: number) => http.delete(`/qa/sessions/${id}`),
   messages: (sessionId: number, limit?: number, signal?: AbortSignal) => {
     const params = limit ? `?limit=${limit}` : ''
-    return http.get<any, ChatMessage[]>(`/qa/sessions/${sessionId}/messages${params}`, { signal })
+    return http.get<any, ChatMessage[]>(`/qa/sessions/${sessionId}/messages${params}`, {
+      signal,
+      timeout: LLM_HTTP_TIMEOUT,
+    })
   },
-  suggestedQuestions: (sessionId: number) => http.get<any, SuggestedQuestions>(`/qa/sessions/${sessionId}/suggested-questions`),
-  generateSessionTitle: (sessionId: number, firstMessage: string) => http.post<any, { title: string }>(`/qa/sessions/${sessionId}/generate-title`, { first_message: firstMessage }),
+  suggestedQuestions: (sessionId: number) =>
+    http.get<any, SuggestedQuestions>(`/qa/sessions/${sessionId}/suggested-questions`, { timeout: LLM_HTTP_TIMEOUT }),
+  generateSessionTitle: (sessionId: number, firstMessage: string) =>
+    http.post<any, { title: string }>(
+      `/qa/sessions/${sessionId}/generate-title`,
+      { first_message: firstMessage },
+      { timeout: LLM_HTTP_TIMEOUT },
+    ),
 }

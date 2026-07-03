@@ -13,6 +13,7 @@ import { reportsApi } from '@/api/reports'
 import { knowledgeApi } from '@/api/knowledge'
 import { featuresApi } from '@/api/features'
 import type { KnowledgeGraph, Source } from '@/types/domain'
+import { navigateSourceInPdf } from '@/utils/sourceNavigation'
 
 const papers = usePaperStore()
 const progress = ref(0)
@@ -179,7 +180,7 @@ async function onSourceClick(source: Source) {
   pdfPage.value = source.page_number || 1
   pdfHighlight.value = source.snippet || source.text || ''
   await nextTick()
-  await pdfReader.value?.jumpTo(pdfPage.value, pdfHighlight.value)
+  await navigateSourceInPdf(pdfReader.value, source, 150)
 }
 </script>
 

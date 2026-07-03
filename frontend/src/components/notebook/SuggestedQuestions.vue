@@ -9,15 +9,15 @@ const loading = ref(false)
 
 // 当会话切换或文献变化时，重新获取推荐问题
 watch(
-  () => [notebook.activeSessionId, notebook.activeSources.length],
-  async ([sessionId, sourceCount]) => {
-    if (!sessionId || sourceCount === 0) {
+  () => [notebook.activeSessionId, notebook.activeSources.map(p => p.id).join(',')] as const,
+  async ([sessionId, sourceKey]) => {
+    if (!sessionId || !sourceKey) {
       questions.value = []
       return
     }
     await fetchQuestions()
   },
-  { immediate: false }
+  { immediate: true },
 )
 
 async function fetchQuestions() {
@@ -36,7 +36,7 @@ async function fetchQuestions() {
 // 只有会话刚开始且无消息时显示
 const shouldShow = computed(() => {
   return (
-    notebook.activeMessages.length <= 1 &&
+    notebook.activeMessages.length === 0 &&
     notebook.activeSources.length > 0 &&
     (questions.value.length > 0 || loading.value)
   )
