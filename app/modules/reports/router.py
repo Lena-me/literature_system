@@ -11,14 +11,34 @@ router = APIRouter(prefix='/reports', tags=['研读报告'])
 
 @router.post('')
 async def create_report(data: ReportCreateIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    obj = await GenerationService().create_report(db, user.id, data.paper_id, data.modules, data.title)
-    user.report_generate_count += 1; await db.commit()
-    return {'id': obj.id, 'title': obj.title, 'content': loads(obj.content), 'created_at': obj.created_at}
+    try:
+        obj = await GenerationService().create_report(db, user.id, data.paper_id, data.modules, data.title)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    user.report_generate_count += 1
+    await db.commit()
+    return {
+        'id': obj.id,
+        'paper_id': obj.paper_id,
+        'title': obj.title,
+        'content': loads(obj.content),
+        'created_at': obj.created_at,
+    }
 
 @router.get('')
 async def list_reports(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     rows = (await db.execute(select(Report).where(Report.user_id == user.id).order_by(Report.created_at.desc()))).scalars().all()
     return [{'id': x.id, 'paper_id': x.paper_id, 'title': x.title, 'content': loads(x.content), 'created_at': x.created_at} for x in rows]
+
+@router.delete('/{report_id}')
+async def delete_report(report_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    report = await db.get(Report, report_id)
+    if not report or report.user_id != user.id:
+        raise HTTPException(404, '报告不存在')
+    await db.delete(report)
+    await db.commit()
+    return {'message': 'deleted'}
 
 from fastapi.responses import Response
 from io import BytesIO

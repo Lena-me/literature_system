@@ -63,6 +63,10 @@ async function handleToggle(row: any) {
   await adminApi.updateModel(row.id, { is_active: row.is_active })
   ElMessage.success('状态已更新')
 }
+
+function getRowClassName({ row }: { row: any }) {
+  return !row.is_active ? 'disabled-row' : ''
+}
 </script>
 
 <template>
@@ -88,7 +92,7 @@ async function handleToggle(row: any) {
           <el-button class="btn-secondary" @click="load">刷新</el-button>
         </div>
       </div>
-      <el-table :data="rows" height="calc(100vh - 280px)" :row-class-name="({ row }) => !row.is_active ? 'disabled-row' : ''">
+      <el-table :data="rows" height="calc(100vh - 280px)" :row-class-name="getRowClassName">
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="model_type" label="类型" width="120">
           <template #default="{ row }">

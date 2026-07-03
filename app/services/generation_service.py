@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
 from app.models import (
     ComparisonResult,
+    ContentItem,
     KnowledgeDomain,
     KnowledgeGraph,
     KnowledgeGraphPaper,
@@ -18,8 +21,585 @@ from app.utils.json_utils import dumps, loads
 
 
 class GenerationService:
+    REPORT_MODULE_META = {
+        'basic_info': {'title': '基本信息', 'fields': ['title', 'authors', 'keywords']},
+        'abstract': {'title': '摘要速览', 'fields': ['abstract']},
+        'research_question': {'title': '研究背景与核心问题', 'fields': ['research_question', 'abstract']},
+        'method': {'title': '方法 / 模型 / 技术路线', 'fields': ['method']},
+        'experiment_data': {'title': '数据集 / 实验对象 / 实验设计', 'fields': ['experiment_data']},
+        'main_results': {'title': '主要结果与结论', 'fields': ['main_results']},
+        'innovations': {'title': '创新点与贡献', 'fields': ['innovations']},
+        'limitations': {'title': '局限性与适用边界', 'fields': ['limitations']},
+        'reproducibility': {'title': '可复现性要点', 'fields': ['method', 'experiment_data', 'main_results']},
+        'future_work': {'title': '未来工作与后续研究方向', 'fields': ['future_work']},
+        'literature_trace': {'title': '文献溯源与基础知识拓展', 'fields': ['keywords', 'research_question', 'method', 'abstract']},
+        'related_papers': {'title': '同方向不同方法文献推荐', 'fields': ['research_question', 'method', 'abstract']},
+        'reading_notes': {'title': '阅读备忘与可追问问题', 'fields': []},
+    }
+
+    DEFAULT_REPORT_MODULES = [
+        'basic_info',
+        'abstract',
+        'research_question',
+        'method',
+        'experiment_data',
+        'main_results',
+        'innovations',
+        'limitations',
+        'reproducibility',
+        'future_work',
+        'literature_trace',
+        'related_papers',
+        'reading_notes',
+    ]
+
+    FIELD_LABELS = {
+        'title': '题名',
+        'authors': '作者',
+        'keywords': '关键词',
+        'abstract': '摘要',
+        'research_question': '研究问题',
+        'method': '方法 / 模型',
+        'experiment_data': '数据集 / 实验设计',
+        'main_results': '主要结果',
+        'innovations': '创新点',
+        'limitations': '局限性',
+        'future_work': '未来工作',
+    }
+
     def __init__(self) -> None:
         self.llm = OpenAICompatibleLLM()
+
+    @staticmethod
+    def _clean_report_value(value: object, limit: int = 4000) -> str:
+        if value is None:
+            return ''
+        if isinstance(value, (list, tuple, set)):
+            text = '、'.join(str(x).strip() for x in value if str(x).strip())
+        elif isinstance(value, dict):
+            parts = []
+            for key, item in value.items():
+                item_text = GenerationService._clean_report_value(item, limit=800)
+                if item_text:
+                    parts.append(f'{key}：{item_text}')
+            text = '；'.join(parts)
+        else:
+            text = str(value).strip()
+            if text.startswith(('[', '{')):
+                parsed = loads(text, default=None)
+                if parsed is not None:
+                    return GenerationService._clean_report_value(parsed, limit=limit)
+
+        if not text or text.lower() in {'null', 'none', 'nan', '[]', '{}'}:
+            return ''
+        text = ' '.join(text.split())
+        return text[:limit]
+
+    @staticmethod
+    def _extract_publication_year(value: object) -> int | None:
+        text = str(value or '')
+        match = re.search(r'\b(19|20)\d{2}\b', text)
+        if not match:
+            return None
+        year = int(match.group(0))
+        return year if 1900 <= year <= 2100 else None
+
+    @classmethod
+    def _normalize_report_modules(cls, modules: list[str] | None) -> list[str]:
+        if not modules:
+            return cls.DEFAULT_REPORT_MODULES.copy()
+
+        aliases = {
+            'background': 'research_question',
+            'question': 'research_question',
+            'dataset': 'experiment_data',
+            'data': 'experiment_data',
+            'experiment': 'experiment_data',
+            'results': 'main_results',
+            'result': 'main_results',
+            'conclusion': 'main_results',
+            'innovation': 'innovations',
+            'contribution': 'innovations',
+            'limit': 'limitations',
+            'future': 'future_work',
+            'reproduce': 'reproducibility',
+            'trace': 'literature_trace',
+            'literature': 'literature_trace',
+            'citation': 'literature_trace',
+            'references': 'literature_trace',
+            'extension': 'literature_trace',
+            'related': 'related_papers',
+            'recommendation': 'related_papers',
+            'same_direction': 'related_papers',
+        }
+
+        normalized: list[str] = []
+        for item in modules:
+            raw = str(item).strip()
+            key = aliases.get(raw, raw)
+            if key in cls.REPORT_MODULE_META and key not in normalized:
+                normalized.append(key)
+
+        if 'basic_info' not in normalized:
+            normalized.insert(0, 'basic_info')
+
+        return normalized or cls.DEFAULT_REPORT_MODULES.copy()
+
+    @classmethod
+    def _format_report_field(
+        cls,
+        label: str,
+        value: object,
+        empty_text: str = '原文片段中未充分体现该项信息。',
+    ) -> str:
+        text = cls._clean_report_value(value, limit=5000)
+        if not text:
+            return f'- **{label}**：{empty_text}'
+        return f'- **{label}**：{text}'
+
+    @classmethod
+    def _build_report_source_data(cls, paper: Paper, info: PaperExtractedInfo) -> dict:
+        return {
+            'paper_id': info.paper_id,
+            'title': cls._clean_report_value(info.title or paper.title or paper.original_filename),
+            'authors': cls._clean_report_value(info.authors or paper.authors),
+            'keywords': cls._clean_report_value(info.keywords or paper.keywords),
+            'publication_year': paper.publication_year,
+            'journal_conf': cls._clean_report_value(paper.journal_conf),
+            'doi': cls._clean_report_value(paper.doi),
+            'abstract': cls._clean_report_value(info.abstract),
+            'research_question': cls._clean_report_value(info.research_question),
+            'method': cls._clean_report_value(info.method),
+            'experiment_data': cls._clean_report_value(info.experiment_data),
+            'main_results': cls._clean_report_value(info.main_results),
+            'innovations': cls._clean_report_value(info.innovations),
+            'limitations': cls._clean_report_value(info.limitations),
+            'future_work': cls._clean_report_value(info.future_work),
+        }
+
+    @classmethod
+    def _tokenize_for_report(cls, text: object) -> set[str]:
+        cleaned = cls._clean_report_value(text, limit=8000).lower()
+        if not cleaned:
+            return set()
+
+        words = set(re.findall(r'[a-z][a-z0-9_+\-.]{2,}', cleaned))
+        chinese = re.findall(r'[\u4e00-\u9fff]{2,}', cleaned)
+        for item in chinese:
+            if len(item) <= 6:
+                words.add(item)
+            else:
+                for i in range(0, min(len(item) - 1, 20)):
+                    words.add(item[i:i + 2])
+
+        stop = {
+            'the', 'and', 'for', 'with', 'that', 'this', 'from', 'are', 'was', 'were',
+            'using', 'based', 'paper', 'method', 'model', 'result', 'results', 'approach',
+            '研究', '方法', '模型', '论文', '系统', '结果', '实验', '基于', '提出',
+            '本文', '通过', '进行', '一种',
+        }
+        return {w for w in words if w not in stop and len(w) >= 2}
+
+    @classmethod
+    def _build_learning_queries(cls, source: dict) -> list[dict]:
+        title = source.get('title') or ''
+        keywords = source.get('keywords') or ''
+        rq = source.get('research_question') or source.get('abstract') or ''
+        method = source.get('method') or ''
+
+        terms = []
+        for text in [keywords, title, rq, method]:
+            for term in sorted(cls._tokenize_for_report(text), key=len, reverse=True):
+                if term not in terms:
+                    terms.append(term)
+                if len(terms) >= 8:
+                    break
+            if len(terms) >= 8:
+                break
+
+        topic_terms = terms[:4]
+        method_terms = [t for t in terms[4:8] if t not in topic_terms]
+        topic = ' '.join(topic_terms) or cls._clean_report_value(title, limit=80) or '该研究方向'
+        method_part = ' '.join(method_terms) or 'alternative methods'
+
+        return [
+            {
+                'name': '基础概念入门检索',
+                'query': f'"{topic}" tutorial survey introduction',
+                'purpose': '用于补齐该论文涉及的基础概念、任务定义和常用术语。',
+            },
+            {
+                'name': '综述与脉络检索',
+                'query': f'"{topic}" survey review benchmark',
+                'purpose': '用于寻找综述、benchmark 或领域脉络型论文。',
+            },
+            {
+                'name': '同方向不同方法检索',
+                'query': f'"{topic}" "{method_part}" comparison alternative approach',
+                'purpose': '用于寻找研究方向相近但技术路线不同的论文。',
+            },
+        ]
+
+    async def _select_reference_trace_items(
+        self,
+        db: AsyncSession,
+        paper_id: int,
+        source: dict,
+        limit: int = 8,
+    ) -> list[dict]:
+        rows = (
+            await db.execute(
+                select(ContentItem)
+                .where(ContentItem.paper_id == paper_id, ContentItem.item_type == 'reference')
+                .order_by(ContentItem.order_index.asc())
+                .limit(120)
+            )
+        ).scalars().all()
+
+        if not rows:
+            return []
+
+        anchor = ' '.join([
+            source.get('title') or '',
+            source.get('keywords') or '',
+            source.get('research_question') or '',
+            source.get('method') or '',
+            source.get('abstract') or '',
+        ])
+        anchor_terms = self._tokenize_for_report(anchor)
+        scored: list[tuple[float, ContentItem, list[str]]] = []
+
+        for row in rows:
+            content = self._clean_report_value(row.content, limit=1200)
+            if not content:
+                continue
+            terms = self._tokenize_for_report(content)
+            overlap = sorted(anchor_terms & terms, key=lambda x: (len(x), x), reverse=True)
+            if overlap:
+                scored.append((float(len(overlap)), row, overlap[:4]))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        results = []
+        seen: set[str] = set()
+
+        for _, row, overlap in scored:
+            content = self._clean_report_value(row.content, limit=500)
+            key = content[:120]
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append({
+                'content': content,
+                'page_number': row.page_number,
+                'reason': f"匹配关键词：{'、'.join(overlap)}",
+                'source_type': 'reference',
+            })
+            if len(results) >= limit:
+                break
+
+        if not results:
+            for row in rows[:limit]:
+                content = self._clean_report_value(row.content, limit=500)
+                if not content:
+                    continue
+                key = content[:120]
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append({
+                    'content': content,
+                    'page_number': row.page_number,
+                    'reason': '来自原文参考文献列表，可作为背景知识或研究脉络补充阅读候选。',
+                    'source_type': 'reference',
+                })
+
+        return results
+
+    async def _find_same_direction_different_method_papers(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        paper_id: int,
+        source: dict,
+        limit: int = 5,
+    ) -> list[dict]:
+        rows = (
+            await db.execute(
+                select(Paper, PaperExtractedInfo)
+                .join(PaperExtractedInfo, PaperExtractedInfo.paper_id == Paper.id)
+                .where(
+                    Paper.user_id == user_id,
+                    Paper.is_deleted == False,
+                    Paper.id != paper_id,
+                )
+                .limit(200)
+            )
+        ).all()
+
+        if not rows:
+            return []
+
+        target_direction = ' '.join([
+            source.get('title') or '',
+            source.get('keywords') or '',
+            source.get('research_question') or '',
+            source.get('abstract') or '',
+        ])
+        target_method = source.get('method') or ''
+        target_direction_terms = self._tokenize_for_report(target_direction)
+        target_method_terms = self._tokenize_for_report(target_method)
+        candidates: list[dict] = []
+
+        for paper, info in rows:
+            candidate_direction = ' '.join([
+                self._clean_report_value(info.title or paper.title or paper.original_filename),
+                self._clean_report_value(info.keywords or paper.keywords),
+                self._clean_report_value(info.research_question),
+                self._clean_report_value(info.abstract),
+            ])
+            candidate_method = self._clean_report_value(info.method)
+            direction_terms = self._tokenize_for_report(candidate_direction)
+            method_terms = self._tokenize_for_report(candidate_method)
+            same_terms = sorted(target_direction_terms & direction_terms, key=lambda x: (len(x), x), reverse=True)
+            if not same_terms:
+                continue
+
+            method_overlap = target_method_terms & method_terms
+            method_similarity = len(method_overlap) / max(len(target_method_terms | method_terms), 1)
+            different_method_score = 1.0 - method_similarity if target_method_terms and method_terms else 0.4
+            score = len(same_terms) * 0.75 + different_method_score * 2.0
+            title = self._clean_report_value(info.title or paper.title or paper.original_filename, limit=160)
+
+            candidates.append({
+                'paper_id': paper.id,
+                'title': title,
+                'score': round(score, 3),
+                'reason': '该文献与当前论文存在研究主题重合，但方法字段关键词重合度较低，适合作为替代技术路线对照阅读。',
+                'same_direction_evidence': '、'.join(same_terms[:6]) or '主题字段存在相似表达',
+                'different_method_evidence': (
+                    f"当前方法：{self._clean_report_value(target_method, limit=120) or '暂未抽取'}；"
+                    f"候选方法：{self._clean_report_value(candidate_method, limit=120) or '暂未抽取'}"
+                ),
+                'source_type': 'internal_library',
+            })
+
+        candidates.sort(key=lambda x: x['score'], reverse=True)
+        return candidates[:limit]
+
+    @classmethod
+    def _build_report_markdown(cls, source: dict, modules: list[str], trace_data: dict) -> str:
+        lines: list[str] = []
+        report_title = source.get('title') or '未命名论文'
+        lines.append(f'# {report_title} 研读报告')
+        lines.append('')
+
+        for module in modules:
+            meta = cls.REPORT_MODULE_META[module]
+            lines.append(f'## {meta["title"]}')
+            lines.append('')
+
+            if module == 'basic_info':
+                lines.append(cls._format_report_field('题名', source.get('title')))
+                lines.append(cls._format_report_field('作者', source.get('authors')))
+                lines.append(cls._format_report_field('年份', source.get('publication_year')))
+                lines.append(cls._format_report_field('期刊 / 会议', source.get('journal_conf')))
+                lines.append(cls._format_report_field('DOI', source.get('doi')))
+                lines.append(cls._format_report_field('关键词', source.get('keywords')))
+            elif module == 'reproducibility':
+                lines.append(cls._format_report_field('复现所需方法 / 模型', source.get('method')))
+                lines.append(cls._format_report_field('复现所需数据 / 实验对象', source.get('experiment_data')))
+                lines.append(cls._format_report_field('需要对齐的主要结果', source.get('main_results')))
+                lines.append('')
+                lines.append('**复现风险提示**：')
+                if not source.get('experiment_data'):
+                    lines.append('- 暂未抽取到明确数据集或实验对象，复现时需要优先补充数据来源。')
+                if not source.get('method'):
+                    lines.append('- 暂未抽取到完整方法流程，复现时需要回到原文方法章节核对实现细节。')
+                if not source.get('main_results'):
+                    lines.append('- 暂未抽取到明确指标或结果，复现时需要补充评价指标和目标数值。')
+            elif module == 'literature_trace':
+                refs = trace_data.get('reference_trace') or []
+                queries = trace_data.get('learning_queries') or []
+                lines.append('### 原文参考文献溯源')
+                if refs:
+                    for idx, ref in enumerate(refs, start=1):
+                        lines.append(f'{idx}. {ref["content"]}')
+                        lines.append(f'   - 溯源理由：{ref["reason"]}')
+                else:
+                    lines.append('- 暂未从原文参考文献中筛选到可用条目。可能原因是 PDF 未成功抽取 References，或参考文献暂未入库。')
+                lines.append('')
+                lines.append('### 基础知识与拓展检索式')
+                for item in queries:
+                    lines.append(f'- **{item["name"]}**：`{item["query"]}`')
+                    lines.append(f'  - 用途：{item["purpose"]}')
+            elif module == 'related_papers':
+                related = trace_data.get('related_papers') or []
+                if related:
+                    for idx, item in enumerate(related, start=1):
+                        lines.append(f'{idx}. **{item["title"]}**')
+                        lines.append(f'   - 推荐理由：{item["reason"]}')
+                        lines.append(f'   - 相同研究方向依据：{item["same_direction_evidence"]}')
+                        lines.append(f'   - 方法差异依据：{item["different_method_evidence"]}')
+                else:
+                    lines.append('- 暂未在当前用户文献库中找到“同方向但方法不同”的已解析论文。')
+                    lines.append('- 建议先上传同一研究主题下的更多论文，或使用上方检索式补充文献。')
+            elif module == 'reading_notes':
+                lines.append('- 这篇论文解决的核心问题是什么？')
+                lines.append('- 作者的方法与已有方法相比差异在哪里？')
+                lines.append('- 实验数据和评价指标是否足以支撑结论？')
+                lines.append('- 哪些部分适合作为后续研究或复现切入点？')
+            else:
+                for field in meta['fields']:
+                    label = cls.FIELD_LABELS.get(field, meta['title'])
+                    lines.append(cls._format_report_field(label, source.get(field)))
+
+            lines.append('')
+
+        return '\n'.join(lines).strip()
+
+    async def _load_paper_evidence_text(
+        self,
+        db: AsyncSession,
+        paper_id: int,
+        limit_chars: int = 30000,
+    ) -> str:
+        rows = (
+            await db.execute(
+                select(ContentItem)
+                .where(
+                    ContentItem.paper_id == paper_id,
+                    ContentItem.item_type != 'reference',
+                )
+                .order_by(ContentItem.order_index.asc())
+                .limit(300)
+            )
+        ).scalars().all()
+
+        parts: list[str] = []
+        total = 0
+        for row in rows:
+            content = self._clean_report_value(row.content, limit=2000)
+            if not content:
+                continue
+
+            prefix = f'[{row.item_type}]'
+            if row.page_number:
+                prefix += f'[page={row.page_number}]'
+
+            part = f'{prefix} {content}'
+            parts.append(part)
+            total += len(part)
+            if total >= limit_chars:
+                break
+
+        return '\n'.join(parts)[:limit_chars]
+
+    async def _extract_missing_report_fields_with_llm(
+        self,
+        source_data: dict,
+        evidence_text: str,
+    ) -> dict:
+        target_fields = [
+            'authors',
+            'keywords',
+            'publication_year',
+            'journal_conf',
+            'doi',
+            'research_question',
+            'method',
+            'experiment_data',
+            'main_results',
+            'innovations',
+            'limitations',
+            'future_work',
+        ]
+        missing_fields = [key for key in target_fields if not self._clean_report_value(source_data.get(key))]
+        if not missing_fields or not evidence_text.strip():
+            return {}
+
+        field_names = {
+            'authors': '作者列表',
+            'keywords': '关键词',
+            'publication_year': '论文发表年份',
+            'journal_conf': '期刊 / 会议 / 预印本平台信息',
+            'doi': 'DOI 标识',
+            'research_question': '研究背景与核心问题',
+            'method': '方法 / 模型 / 技术路线',
+            'experiment_data': '数据集 / 实验对象 / 实验设计',
+            'main_results': '主要结果与结论',
+            'innovations': '创新点与贡献',
+            'limitations': '局限性与适用边界',
+            'future_work': '未来工作与后续研究方向',
+        }
+        empty_json = {key: '' for key in target_fields}
+
+        prompt = f"""请基于下面给出的论文原文片段，补充抽取研读报告所需字段。
+
+要求：
+1. 只能依据原文片段抽取，不要编造原文没有的信息；
+2. 如果原文片段中确实无法判断某个字段，请返回空字符串；
+3. 每个字段用中文撰写，内容要具体、完整、有信息量；
+4. 不要只写一句话。除非原文信息极少，否则每个非空字段至少写 120-250 个中文字符；
+5. method 字段要说明核心框架、关键步骤、技术路线和解决的问题；
+6. experiment_data 字段要说明实验对象、比较对象、评估设置、模型/数据/任务类型；
+7. main_results 字段要保留原文中的关键指标、提升幅度、比较结论；
+8. innovations 字段要概括本文相对已有工作的主要贡献；
+9. limitations 字段要指出适用边界、潜在不足或原文中隐含的限制；
+10. future_work 字段要结合原文内容概括后续可扩展方向；
+11. publication_year 只返回 4 位年份，例如 2024；没有明确年份则返回空字符串；
+12. journal_conf 只返回原文明确出现的期刊、会议、arXiv、预印本或出版 venue；没有则返回空字符串；
+13. doi 只返回 DOI 本身，不要补 URL 前缀；没有则返回空字符串；
+14. authors 和 keywords 如果原文片段中明确出现，可以补齐；没有则返回空字符串；
+15. 输出严格 JSON，不要使用 Markdown，不要添加解释。
+
+需要补充的字段：
+{missing_fields}
+
+字段含义：
+{field_names}
+
+已有结构化信息：
+{dumps(source_data)}
+
+论文原文片段：
+{evidence_text}
+
+请输出如下 JSON 格式：
+{dumps(empty_json)}
+"""
+
+        try:
+            resp = await self.llm.async_chat(
+                [
+                    {
+                        'role': 'system',
+                        'content': '你是科研论文结构化信息抽取助手。必须基于原文证据抽取，不得编造事实。',
+                    },
+                    {'role': 'user', 'content': prompt},
+                ],
+                temperature=0.05,
+                max_tokens=3000,
+            )
+        except Exception:
+            return {}
+
+        text = (resp or '').strip()
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+
+        parsed = loads(text, default=None)
+        if not isinstance(parsed, dict):
+            match = re.search(r'\{.*\}', text, flags=re.S)
+            parsed = loads(match.group(0), default=None) if match else None
+        if not isinstance(parsed, dict):
+            return {}
+
+        result = {}
+        for key in missing_fields:
+            value = self._clean_report_value(parsed.get(key), limit=2500)
+            if value:
+                result[key] = value
+        return result
 
     async def create_report(
         self,
@@ -29,32 +609,120 @@ class GenerationService:
         modules: list[str] | None,
         title: str | None,
     ) -> Report:
+        paper = (
+            await db.execute(
+                select(Paper).where(
+                    Paper.id == paper_id,
+                    Paper.user_id == user_id,
+                    Paper.is_deleted == False,
+                )
+            )
+        ).scalar_one_or_none()
+        if not paper:
+            raise ValueError('目标文献不存在，或当前用户无权访问该文献。')
+
         info = (
             await db.execute(select(PaperExtractedInfo).where(PaperExtractedInfo.paper_id == paper_id))
         ).scalar_one_or_none()
         if not info:
-            raise ValueError('Target paper has no extracted structured information yet.')
+            raise ValueError('目标文献暂无结构化抽取结果，请先等待解析完成或重新解析。')
 
-        data = {k: v for k, v in info.__dict__.items() if not k.startswith('_')}
-        prompt = (
-            'Generate a structured research paper reading report. Include basic paper info, '
-            'background, research question, method, experiment design, main results, '
-            'innovations, limitations, reproducibility notes, and future work. '
-            f'Requested modules: {modules or "all"}. Input: {dumps(data)}'
-        )
-        content = await self.llm.async_chat(
-            [
-                {'role': 'system', 'content': 'You generate research paper reading reports.'},
-                {'role': 'user', 'content': prompt},
-            ],
-            temperature=0.2,
-            max_tokens=3500,
-        )
+        selected_modules = self._normalize_report_modules(modules)
+        source_data = self._build_report_source_data(paper, info)
+        evidence_text = await self._load_paper_evidence_text(db, paper_id)
+        llm_extracted = await self._extract_missing_report_fields_with_llm(source_data, evidence_text)
+        if llm_extracted:
+            source_data.update(llm_extracted)
+            for key, value in llm_extracted.items():
+                if hasattr(info, key) and value:
+                    setattr(info, key, value)
+                if key in {'authors', 'keywords'} and hasattr(paper, key) and value:
+                    setattr(paper, key, value)
+                elif key == 'publication_year':
+                    year = self._extract_publication_year(value)
+                    if year:
+                        paper.publication_year = year
+                        source_data[key] = year
+                elif key in {'journal_conf', 'doi'} and value:
+                    setattr(paper, key, str(value)[:300 if key == 'journal_conf' else 100])
+            await db.commit()
+
+        trace_data = {
+            'reference_trace': await self._select_reference_trace_items(db, paper_id, source_data),
+            'learning_queries': self._build_learning_queries(source_data),
+            'related_papers': await self._find_same_direction_different_method_papers(
+                db,
+                user_id,
+                paper_id,
+                source_data,
+            ),
+        }
+        draft_markdown = self._build_report_markdown(source_data, selected_modules, trace_data)
+        module_titles = [self.REPORT_MODULE_META[key]['title'] for key in selected_modules]
+
+        prompt = f"""请基于给定的结构化抽取结果、报告初稿和论文原文片段，生成一份中文科研论文研读报告。
+
+硬性要求：
+1. 只能依据“结构化抽取结果”“报告初稿”和“论文原文片段”组织内容，不要编造作者、数据集、指标、数值、结论或引用；
+2. 如果某项信息确实缺失，可以说明“原文片段中未充分体现”，不要凭空补全；
+3. 输出 Markdown，不要使用代码块；
+4. 报告采用“标准详版”：每个核心模块写 1 段概括，必要时补充 2-4 个要点；
+5. 方法模块需要说明核心框架、关键步骤和解决的问题；
+6. 实验模块需要说明评估对象、对比对象、评价指标或实验设置；
+7. 结果模块需要尽量保留原文中的关键数值、提升幅度和比较结论；
+8. 创新点模块需要概括本文相对已有工作的主要贡献；
+9. 局限性模块应基于原文谨慎归纳，不要编造；
+10. 可复现性模块需要给出复现输入、步骤、指标和潜在风险；
+11. 文献溯源部分只能使用报告初稿中给出的原文参考文献和检索式；
+12. 同方向不同方法文献推荐只能使用报告初稿中给出的当前文献库候选论文；
+13. 保留以下模块顺序：{'、'.join(module_titles)}。
+
+结构化抽取结果：
+{dumps(source_data)}
+
+报告初稿：
+{draft_markdown}
+
+论文原文片段：
+{evidence_text[:25000]}
+"""
+
+        llm_used = False
+        content = draft_markdown
+        try:
+            generated = await self.llm.async_chat(
+                [
+                    {
+                        'role': 'system',
+                        'content': '你是严谨的中文科研文献研读报告助手，必须基于给定结构化信息写作，不得编造事实。',
+                    },
+                    {'role': 'user', 'content': prompt},
+                ],
+                temperature=0.15,
+                max_tokens=6000,
+            )
+            generated = generated.strip()
+            if generated and len(generated) >= 300:
+                content = generated
+                llm_used = True
+        except Exception:
+            content = draft_markdown
+
+        report_title = title or f"{source_data.get('title') or paper.original_filename or paper_id} 研读报告"
         report = Report(
             user_id=user_id,
             paper_id=paper_id,
-            title=title or f'{info.title or paper_id} reading report',
-            content=dumps({'markdown': content, 'modules': modules or []}),
+            title=str(report_title)[:300],
+            content=dumps({
+                'markdown': content,
+                'modules': selected_modules,
+                'module_titles': module_titles,
+                'paper_id': paper_id,
+                'source': source_data,
+                'trace_data': trace_data,
+                'llm_used': llm_used,
+                'llm_extracted_fields': sorted(llm_extracted.keys()),
+            }),
         )
         db.add(report)
         await db.commit()
