@@ -1,7 +1,6 @@
 import { http } from './client'
 import type { KnowledgeGraph, KnowledgeDomain, DomainOverview, DomainSuggestion, MergeSuggestion, MergeResult, CoverageInfo, RegionRecommendation } from '@/types/domain'
 
-<<<<<<< HEAD
 export interface GraphListItem {
   id: number
   name: string
@@ -10,17 +9,12 @@ export interface GraphListItem {
   created_at: string
 }
 
-=======
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
 export const knowledgeApi = {
   // 知识图谱
   create: (payload: { paper_ids: number[]; name?: string; domain_id?: number }) =>
     http.post<any, KnowledgeGraph>('/knowledge-graphs', payload),
-<<<<<<< HEAD
   list: (domainId?: number) =>
     http.get<any, GraphListItem[]>('/knowledge-graphs', { params: domainId !== undefined ? { domain_id: domainId } : {} }),
-=======
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
   get: (id: number) =>
     http.get<any, KnowledgeGraph>(`/knowledge-graphs/graph/${id}`),
 

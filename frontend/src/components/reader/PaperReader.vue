@@ -1,10 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
-<<<<<<< HEAD
 import mk from 'markdown-it-katex'
-=======
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
 import { papersApi } from '@/api/papers'
 import type { ContentItem } from '@/types/domain'
 import PdfReader from '@/components/reader/PdfReader.vue'
@@ -21,7 +18,6 @@ const activeTab = ref<'markdown' | 'graph'>('markdown')
 const splitPercent = ref(50) // 左侧百分比
 const dragging = ref(false)
 
-<<<<<<< HEAD
 // ── Markdown 渲染器（挂载 KaTeX 插件以支持 $$...$$ / $...$ 数学公式）──
 const md = new MarkdownIt({
   html: true,
@@ -29,15 +25,6 @@ const md = new MarkdownIt({
   linkify: true,
   typographer: true,
 }).use(mk)
-=======
-// ── Markdown 渲染器 ──
-const md = new MarkdownIt({
-  html: false,
-  breaks: true,
-  linkify: true,
-  typographer: true,
-})
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
 
 // ── 结构化章节（按 heading 分组折叠视图） ──
 interface Section {
@@ -78,7 +65,6 @@ const structuredSections = computed<Section[]>(() => {
   return sections
 })
 
-<<<<<<< HEAD
 // 章节级完整 Markdown 渲染流 ──
 function renderSectionHtml(children: ContentItem[]): string {
   // 1. 将散落的数据库碎片，重新拼装成连续的 Markdown 文档流
@@ -98,27 +84,6 @@ function renderSectionHtml(children: ContentItem[]): string {
 
   // 2. 一次性交给 markdown-it（内置 KaTeX 插件）解析完整的 AST
   return md.render(combinedMarkdown)
-=======
-// 渲染单个 ContentItem 为 HTML
-function renderItemHtml(item: ContentItem): string {
-  const type = (item as any).type || (item as any).item_type || ''
-  const text = item.content || ''
-  switch (type) {
-    case 'code':
-      return '<pre><code>' + escapeHtml(text) + '</code></pre>'
-    case 'table':
-      return text // 已是 Markdown table
-    case 'image':
-      return `<img src="${escapeHtml(text)}" alt="${escapeHtml(text)}" style="max-width:100%" />`
-    case 'heading':
-      return '<p><strong>' + escapeHtml(text) + '</strong></p>'
-    case 'list_item':
-      return '<p>' + escapeHtml(text) + '</p>'
-    default:
-      // paragraph 等 → 用 MarkdownIt 渲染内联格式
-      return md.renderInline(text) ? md.render(text) : '<p>' + escapeHtml(text) + '</p>'
-  }
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
 }
 
 function escapeHtml(s: string): string {
@@ -290,18 +255,7 @@ defineExpose({ open })
                         <span class="acc-title">{{ sec.title }}</span>
                         <span v-if="sec.children.length" class="acc-count">{{ sec.children.length }}</span>
                       </summary>
-<<<<<<< HEAD
                       <div class="acc-content" v-html="renderSectionHtml(sec.children)"></div>
-=======
-                      <div class="acc-content">
-                        <div
-                          v-for="(child, ci) in sec.children"
-                          :key="ci"
-                          class="acc-item"
-                          v-html="renderItemHtml(child)"
-                        ></div>
-                      </div>
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
                     </details>
                   </template>
                   <div v-else class="pane-empty">暂无解析内容</div>
@@ -763,11 +717,11 @@ defineExpose({ open })
   color: #334155;
   border-radius: 0 8px 8px 0;
   overflow-x: auto;
-=======
+}
+
 .markdown-body :deep(img) {
   max-width: 100%;
   border-radius: 8px;
->>>>>>> 4ef192ef98cfd767a44b504f4bc985edd4e31f23
 }
 
 /* Bold / Italic */
