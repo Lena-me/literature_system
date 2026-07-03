@@ -24,6 +24,7 @@ async function ask(q?: string) {
       if (event.type === 'sources') assistant.sources = event.sources
       if (event.type === 'delta') assistant.content += event.content
       if (event.type === 'done') assistant.content = event.answer || assistant.content
+      if (event.type === 'error') assistant.content = `❌ 对话失败：${event.error}`
       await nextTick(); box.value?.scrollTo({ top: box.value.scrollHeight, behavior: 'smooth' })
     })
   } finally { loading.value = false }

@@ -69,15 +69,29 @@ class RAGService:
 
 
     async def ask_stream(self, db: AsyncSession, user_id: int, question: str, paper_ids: list[int] | None, session_id: int | None, top_k: int | None):
-        session = await self._get_or_create_session(db, user_id, question, paper_ids, session_id)
-        user_msg = QAMessage(session_id=session.id, role='user', content=question); db.add(user_msg); await db.flush()
-        query_vector = self.embedding.encode_query(question)
-        candidates = self.vdb.search(query_vector, paper_ids, top_k or settings.top_k)
-        ranked = self.reranker.rerank(question, candidates, settings.rerank_top_n)
-        yield {'type': 'session', 'session_id': session.id}
-        yield {'type': 'sources', 'sources': ranked}
-        context = '\n\n'.join([f"[来源{i+1} | paper_id={c['paper_id']} | page={c.get('page_number')}]\n{c.get('text','')}" for i, c in enumerate(ranked)])
-        prompt = f"""请基于以下检索到的真实论文片段回答问题。
+        import logging
+        logger = logging.getLogger(__name__)
+        try:
+            logger.info('ask_stream started: user_id=%s, question=%s', user_id, question[:50])
+            session = await self._get_or_create_session(db, user_id, question, paper_ids, session_id)
+            logger.info('Session created: id=%s', session.id)
+            user_msg = QAMessage(session_id=session.id, role='user', content=question); db.add(user_msg); await db.flush()
+            logger.info('User message saved')
+            
+            query_vector = self.embedding.encode_query(question)
+            logger.info('Embedding encoded: length=%s', len(query_vector))
+            
+            candidates = self.vdb.search(query_vector, paper_ids, top_k or settings.top_k)
+            logger.info('Milvus search done: candidates=%s', len(candidates))
+            
+            ranked = self.reranker.rerank(question, candidates, settings.rerank_top_n)
+            logger.info('Rerank done: ranked=%s', len(ranked))
+            
+            yield {'type': 'session', 'session_id': session.id}
+            yield {'type': 'sources', 'sources': ranked}
+            
+            context = '\n\n'.join([f"[来源{i+1} | paper_id={c['paper_id']} | page={c.get('page_number')}]\n{c.get('text','')}" for i, c in enumerate(ranked)])
+            prompt = f"""请基于以下检索到的真实论文片段回答问题。
 
 【重要引用规则】
 - 必须在句末标注对应片段的序号，格式为 [1]、[2]。
@@ -90,19 +104,27 @@ class RAGService:
 检索片段：
 {context}"""
 
-        system_prompt = """你是严谨的科研文献问答Agent。你必须：
+            system_prompt = """你是严谨的科研文献问答Agent。你必须：
 1. 所有结论严格基于检索片段，不得编造。
 2. 引用时使用 [1]、[2] 格式（对应片段序号），句末标注。
 3. 绝对禁止在回答中出现检索片段里的原始参考文献编号（如 [40]、[41]）。"""
-        answer_parts: list[str] = []
-        async for piece in self.llm.stream_chat([{'role':'system','content': system_prompt}, {'role':'user','content':prompt}], temperature=0.1):
-            answer_parts.append(piece)
-            yield {'type': 'delta', 'content': piece}
-        answer = ''.join(answer_parts)
-        assistant_msg = QAMessage(session_id=session.id, role='assistant', content=answer); db.add(assistant_msg); await db.flush()
-        await self._add_message_sources(db, assistant_msg.id, ranked)
-        await db.commit()
-        yield {'type': 'done', 'session_id': session.id, 'answer': answer}
+            
+            logger.info('Starting LLM stream_chat...')
+            answer_parts: list[str] = []
+            async for piece in self.llm.stream_chat([{'role':'system','content': system_prompt}, {'role':'user','content':prompt}], temperature=0.1):
+                answer_parts.append(piece)
+                yield {'type': 'delta', 'content': piece}
+            logger.info('LLM stream_chat completed: total_chars=%s', len(''.join(answer_parts)))
+            
+            answer = ''.join(answer_parts)
+            assistant_msg = QAMessage(session_id=session.id, role='assistant', content=answer); db.add(assistant_msg); await db.flush()
+            await self._add_message_sources(db, assistant_msg.id, ranked)
+            await db.commit()
+            yield {'type': 'done', 'session_id': session.id, 'answer': answer}
+            logger.info('ask_stream completed successfully')
+        except Exception as e:
+            logger.error(f'ask_stream failed: {e}', exc_info=True)
+            yield {'type': 'error', 'error': str(e)}
 
     async def suggest_questions(self, db: AsyncSession, session_id: int) -> dict:
         """根据会话挂载的文献，用 LLM 生成 3-4 个推荐问题"""

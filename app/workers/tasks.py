@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+BEIJING_TZ = timezone(timedelta(hours=8))
 
 from sqlalchemy import select
 
@@ -51,7 +53,7 @@ def _mark_running(paper_id: int) -> None:
             paper.parse_status = 'parsing'
         if task:
             task.status = 'running'
-            task.start_time = datetime.utcnow()
+            task.start_time = datetime.now(BEIJING_TZ)
             task.end_time = None
             task.error_log = None
         db.commit()
@@ -65,7 +67,7 @@ def _mark_completed(paper_id: int) -> None:
             paper.parse_status = 'completed'
         if task:
             task.status = 'completed'
-            task.end_time = datetime.utcnow()
+            task.end_time = datetime.now(BEIJING_TZ)
         db.commit()
 
 
@@ -77,6 +79,6 @@ def _mark_failed(paper_id: int, exc: Exception) -> None:
             paper.parse_status = 'failed'
         if task:
             task.status = 'failed'
-            task.end_time = datetime.utcnow()
+            task.end_time = datetime.now(BEIJING_TZ)
             task.error_log = f'{type(exc).__name__}: {str(exc)[:3000]}'
         db.commit()

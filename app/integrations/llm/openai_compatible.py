@@ -93,7 +93,7 @@ class OpenAICompatibleLLM:
                             import json
                             obj = json.loads(data)
                             delta = obj['choices'][0].get('delta') or {}
-                            piece = delta.get('content') or ''
+                            piece = delta.get('content') or delta.get('reasoning_content') or ''
                             if piece:
                                 yield piece
                         except Exception:

@@ -79,6 +79,129 @@ class MinerUParser:
     # 匹配结尾有 $$ 但开头没有的孤立公式（MinerU 切割 bug）
     _ORPHAN_CLOSING_RE = re.compile(r'\$\$\s*$')
 
+    _KEYWORD_PREFIX_RE = re.compile(
+        r'^(keywords?|关键词|关键字|index\s+terms)\s*[:：]\s*',
+        flags=re.I
+    )
+
+    _KEYWORD_STOP_RE = re.compile(
+        r'(?:'
+        r'\*\s*The\s+authors|'
+        r'\*\s*This\s+work|'
+        r'\*\s*We\s+thank|'
+        r'\*\s*This\s+research|'
+        r'Acknowledgments?|'
+        r'Acknowledgements?|'
+        r'Funding|'
+        r'Supported\s+by|'
+        r'NSFC|'
+        r'National\s+Natural\s+Science\s+Foundation|'
+        r'Grant\s+No\.|'
+        r'ACM\s+Reference\s+Format|'
+        r'CCS\s+Concepts|'
+        r'Additional\s+Key\s+Words|'
+        r'Corresponding\s+author|'
+        r'email\s*:|'
+        r'@\w+|'
+        r'doi[:：]|'
+        r'https?://|'
+        r'\b(?:University|University\s+of|Institute|College|School|Department|Laboratory)\b|'
+        r'\b(?:IEEE|ACM|Springer|Elsevier|Wiley|Taylor\s+Francis)\b|'
+        r'\b(?:et\s+al|and\s+the)\b|'
+        r'\b(?:under\s+Grant|under\s+Contract|under\s+Award)\b|'
+        r'National\s+Key\s+Research\s+and\s+Development\s+Program|'
+        r'Research\s+Foundation|'
+        r'Corresponding\s+Author|'
+        r'First\s+author|'
+        r'Second\s+author|'
+        r'通讯作者|'
+        r'第一作者|'
+        r'第二作者|'
+        r'致谢|'
+        r'资助项目|'
+        r'基金项目|'
+        r'项目编号'
+        r')',
+        flags=re.I
+    )
+
+    _CHINESE_STOP_WORDS = {
+        '的', '了', '和', '是', '就', '都', '而', '及', '与', '着', '或', '一个', '我们',
+        '你们', '他们', '它们', '这', '那', '这些', '那些', '什么', '怎么', '如何',
+        '为什么', '因为', '所以', '但是', '然而', '虽然', '如果', '可以', '可能', '应该',
+        '会', '能', '要', '需要', '必须', '得', '有', '没有', '在', '从', '到', '向',
+        '对', '对于', '关于', '通过', '基于', '使用', '利用', '采用', '实现', '表明',
+        '显示', '发现', '认为', '提出', '研究', '分析', '讨论', '结果', '结论', '方法',
+        '技术', '系统', '模型', '算法', '数据', '信息', '知识', '实验', '测试', '评估',
+        '性能', '应用', '开发', '设计', '结构', '架构', '框架', '工具', '软件', '硬件',
+        '论文', '文章', '文献', '本研究', '本文', '近年来', '目前', '随着', '由于',
+        '因此', '同时', '并且', '以及', '包括', '例如', '比如', '等等', '一些', '许多',
+        '大量', '部分', '全部', '主要', '重要', '关键', '核心', '基本', '基础', '相关',
+        '不同', '相同', '类似', '比较', '对比', '结合', '综合', '整体', '局部', '具体',
+        '一般', '特殊', '常见', '少见', '可能', '不可能', '一定', '不一定', '几乎', '大约',
+        '左右', '上下', '前后', '之间', '以上', '以下', '以内', '以外', '之一',
+        '等人', '基于多', '硕士学位', '签名', '土木工程', '方法研究',
+        '广州', '大学', '陈川江', '陈', '川江', '刘', '张', '王', '李', '赵', '孙',
+        '黄', '吴', '周', '徐', '朱', '马', '胡', '郭', '林', '何', '高', '罗', '梁',
+        '谢', '宋', '唐', '许', '韩', '曹', '邓', '彭', '曾', '肖', '田', '董', '潘',
+        '袁', '蔡', '蒋', '余', '于', '杜', '叶', '程', '魏', '苏', '吕', '丁', '任',
+        '沈', '姚', '卢', '姜', '崔', '钟', '谭', '陆', '汪', '范', '金', '石', '廖',
+        '贾', '夏', '付', '方', '邹', '熊', '白', '孟', '秦', '邱', '侯', '江', '尹',
+        '薛', '闫', '段', '雷', '龙', '史', '陶', '黎', '贺', '顾', '毛', '郝', '龚',
+        '邵', '万', '钱', '严', '赖', '覃', '洪', '武', '莫', '孔', '汤', '常', '温',
+        '康', '施', '文', '彭', '牛', '樊', '葛', '邢', '安', '齐', '易', '乔', '伍',
+        '庞', '颜', '倪', '庄', '聂', '章', '鲁', '岳', '翟', '殷', '詹', '申', '欧',
+        '耿', '关', '兰', '焦', '俞', '左', '柳', '祝', '纪', '尚', '毕', '耿', '芦',
+        '铁路', '路基', '填筑', '施工', '工序', '识别', '预警', '广州大学', '硕士',
+        '学位论文', '论文', '研究', '设计', '实现', '分析', '讨论', '提出', '表明',
+        '显示', '发现', '认为', '可能', '可以', '已经', '近年来', '目前', '随着',
+        '由于', '因此', '然而', '但是', '同时', '并且', '以及', '包括', '例如', '比如',
+        '等等', '一些', '许多', '大量', '部分', '全部', '主要', '重要', '关键', '核心',
+        '基本', '基础', '相关', '不同', '相同', '类似', '比较', '对比', '结合', '综合',
+        '整体', '局部', '具体', '一般', '特殊', '常见', '少见', '一定', '不一定', '几乎',
+    }
+
+    _ENGLISH_STOP_WORDS = {
+        'first', 'second', 'third', 'last', 'finally', 'also', 'and', 'or', 'but', 'not',
+        'this', 'that', 'these', 'those', 'with', 'for', 'of', 'in', 'on', 'at', 'to',
+        'from', 'by', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have',
+        'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may',
+        'might', 'must', 'shall', 'can', 'cannot', 'need', 'want', 'like', 'get', 'make',
+        'take', 'give', 'go', 'come', 'know', 'think', 'see', 'look', 'feel', 'say',
+        'tell', 'ask', 'answer', 'find', 'show', 'use', 'work', 'study', 'research',
+        'paper', 'article', 'document', 'system', 'method', 'approach', 'technique',
+        'algorithm', 'model', 'framework', 'tool', 'software', 'hardware', 'data',
+        'information', 'knowledge', 'result', 'analysis', 'evaluation', 'performance',
+        'experiment', 'test', 'case', 'example', 'application', 'implementation',
+        'development', 'design', 'structure', 'architecture', 'university', 'institute',
+        'school', 'department', 'laboratory', 'college', 'author', 'authors', 'reference',
+        'references', 'acknowledgments', 'acknowledgements', 'funding', 'grant',
+        'national', 'natural', 'science', 'foundation', 'project', 'program', 'supported',
+        'the', 'a', 'an', 'some', 'any', 'all', 'each', 'every', 'both', 'few', 'more',
+        'most', 'other', 'another', 'such', 'no', 'nor', 'neither', 'either', 'enough',
+        'little', 'less', 'least', 'much', 'many', 'more', 'most', 'several', 'few',
+        'enough', 'how', 'when', 'where', 'why', 'what', 'which', 'who', 'whom', 'whose',
+        'me', 'him', 'her', 'us', 'them', 'my', 'your', 'his', 'its', 'our', 'their',
+        'mine', 'yours', 'hers', 'ours', 'theirs', 'myself', 'yourself', 'himself',
+        'herself', 'ourselves', 'yourselves', 'themselves', 'it', 'its', 'they', 'their',
+        'ieee', 'acm', 'springer', 'elsevier', 'wiley', 'taylor', 'francis', 'sage',
+        'karger', 'mdpi', 'hindawi', 'iop', 'oup', 'cambridge', 'press', 'publisher',
+        'proceedings', 'journal', 'transactions', 'letters', 'magazine', 'conference',
+        'symposium', 'workshop', 'annual', 'international', 'national', 'regional',
+        'dept', 'lab', 'center', 'centre', 'faculty', 'graduate', 'undergraduate',
+        'phd', 'msc', 'bsc', 'professor', 'dr', 'mr', 'ms', 'mrs', 'miss', 'sir',
+        'yang', 'zhang', 'li', 'wang', 'chen', 'liu', 'zhao', 'huang', 'wu', 'zhou',
+        'xu', 'sun', 'ma', 'zhu', 'hu', 'guo', 'lin', 'he', 'gao', 'peng', 'liu',
+        'chen', 'zhang', 'wang', 'li', 'zhao', 'liu', 'sun', 'huang', 'wu', 'zhu',
+        'xu', 'lin', 'he', 'gao', 'guo', 'ma', 'peng', 'yang', 'han', 'liang', 'yu',
+        'song', 'zheng', 'tang', 'feng', 'cao', 'xiang', 'zhong', 'dong', 'yuan',
+        'xiao', 'wu', 'qian', 'jin', 'cheng', 'zhou', 'xiang', 'jiang', 'bo', 'lu',
+        'zheng', 'tang', 'feng', 'cao', 'dong', 'yuan', 'xiao', 'qian', 'jin', 'cheng',
+        'jiang', 'bo', 'lu', 'wang', 'zhang', 'li', 'chen', 'liu', 'zhao', 'sun',
+        'huang', 'wu', 'zhu', 'xu', 'lin', 'he', 'gao', 'guo', 'ma', 'peng', 'yang',
+        'yifan', 'yuhao', 'yingfei', 'lu', 'shing', 'chi', 'cheung', 'xiong', 'lu',
+    }
+
     def parse(self, pdf_bytes: bytes, filename: str) -> dict:
         job_id = uuid4().hex
         base_output_dir = Path(settings.mineru_output_dir)
@@ -212,11 +335,6 @@ class MinerUParser:
         return ''
 
     def _load_content_json(self, output_dir: Path):
-
-        """
-        MinerU emits content_list/content_list_v2 plus intermediate files such
-        as middle/model. Prefer content_list outputs for stable reading order.
-        """
         json_files = list(output_dir.rglob('*.json'))
         if not json_files:
             return None
@@ -485,7 +603,6 @@ class MinerUParser:
                 content_items.append(
                     {
                         'item_type': 'table',
-
                         'level': None,
                         'content': table_text,
                         'page_number': None,
@@ -641,7 +758,7 @@ class MinerUParser:
         return {
             'title': title or filename,
             'authors': [],
-            'keywords': self._extract_keywords(markdown_text, content_items),
+            'keywords': self._extract_keywords(markdown_text, content_items, title),
             'abstract': self._extract_abstract(content_items),
         }
 
@@ -663,16 +780,8 @@ class MinerUParser:
                 return normalize_text(re.sub(r'^(摘要|Abstract)\s*[:：]\s*', '', text, flags=re.I))
         return ''
 
-    def _extract_keywords(self, markdown_text: str, content_items: list[dict]) -> list[str]:
+    def _extract_keywords(self, markdown_text: str, content_items: list[dict], title: str) -> list[str]:
         candidates: list[str] = []
-        patterns = [
-            r'(?:keywords?|index\s+terms)\s*[:：]\s*(.+?)(?=\n\n|\n[A-Z]|\Z)',
-            r'(?:关键词|关键字)\s*[:：]\s*(.+?)(?=\n\n|\Z)',
-        ]
-
-        for pattern in patterns:
-            for match in re.finditer(pattern, markdown_text, flags=re.I | re.S):
-                candidates.append(match.group(1))
 
         for idx, item in enumerate(content_items):
             text = normalize_text(str(item.get('content') or ''))
@@ -681,47 +790,86 @@ class MinerUParser:
                 text,
                 flags=re.I,
             ):
-                keyword_lines = []
+                keyword_text = ''
                 for nxt in content_items[idx + 1: idx + 6]:
                     if nxt.get('item_type') == 'heading':
                         break
-                    if nxt.get('content'):
-                        keyword_lines.append(str(nxt.get('content')))
-                if keyword_lines:
-                    candidates.append(' '.join(keyword_lines))
+                    nxt_text = str(nxt.get('content') or '')
+                    if self._KEYWORD_STOP_RE.search(nxt_text):
+                        break
+                    keyword_text += nxt_text + ' '
+                if keyword_text.strip():
+                    candidates.append(keyword_text.strip())
 
         for idx, item in enumerate(content_items):
             text = normalize_text(str(item.get('content') or ''))
             if re.match(r'^(keywords?|关键词|关键字)\s*[:：]', text, flags=re.I):
-                candidates.append(text)
+                remaining_text = text
                 for nxt in content_items[idx + 1: idx + 4]:
                     if nxt.get('item_type') == 'heading':
                         break
-                    if nxt.get('content'):
-                        candidates.append(str(nxt.get('content')))
+                    nxt_text = str(nxt.get('content') or '')
+                    if self._KEYWORD_STOP_RE.search(nxt_text):
+                        break
+                    remaining_text += ' ' + nxt_text
+                candidates.append(remaining_text)
+
+        if not candidates:
+            patterns = [
+                r'(?:keywords?|index\s+terms)\s*[:：]\s*([^$\n]+?)(?=\n\n|\n[A-Z]|\n\*\s|$)',
+                r'(?:关键词|关键字)\s*[:：]\s*([^$\n]+?)(?=\n\n|\n[A-Z]|\n\*\s|$)',
+            ]
+            for pattern in patterns:
+                for match in re.finditer(pattern, markdown_text, flags=re.I):
+                    candidates.append(match.group(1))
 
         joined = '；'.join(candidates)
 
         if not joined:
-            joined = self._extract_keywords_from_content(content_items)
+            joined = self._extract_keywords_from_content(content_items, title)
+
+        if not joined:
+            abstract = self._extract_abstract(content_items)
+            joined = self._extract_keywords_with_llm(title, abstract)
 
         if not joined:
             return []
 
+        joined = self._KEYWORD_PREFIX_RE.sub('', joined)
+
         joined = re.sub(
-            r'\b(CCS Concepts|ACM Reference Format|Additional Key Words).*',
+            r'\b(CCS Concepts|ACM Reference Format|Additional Key Words|Acknowledgments?|Acknowledgements?).*',
             '',
             joined,
             flags=re.I | re.S,
         )
+
+        for stop_pattern in [
+            r'\*\s*The\s+authors.*',
+            r'\*\s*This\s+work.*',
+            r'\*\s*We\s+thank.*',
+            r'Acknowledgments?.*',
+            r'Acknowledgements?.*',
+            r'Funding.*',
+            r'Supported\s+by.*',
+            r'Corresponding\s+author.*',
+            r'通讯作者.*',
+            r'致谢.*',
+            r'基金项目.*',
+            r'资助项目.*',
+        ]:
+            joined = re.sub(stop_pattern, '', joined, flags=re.I | re.S)
 
         raw_terms = re.split(r'[;；,，、\n]+', joined)
         result: list[str] = []
         seen: set[str] = set()
 
         for term in raw_terms:
-            term = normalize_text(term.strip(' .;；,，:：'))
+            term = self._clean_keyword_term(term)
             if not term or len(term) > 80:
+                continue
+
+            if self._is_bad_keyword(term):
                 continue
 
             key = term.lower()
@@ -734,8 +882,45 @@ class MinerUParser:
 
         return result
 
-    def _extract_keywords_from_content(self, content_items: list[dict]) -> str:
-        title_text = ''
+    def _clean_keyword_term(self, term: str) -> str:
+        term = normalize_text(term.strip(' .;；,，:：'))
+        term = self._KEYWORD_PREFIX_RE.sub('', term)
+        term = re.sub(r'^\*\s*', '', term)
+        term = re.sub(r'\s+', ' ', term)
+        term = re.sub(r'\b(?:The|the|A|a|An|an)\s+', '', term)
+        term = re.sub(r'\s+\b(?:and|or|et|al)\b', '', term, flags=re.I)
+        term = re.sub(r'\*+', '', term)
+        term = re.sub(r'^-+|-+$', '', term)
+        term = re.sub(r'^["\']+|["\']+$', '', term)
+        term = re.sub(r'\b(?:et\s+al\.?|etc\.?|etc)\b', '', term, flags=re.I)
+        term = term.strip()
+        return term
+
+    def _is_bad_keyword(self, term: str) -> bool:
+        term_lower = term.lower()
+
+        if term_lower in self._CHINESE_STOP_WORDS or term_lower in self._ENGLISH_STOP_WORDS:
+            return True
+
+        if re.search(r'^(作者|author|致谢|acknowledgment|funding|grant|doi|https?://)', term_lower):
+            return True
+
+        if re.search(r'\b(university|institute|school|department|laboratory|college)\b', term_lower):
+            return True
+
+        if re.search(r'@\w+', term):
+            return True
+
+        if len(term) == 1:
+            return True
+
+        if re.search(r'^\d+$', term):
+            return True
+
+        return False
+
+    def _extract_keywords_from_content(self, content_items: list[dict], title: str) -> str:
+        title_text = title or ''
         abstract_text = ''
         heading_text = ''
         paragraph_text = ''
@@ -765,50 +950,125 @@ class MinerUParser:
         if not text:
             return ''
 
+        keywords = []
+        seen = set()
+
+        cn_keywords = self._extract_cn_keywords_jieba(text)
+        for kw in cn_keywords:
+            if kw.lower() not in seen:
+                keywords.append(kw)
+                seen.add(kw.lower())
+
+        en_keywords = self._extract_en_keywords(text)
+        for kw in en_keywords:
+            if kw.lower() not in seen:
+                keywords.append(kw)
+                seen.add(kw.lower())
+
+        return '，'.join(keywords[:12])
+
+    def _extract_cn_keywords_jieba(self, text: str) -> list[str]:
+        try:
+            import jieba
+            import jieba.posseg as pseg
+
+            keywords = []
+            seen = set()
+
+            words = pseg.lcut(text)
+            for word, flag in words:
+                word = word.strip()
+                if not word:
+                    continue
+
+                if flag.startswith('n') and len(word) >= 2:
+                    if word.lower() not in seen and word not in self._CHINESE_STOP_WORDS:
+                        keywords.append(word)
+                        seen.add(word.lower())
+
+            return keywords[:10]
+        except Exception:
+            return self._extract_cn_keywords_fallback(text)
+
+    def _extract_cn_keywords_fallback(self, text: str) -> list[str]:
         cn_pattern = r'[\u4e00-\u9fa5]{2,8}'
-        en_pattern = r'[A-Z][a-zA-Z0-9_-]{2,18}'
-
         cn_matches = re.findall(cn_pattern, text)
-        en_matches = re.findall(en_pattern, text)
-
-        stop_words = {
-            '摘要', 'abstract', '引言', 'introduction', '结论', 'conclusion',
-            '参考文献', 'references', '致谢', 'acknowledgments', '附录', 'appendix',
-            '研究', '方法', '结果', '分析', '讨论', '提出', '基于', '使用',
-            '通过', '实现', '表明', '显示', '发现', '认为', '可能', '可以', '已经',
-            '本文', '本研究', '近年来', '目前', '随着', '由于', '因此', '然而',
-            '但是', '同时', '并且', '以及', '包括', '例如', '比如', '等等',
-            '一些', '许多', '大量', '部分', '全部', '主要', '重要', '关键',
-            'first', 'second', 'third', 'last', 'finally', 'also', 'and', 'or',
-            'but', 'not', 'this', 'that', 'these', 'those', 'with', 'for', 'of',
-            'in', 'on', 'at', 'to', 'from', 'by', 'as', 'is', 'are', 'was', 'were',
-            'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
-            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'shall',
-            'can', 'cannot', 'need', 'want', 'like', 'get', 'make', 'take', 'give',
-            'go', 'come', 'know', 'think', 'see', 'look', 'feel', 'say', 'tell',
-            'ask', 'answer', 'find', 'show', 'use', 'work', 'study', 'research',
-            'paper', 'article', 'document', 'system', 'method', 'approach', 'technique',
-            'algorithm', 'model', 'framework', 'tool', 'software', 'hardware',
-            'data', 'information', 'knowledge', 'result', 'analysis', 'evaluation',
-            'performance', 'experiment', 'test', 'case', 'example', 'application',
-            'implementation', 'development', 'design', 'structure', 'architecture',
-        }
 
         cn_counter: dict[str, int] = {}
         for word in cn_matches:
-            if word.lower() not in stop_words and len(word) >= 2:
+            if word.lower() not in self._CHINESE_STOP_WORDS and len(word) >= 2:
                 cn_counter[word] = cn_counter.get(word, 0) + 1
 
-        en_counter: dict[str, int] = {}
-        for word in en_matches:
-            if word.lower() not in stop_words and len(word) >= 3:
-                en_counter[word] = en_counter.get(word, 0) + 1
-
         cn_sorted = sorted(cn_counter.items(), key=lambda x: x[1], reverse=True)[:10]
-        en_sorted = sorted(en_counter.items(), key=lambda x: x[1], reverse=True)[:10]
+        return [k for k, v in cn_sorted]
 
-        all_keywords = [k for k, v in cn_sorted] + [k for k, v in en_sorted]
-        return '，'.join(all_keywords[:12])
+    def _extract_en_keywords(self, text: str) -> list[str]:
+        keywords = []
+        seen = set()
+
+        noun_pattern = r'[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}'
+        matches = re.findall(noun_pattern, text)
+
+        for match in matches:
+            match = match.strip()
+            if not match:
+                continue
+
+            words = match.split()
+            if all(w.lower() not in self._ENGLISH_STOP_WORDS for w in words):
+                if match.lower() not in seen:
+                    keywords.append(match)
+                    seen.add(match.lower())
+
+        en_pattern = r'\b[A-Z][a-zA-Z0-9_-]{2,18}\b'
+        single_matches = re.findall(en_pattern, text)
+        for match in single_matches:
+            if match.lower() not in seen and match.lower() not in self._ENGLISH_STOP_WORDS:
+                keywords.append(match)
+                seen.add(match.lower())
+
+        filtered_keywords = []
+        for kw in keywords:
+            kw_lower = kw.lower()
+            kw_words = kw.split()
+            
+            is_all_names = all(
+                w.lower() in self._ENGLISH_STOP_WORDS or (len(w) <= 6 and w.istitle())
+                for w in kw_words
+            )
+            
+            if len(kw_words) == 1 and len(kw) <= 5 and kw.isalpha() and kw.istitle():
+                continue
+            
+            if kw_lower in self._ENGLISH_STOP_WORDS:
+                continue
+            
+            filtered_keywords.append(kw)
+
+        return filtered_keywords[:10]
+
+    def _extract_keywords_with_llm(self, title: str, abstract: str) -> str:
+        if not title and not abstract:
+            return ''
+
+        try:
+            from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
+
+            llm = OpenAICompatibleLLM()
+            prompt = f"""请根据以下论文信息提取最多10个关键词。
+标题：{title}
+摘要：{abstract}
+
+要求：
+1. 只输出关键词，用英文逗号分隔
+2. 关键词要具有代表性，避免虚词
+3. 中英文关键词均可
+4. 不要包含"关键词"、"Keywords"等标签"""
+
+            response = llm.chat([{'role': 'user', 'content': prompt}], temperature=0.1, max_tokens=200)
+            return response.strip()
+        except Exception:
+            return ''
 
     def _extract_authors(self, markdown_text: str, title: str) -> list[str]:
         lines = [
@@ -870,8 +1130,6 @@ class MinerUParser:
         return authors
 
     def _post_process_items(self, items: list[dict]) -> list[dict]:
-        """后置清洗：剔除目录/封面垃圾、修复标题降维、合并断行与引用（中英文）"""
-
         cleaned_items = []
 
         for item in items:
@@ -883,13 +1141,11 @@ class MinerUParser:
             if not text:
                 continue
 
-            # ---------- 0a. 纯 HTML 块清洗 ----------
             if self._is_html_garbage(text):
                 order_idx = item.get('order_index', 999)
                 if isinstance(order_idx, (int, float)) and order_idx < 15:
                     continue
 
-            # ---------- 0b. 学位论文封面/声明页特征词 ----------
             text_no_space = text.replace(' ', '').replace('\n', '').replace('\r', '')
             if len(text_no_space) < 200:
                 if self._THESIS_JUNK_RE.search(text_no_space):
@@ -904,13 +1160,11 @@ class MinerUParser:
                 ):
                     continue
 
-            # ---------- 1. 剔除目录 (TOC 污染清洗) ----------
             if re.search(r'(?:\.{3,}|\u2026{2,})\s*\d+$', text):
                 continue
             if re.match(r'^(目录|Contents?|图目录|表目录)$', text, re.I):
                 continue
 
-            # ---------- 2. 标题强升维 ----------
             if item.get('item_type') in ('paragraph', 'list') and len(text) < 100 and not re.search(r'[。！？;.!?]$', text):
                 if re.match(r'^第[一二三四五六七八九十\d]+章\s*[\u4e00-\u9fa5a-zA-Z]', text):
                     item['item_type'] = 'heading'
@@ -931,7 +1185,6 @@ class MinerUParser:
             item['content'] = text
             cleaned_items.append(item)
 
-        # ---------- 2.5 公式升维：检测被 MinerU 误判为 paragraph 的 LaTeX 公式 ----------
         for item in cleaned_items:
             if item.get('item_type') not in ('paragraph', 'list'):
                 continue
@@ -940,19 +1193,15 @@ class MinerUParser:
             if not content:
                 continue
 
-            # MinerU 已输出完整 $$...$$ 包裹，只需升维
             if content.startswith('$$') and content.endswith('$$'):
                 item['item_type'] = 'formula'
                 continue
 
-            # 无 $$ 包裹但有 LaTeX 命令 → 补包裹后升维
             if self._FORMULA_SIGNAL_RE.search(content):
-                # 去掉尾部可能附着的孤立 $$
                 content = self._ORPHAN_CLOSING_RE.sub('', content).strip()
                 item['content'] = '$$\n' + content + '\n$$'
                 item['item_type'] = 'formula'
 
-        # ---------- 3. 硬回车断行与引用割裂合并（中英文） ----------
         final_items = []
         for item in cleaned_items:
             curr_type = item.get('item_type')
@@ -965,9 +1214,7 @@ class MinerUParser:
                 is_standalone_citation = bool(re.match(r'^\[\s*\d+(?:\s*[,，\-]\s*\d+)*\][。！？.!?]?$', curr_text))
                 starts_with_lowercase = bool(re.match(r'^[a-z]', curr_text))
 
-                # 中文参考文献
                 prev_is_cn_ref = bool(self._CN_REF_PATTERN.search(prev_text))
-                # 中文参考文献续行
                 curr_is_cn_ref_continuation = bool(
                     not re.match(r'^\[\s*\d+', curr_text)
                     and (
@@ -977,12 +1224,10 @@ class MinerUParser:
                     )
                 )
 
-                # 英文参考文献
                 prev_is_en_ref = bool(
                     self._EN_REF_PATTERN.search(prev_text)
                     and not prev_is_cn_ref
                 )
-                # 英文参考文献续行
                 curr_is_en_ref_continuation = bool(
                     not re.match(r'^\[\s*\d+', curr_text)
                     and self._EN_REF_CONTINUATION_RE.search(curr_text)
@@ -995,12 +1240,10 @@ class MinerUParser:
                     should_merge = True
                 elif starts_with_lowercase:
                     should_merge = True
-                # 中文参考文献续行
                 elif prev_is_cn_ref and ends_without_period:
                     should_merge = True
                 elif prev_is_cn_ref and curr_is_cn_ref_continuation:
                     should_merge = True
-                # 英文参考文献续行
                 elif prev_is_en_ref and ends_without_period:
                     should_merge = True
                 elif prev_is_en_ref and curr_is_en_ref_continuation:

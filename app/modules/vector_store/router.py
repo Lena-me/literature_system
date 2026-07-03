@@ -2,7 +2,9 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+BEIJING_TZ = timezone(timedelta(hours=8))
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -40,7 +42,7 @@ async def _run_optional_command(command: str | None, env: dict[str, str]) -> tup
 @router.post('/backups')
 async def create_backup(db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
     Path(settings.milvus_backup_dir).mkdir(parents=True, exist_ok=True)
-    backup_name = f"paper_chunks_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    backup_name = f"paper_chunks_{datetime.now(BEIJING_TZ).strftime('%Y%m%d%H%M%S')}"
     location = str(Path(settings.milvus_backup_dir) / backup_name)
     obj = VectorBackup(backup_type='manual', file_location=location, status='in_progress')
     db.add(obj); await db.commit(); await db.refresh(obj)
@@ -65,9 +67,9 @@ async def restore_backup(data: VectorRestoreIn, db: AsyncSession = Depends(get_d
     db.add(task); await db.commit(); await db.refresh(task)
     try:
         status, output = await _run_optional_command(settings.milvus_restore_command, {'BACKUP_ID': str(backup.id), 'BACKUP_LOCATION': backup.file_location, 'MILVUS_COLLECTION': settings.milvus_collection})
-        task.restore_progress = 100; task.status = 'completed'; task.finished_at = datetime.utcnow()
+        task.restore_progress = 100; task.status = 'completed'; task.finished_at = datetime.now(BEIJING_TZ)
         await db.commit()
         return {'restore_task_id': task.id, 'status': task.status, 'command_status': status, 'output': output[:1000]}
     except Exception as exc:
-        task.status = 'failed'; task.error_log = repr(exc); task.finished_at = datetime.utcnow(); await db.commit()
+        task.status = 'failed'; task.error_log = repr(exc); task.finished_at = datetime.now(BEIJING_TZ); await db.commit()
         raise HTTPException(500, f'恢复失败：{exc}')

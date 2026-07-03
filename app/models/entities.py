@@ -1,12 +1,14 @@
 from __future__ import annotations
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from sqlalchemy import BigInteger, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Boolean
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
+BEIJING_TZ = timezone(timedelta(hours=8))
+
 def utcnow() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(BEIJING_TZ)
 
 class User(Base):
     __tablename__ = 'users'
