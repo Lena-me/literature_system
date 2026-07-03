@@ -181,6 +181,14 @@ class PaperPipelineService:
                 paper.parse_status = status
             db.commit()
 
+    def _truncate_text(self, text, max_length: int = 1048576) -> str:
+        if text is None:
+            return ''
+        text = str(text)
+        if len(text) > max_length:
+            return text[:max_length] + '... [truncated]'
+        return text
+
     def _replace_parsed_content(self, paper_id: int, parsed: dict) -> None:
         with celery_db() as db:
             paper = db.get(Paper, paper_id)
@@ -196,7 +204,7 @@ class PaperPipelineService:
                     paper_id=paper_id,
                     item_type=item.get('item_type', 'paragraph'),
                     level=item.get('level'),
-                    content=item.get('content', ''),
+                    content=self._truncate_text(item.get('content', '')),
                     page_number=item.get('page_number'),
                     order_index=item.get('order_index', 0),
                 ))
@@ -205,10 +213,10 @@ class PaperPipelineService:
                 db.add(FiguresTable(
                     paper_id=paper_id,
                     type=item.get('type', 'table'),
-                    caption=item.get('caption'),
+                    caption=self._truncate_text(item.get('caption')),
                     page_number=item.get('page_number'),
                     image_path=item.get('image_path'),
-                    extracted_text=item.get('extracted_text'),
+                    extracted_text=self._truncate_text(item.get('extracted_text')),
                     order_index=item.get('order_index', 0),
                 ))
 

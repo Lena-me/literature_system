@@ -666,12 +666,12 @@ class MinerUParser:
     def _extract_keywords(self, markdown_text: str, content_items: list[dict]) -> list[str]:
         candidates: list[str] = []
         patterns = [
-            r'(?:keywords?|index\s+terms)\s*[:：]\s*(.+)',
-            r'(?:关键词|关键字)\s*[:：]\s*(.+)',
+            r'(?:keywords?|index\s+terms)\s*[:：]\s*(.+?)(?=\n\n|\n[A-Z]|\Z)',
+            r'(?:关键词|关键字)\s*[:：]\s*(.+?)(?=\n\n|\Z)',
         ]
 
         for pattern in patterns:
-            for match in re.finditer(pattern, markdown_text, flags=re.I):
+            for match in re.finditer(pattern, markdown_text, flags=re.I | re.S):
                 candidates.append(match.group(1))
 
         for idx, item in enumerate(content_items):
@@ -681,14 +681,30 @@ class MinerUParser:
                 text,
                 flags=re.I,
             ):
+                keyword_lines = []
+                for nxt in content_items[idx + 1: idx + 6]:
+                    if nxt.get('item_type') == 'heading':
+                        break
+                    if nxt.get('content'):
+                        keyword_lines.append(str(nxt.get('content')))
+                if keyword_lines:
+                    candidates.append(' '.join(keyword_lines))
+
+        for idx, item in enumerate(content_items):
+            text = normalize_text(str(item.get('content') or ''))
+            if re.match(r'^(keywords?|关键词|关键字)\s*[:：]', text, flags=re.I):
+                candidates.append(text)
                 for nxt in content_items[idx + 1: idx + 4]:
                     if nxt.get('item_type') == 'heading':
                         break
                     if nxt.get('content'):
                         candidates.append(str(nxt.get('content')))
-                        break
 
         joined = '；'.join(candidates)
+
+        if not joined:
+            joined = self._extract_keywords_from_content(content_items)
+
         if not joined:
             return []
 
@@ -717,6 +733,82 @@ class MinerUParser:
                 break
 
         return result
+
+    def _extract_keywords_from_content(self, content_items: list[dict]) -> str:
+        title_text = ''
+        abstract_text = ''
+        heading_text = ''
+        paragraph_text = ''
+
+        for item in content_items[:150]:
+            text = normalize_text(str(item.get('content') or ''))
+            if not text:
+                continue
+
+            if item.get('item_type') == 'heading':
+                if item.get('level') == 1 and not title_text:
+                    title_text = text
+                elif re.search(r'摘要|abstract', text, flags=re.I):
+                    continue
+                else:
+                    heading_text += text + ' '
+            elif re.match(r'^(摘要|Abstract)\s*[:：]', text, flags=re.I):
+                abstract_text = text + ' '
+            elif item.get('item_type') == 'paragraph' and len(paragraph_text) < 3000:
+                paragraph_text += text[:800] + ' '
+
+        all_text = title_text + ' ' + abstract_text + ' ' + heading_text + ' ' + paragraph_text
+        return self._extract_keywords_from_text(all_text)
+
+    def _extract_keywords_from_text(self, text: str) -> str:
+        text = normalize_text(text)
+        if not text:
+            return ''
+
+        cn_pattern = r'[\u4e00-\u9fa5]{2,8}'
+        en_pattern = r'[A-Z][a-zA-Z0-9_-]{2,18}'
+
+        cn_matches = re.findall(cn_pattern, text)
+        en_matches = re.findall(en_pattern, text)
+
+        stop_words = {
+            '摘要', 'abstract', '引言', 'introduction', '结论', 'conclusion',
+            '参考文献', 'references', '致谢', 'acknowledgments', '附录', 'appendix',
+            '研究', '方法', '结果', '分析', '讨论', '提出', '基于', '使用',
+            '通过', '实现', '表明', '显示', '发现', '认为', '可能', '可以', '已经',
+            '本文', '本研究', '近年来', '目前', '随着', '由于', '因此', '然而',
+            '但是', '同时', '并且', '以及', '包括', '例如', '比如', '等等',
+            '一些', '许多', '大量', '部分', '全部', '主要', '重要', '关键',
+            'first', 'second', 'third', 'last', 'finally', 'also', 'and', 'or',
+            'but', 'not', 'this', 'that', 'these', 'those', 'with', 'for', 'of',
+            'in', 'on', 'at', 'to', 'from', 'by', 'as', 'is', 'are', 'was', 'were',
+            'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'shall',
+            'can', 'cannot', 'need', 'want', 'like', 'get', 'make', 'take', 'give',
+            'go', 'come', 'know', 'think', 'see', 'look', 'feel', 'say', 'tell',
+            'ask', 'answer', 'find', 'show', 'use', 'work', 'study', 'research',
+            'paper', 'article', 'document', 'system', 'method', 'approach', 'technique',
+            'algorithm', 'model', 'framework', 'tool', 'software', 'hardware',
+            'data', 'information', 'knowledge', 'result', 'analysis', 'evaluation',
+            'performance', 'experiment', 'test', 'case', 'example', 'application',
+            'implementation', 'development', 'design', 'structure', 'architecture',
+        }
+
+        cn_counter: dict[str, int] = {}
+        for word in cn_matches:
+            if word.lower() not in stop_words and len(word) >= 2:
+                cn_counter[word] = cn_counter.get(word, 0) + 1
+
+        en_counter: dict[str, int] = {}
+        for word in en_matches:
+            if word.lower() not in stop_words and len(word) >= 3:
+                en_counter[word] = en_counter.get(word, 0) + 1
+
+        cn_sorted = sorted(cn_counter.items(), key=lambda x: x[1], reverse=True)[:10]
+        en_sorted = sorted(en_counter.items(), key=lambda x: x[1], reverse=True)[:10]
+
+        all_keywords = [k for k, v in cn_sorted] + [k for k, v in en_sorted]
+        return '，'.join(all_keywords[:12])
 
     def _extract_authors(self, markdown_text: str, title: str) -> list[str]:
         lines = [

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, date
 from sqlalchemy import BigInteger, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Boolean
+from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
@@ -75,7 +76,7 @@ class ContentItem(Base):
     paper_id: Mapped[int] = mapped_column(ForeignKey('papers.id'), index=True)
     item_type: Mapped[str] = mapped_column(String(40), index=True)
     level: Mapped[int | None] = mapped_column(Integer)
-    content: Mapped[str] = mapped_column(Text)
+    content: Mapped[str] = mapped_column(mysql.LONGTEXT)
     page_number: Mapped[int | None] = mapped_column(Integer)
     order_index: Mapped[int] = mapped_column(Integer, default=0)
     parent_id: Mapped[int | None] = mapped_column(ForeignKey('content_items.id'))
@@ -86,10 +87,10 @@ class FiguresTable(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     paper_id: Mapped[int] = mapped_column(ForeignKey('papers.id'), index=True)
     type: Mapped[str] = mapped_column(String(20), index=True)
-    caption: Mapped[str | None] = mapped_column(Text)
+    caption: Mapped[str | None] = mapped_column(mysql.LONGTEXT)
     page_number: Mapped[int | None] = mapped_column(Integer)
     image_path: Mapped[str | None] = mapped_column(String(500))
-    extracted_text: Mapped[str | None] = mapped_column(Text)
+    extracted_text: Mapped[str | None] = mapped_column(mysql.LONGTEXT)
     order_index: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

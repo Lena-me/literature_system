@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
+import {ZoomIn, ZoomOut } from '@element-plus/icons-vue'
 import 'pdfjs-dist/web/pdf_viewer.css'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -28,6 +29,7 @@ const pageHeightPx = ref(800)           // 骨架屏高度（首页渲染后更�
 const pageWidthPx = ref(566)            // 骨架屏宽度（A4 比例 ≈ height / 1.414）
 const scrollPage = ref(1)               // 当前视口最可见的页码（工具栏显示用）
 const renderedPages = shallowRef(new Set<number>())
+const icons = { ZoomIn, ZoomOut }
 
 // ============================================================================
 // 内部非响应式引用
@@ -632,10 +634,6 @@ async function zoomOut() {
   await applyZoom(Math.max(scale.value - 0.15, 0.7))
 }
 
-// ============================================================================
-// 跳转 & 滚动
-// ============================================================================
-
 async function scrollToPage(page: number) {
   if (!containerRef.value) return
   const el = containerRef.value.querySelector<HTMLElement>(`[data-page="${page}"]`)
@@ -650,10 +648,6 @@ async function jumpTo(page: number, _text?: string) {
   const target = Math.min(Math.max(Number(page) || 1, 1), totalPages.value || 1)
   await scrollToPage(target)
 }
-
-// ============================================================================
-// Ref 回调（Vue 动态 ref）
-// ============================================================================
 
 function setCanvasRef(pageNum: number, el: any) {
   if (el) {
@@ -687,8 +681,8 @@ defineExpose({ jumpTo })
     <!-- 工具栏（保留原有翻页/缩放控件） -->
     <div class="toolbar">
       <div>
-        <el-button size="small" @click="zoomOut">Zoom out</el-button>
-        <el-button size="small" @click="zoomIn">Zoom in</el-button>
+        <el-button size="small" @click="zoomOut"><el-icon><ZoomOut /></el-icon></el-button>
+        <el-button size="small" @click="zoomIn"><el-icon><ZoomIn /></el-icon></el-button>
       </div>
       <div class="pager">
         <span>Page</span>

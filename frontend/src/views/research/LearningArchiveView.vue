@@ -81,8 +81,8 @@ function renderWordCloud() {
     },
     series: [{
       type: 'wordCloud',
-      gridSize: 8,
-      sizeRange: [16, 56],
+      gridSize: 6,
+      sizeRange: [6, 50],
       rotationRange: [-45, 45],
       rotationStep: 15,
       shape: 'circle',
@@ -105,7 +105,7 @@ function renderWordCloud() {
         name,
         value,
         textStyle: {
-          fontSize: 16 + (value / maxValue) * 40,
+          fontSize: 8 + (value / maxValue) * 35,
           color: colors[index % colors.length],
         },
       })),
