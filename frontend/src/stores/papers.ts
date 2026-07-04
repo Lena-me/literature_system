@@ -1,10 +1,19 @@
 import { defineStore } from 'pinia'
 import { papersApi } from '@/api/papers'
+import { featuresApi } from '@/api/features'
 import type { ParseStatusEvent } from '@/api/papers'
 import type { ContentItem, Paper } from '@/types/domain'
 import { useNotebookStore } from '@/stores/notebook'
 
 const DEFAULT_CHUNK_SIZE = 2 * 1024 * 1024
+
+async function recordLearningEvent(eventType: string, paperId?: number, eventData?: Record<string, unknown>) {
+  try {
+    await featuresApi.record({ paper_id: paperId, event_type: eventType, event_data: eventData })
+  } catch {
+    // 学习记录失败不影响主流程
+  }
+}
 const TERMINAL_PARSE_STATUSES = new Set(['completed', 'indexed', 'failed', 'deleted'])
 const PARSE_POLL_MS = 5000
 const PARSE_SSE_RECONNECT_MS = 2000
@@ -202,17 +211,20 @@ export const usePaperStore = defineStore('papers', {
     async open(paper: Paper) {
       this.current = paper
       this.content = await papersApi.content(paper.id)
+      recordLearningEvent('paper_open', paper.id)
     },
     async upload(file: File, onProgress?: (n: number) => void) {
       const paper = await papersApi.upload(file, onProgress)
       await this.load()
       this.ensureParseSync()
+      recordLearningEvent('paper_upload', paper?.id, { filename: file.name })
       return paper
     },
     async batchUpload(files: File[], onProgress?: (n: number) => void) {
       const result = await papersApi.batchUpload(files, onProgress)
       await this.load()
       this.ensureParseSync()
+      result.forEach((p: Paper) => p && recordLearningEvent('paper_upload', p?.id))
       return result
     },
     async chunkUpload(file: File, onProgress?: (n: number) => void, chunkSize = DEFAULT_CHUNK_SIZE) {
@@ -244,6 +256,7 @@ export const usePaperStore = defineStore('papers', {
       localStorage.removeItem(cacheKey)
       await this.load()
       this.ensureParseSync()
+      recordLearningEvent('paper_upload', paper?.id, { filename: file.name })
       return paper
     },
     async smartUpload(files: File[], onProgress?: (n: number) => void) {

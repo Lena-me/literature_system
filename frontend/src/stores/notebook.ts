@@ -2,8 +2,17 @@ import { defineStore } from 'pinia'
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { qaApi } from '@/api/qa'
+import { featuresApi } from '@/api/features'
 import type { ChatMessage, KnowledgeDomain, SessionDetail, SessionPaper, SessionSummary, Source, StreamFlow, StreamStage } from '@/types/domain'
 import { inferStreamFlow } from '@/utils/streamStages'
+
+async function recordLearningEvent(eventType: string, paperId?: number, eventData?: Record<string, unknown>) {
+  try {
+    await featuresApi.record({ paper_id: paperId, event_type: eventType, event_data: eventData })
+  } catch {
+    // 学习记录失败不影响主流程
+  }
+}
 
 export const useNotebookStore = defineStore('notebook', () => {
   const router = useRouter()
@@ -84,6 +93,8 @@ export const useNotebookStore = defineStore('notebook', () => {
   }
 
   async function switchSession(sessionId: number) {
+    recordLearningEvent('session_switch', undefined, { session_id: sessionId })
+
     // 流式进行中切走：先把当前 UI 消息写入缓存，后台继续更新缓存
     const prevSessionId = activeSessionId.value
     if (prevSessionId && prevSessionId !== sessionId && isSessionStreaming(prevSessionId)) {
@@ -464,6 +475,11 @@ export const useNotebookStore = defineStore('notebook', () => {
     const question = text.trim()
     const isFirstMessage = activeMessages.value.length === 0
 
+    const paperIds = mentionedIds && mentionedIds.length > 0
+      ? mentionedIds
+      : (activeSources.value.length > 0 ? activeSources.value.map(p => p.id) : null)
+    recordLearningEvent('ai_message', paperIds?.[0], { question: question.slice(0, 100), session_id: activeSessionId.value })
+
     // 若正在编辑某条用户消息，先删 tail 再发送
     if (editingMessageId.value) {
       await editMessage(editingMessageId.value, question)
@@ -531,6 +547,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     currentReadingPage.value = page || 1
     currentReadingHighlight.value = highlight || ''
     isReadingDrawerOpen.value = true
+    recordLearningEvent('paper_read', paperId, { page })
   }
 
   function closeReadingDrawer() {
