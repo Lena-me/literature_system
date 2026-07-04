@@ -1,14 +1,16 @@
 <script lang="ts">
 import StreamProgress from '@/components/notebook/StreamProgress.vue'
+import ThinkingBlock from '@/components/notebook/ThinkingBlock.vue'
 
 export default {
-  components: { StreamProgress },
+  components: { StreamProgress, ThinkingBlock },
 }
 </script>
 
 <script setup lang="ts">
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { useNotebookStore } from '@/stores/notebook'
-import type { RelatedVisual, Source } from '@/types/domain'
+import type { ChatMessage, RelatedVisual, Source } from '@/types/domain'
 import { visualLabel } from '@/utils/sourceNavigation'
 import MarkdownRenderer from '@/components/common/MarkdownRenderer.vue'
 
@@ -18,9 +20,13 @@ const emit = defineEmits<{
   visualClick: [source: Source, visual: RelatedVisual]
 }>()
 
+const listRef = ref<HTMLElement | null>(null)
+const stickToBottom = ref(true)
+const bottomAnchor = ref<HTMLElement | null>(null)
+
 interface GroupedChunk extends Source {
-  ref_index: number   // 原始 sources 数组中的位置 (0-based)
-  ref_label: string   // [1], [2] ...
+  ref_index: number
+  ref_label: string
 }
 
 interface PaperGroup {
@@ -30,20 +36,14 @@ interface PaperGroup {
   chunks: GroupedChunk[]
 }
 
-/**
- * ★ 按 paper_id 聚合 sources，消除同论文5个chunk的视觉冗余
- * 同时保留原始 index，确保点击事件链路不断
- */
 function groupSourcesByPaper(sources: Source[]): PaperGroup[] {
   if (!sources?.length) return []
 
-  // 构建 paper_id → title 映射
   const paperMap = new Map<number, string>()
   for (const p of notebook.activeSources) {
     paperMap.set(p.id, p.title || p.original_filename || `文献 ${p.id}`)
   }
 
-  // 按 paper_id 分组，保留原始 index
   const groups = new Map<number, GroupedChunk[]>()
   sources.forEach((s, i) => {
     if (!groups.has(s.paper_id)) groups.set(s.paper_id, [])
@@ -83,9 +83,50 @@ function countPaperVisuals(sources: Source[]): number {
   return seen.size
 }
 
-/**
- * 事件委托：捕获 AI 回答中 <sup class="citation-mark"> 的点击
- */
+function onListScroll() {
+  const el = listRef.value
+  if (!el) return
+  stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 100
+}
+
+async function scrollToBottom(force = false) {
+  if (!force && !stickToBottom.value) return
+  await nextTick()
+  bottomAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+}
+
+function scrollToLatest(force = true) {
+  stickToBottom.value = true
+  scrollToBottom(force)
+}
+
+function isLastAssistant(index: number, m: ChatMessage) {
+  if (m.role !== 'assistant') return false
+  for (let i = notebook.activeMessages.length - 1; i >= 0; i--) {
+    if (notebook.activeMessages[i].role === 'assistant') return i === index
+  }
+  return false
+}
+
+function canEditUser(m: ChatMessage, index: number) {
+  return m.role === 'user' && m.id && index === notebook.activeMessages.length - 2 && !notebook.isStreaming
+}
+
+watch(
+  () => notebook.scrollTick,
+  () => scrollToBottom(false),
+)
+
+watch(
+  () => notebook.activeSessionId,
+  () => {
+    stickToBottom.value = true
+    scrollToLatest(true)
+  },
+)
+
+onMounted(() => scrollToLatest(false))
+
 function handleCitationClick(e: MouseEvent) {
   const el = (e.target as HTMLElement).closest('.citation-mark') as HTMLElement | null
   if (!el) return
@@ -103,16 +144,33 @@ function handleCitationClick(e: MouseEvent) {
   const msg = notebook.activeMessages[msgIndex]
   if (!msg?.sources?.[index]) return
 
-  const source = msg.sources[index]
-  console.log(`[citation-click] 角标[${index + 1}] → paper_id=${source.paper_id} | page=${source.page_number} | text="${(source.text || source.snippet || '').slice(0, 60)}..."`)
-  emit('sourceClick', source)
+  emit('sourceClick', msg.sources[index])
+}
+
+function updateReasoningExpanded(index: number, expanded: boolean) {
+  const m = notebook.activeMessages[index]
+  if (!m) return
+  notebook.activeMessages[index] = { ...m, reasoningExpanded: expanded }
 }
 </script>
 
 <template>
-  <div class="message-list" @click="handleCitationClick">
+  <div ref="listRef" class="message-list" @scroll="onListScroll" @click="handleCitationClick">
+    <div class="list-toolbar">
+      <button type="button" class="toolbar-btn" title="滚动到最新" @click="scrollToLatest(true)">
+        ↓ 最新
+      </button>
+      <button
+        type="button"
+        class="toolbar-btn"
+        :disabled="notebook.isStreaming || !notebook.activeMessages.length"
+        title="刷新消息"
+        @click="notebook.reloadMessages()"
+      >
+        ↻ 刷新
+      </button>
+    </div>
 
-    <!-- ★ 冷启动 -->
     <div v-if="notebook.activeMessages.length === 0" class="empty-state">
       <div class="spark">✦</div>
       <h3>开始你的研究对话</h3>
@@ -122,10 +180,9 @@ function handleCitationClick(e: MouseEvent) {
       <p v-else>还未挂载文献，你可以直接提问（AI 将基于自身知识回答），或者先上传文献。</p>
     </div>
 
-    <!-- ★ 消息列表 -->
     <div
       v-for="(m, i) in notebook.activeMessages"
-      :key="i"
+      :key="m.id ?? `local-${i}`"
       class="message"
       :class="m.role"
       :data-message-index="i"
@@ -134,15 +191,34 @@ function handleCitationClick(e: MouseEvent) {
         <div class="bubble user-bubble">
           <p>{{ m.content }}</p>
         </div>
+        <div v-if="canEditUser(m, i)" class="msg-actions">
+          <button type="button" @click="notebook.startEditMessage(m.id!, m.content)">编辑</button>
+        </div>
       </template>
 
       <template v-else>
         <div class="bubble assistant-bubble">
-          <StreamProgress v-if="m.streamStage && !m.content" :stage="m.streamStage" />
+          <StreamProgress
+            v-if="m.streamStage && !m.content && !(m.reasoning || '').trim()"
+            :stage="m.streamStage"
+            :flow="m.streamFlow"
+          />
+          <ThinkingBlock
+            v-if="(m.reasoning || '').trim()"
+            :reasoning="m.reasoning"
+            :expanded="m.reasoningExpanded ?? false"
+            :streaming="notebook.isStreaming && isLastAssistant(i, m) && !m.content"
+            @update:expanded="updateReasoningExpanded(i, $event)"
+          />
           <MarkdownRenderer v-if="m.content" :content="m.content" />
         </div>
 
-        <!-- ★ 引用图表：点击跳转 PDF 对应位置；正文 [n] 角标仍可定位文字 -->
+        <div v-if="isLastAssistant(i, m) && !notebook.isStreaming" class="msg-actions">
+          <button type="button" @click="notebook.regenerateLastResponse()">
+            {{ m.cancelled ? '继续生成' : '重新生成' }}
+          </button>
+        </div>
+
         <div v-if="m.sources?.length && countPaperVisuals(m.sources)" class="sources-section">
           <div class="sources-head">
             <span>
@@ -151,7 +227,6 @@ function handleCitationClick(e: MouseEvent) {
             </span>
           </div>
 
-          <!-- 父级：文献组 -->
           <div
             v-for="group in groupSourcesByPaper(m.sources).filter(g => collectPaperVisuals(g.chunks).length)"
             :key="group.paper_id"
@@ -162,11 +237,7 @@ function handleCitationClick(e: MouseEvent) {
               <span class="paper-group-title">{{ group.paper_title }}</span>
             </div>
 
-            <div
-              v-if="collectPaperVisuals(group.chunks).length"
-              class="paper-visuals"
-              @click.stop
-            >
+            <div v-if="collectPaperVisuals(group.chunks).length" class="paper-visuals" @click.stop>
               <button
                 v-for="visual in collectPaperVisuals(group.chunks)"
                 :key="visual.id"
@@ -189,43 +260,111 @@ function handleCitationClick(e: MouseEvent) {
         </div>
       </template>
     </div>
+
+    <div ref="bottomAnchor" class="scroll-anchor" />
   </div>
 </template>
 
 <style scoped>
 .message-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 24px;
+  padding: 16px 24px 24px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
 }
 
-/* ===== 空状态 ===== */
+.list-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  width: 100%;
+  max-width: 800px;
+  display: flex;
+  gap: 8px;
+  padding: 4px 0 12px;
+  background: linear-gradient(var(--academic-canvas) 70%, transparent);
+}
+
+.toolbar-btn {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--academic-border);
+  background: var(--academic-panel);
+  color: var(--academic-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  color: var(--academic-primary);
+  border-color: rgba(37, 99, 235, 0.35);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.scroll-anchor {
+  width: 100%;
+  height: 1px;
+  flex-shrink: 0;
+}
+
 .empty-state { text-align: center; padding: 60px 24px; max-width: 480px; }
 .spark { font-size: 48px; color: var(--academic-primary); margin-bottom: 12px; }
 .empty-state h3 { font-size: 18px; color: var(--academic-text-main); margin: 0 0 8px; }
 .empty-state p { font-size: 14px; color: var(--academic-text-muted); line-height: 1.65; }
 .empty-state b { color: var(--academic-primary); font-weight: 600; }
 
-/* ===== 消息 ===== */
 .message { width: 100%; max-width: 800px; margin: 12px 0; display: flex; flex-direction: column; }
 .message.user { align-items: flex-end; }
 .message.assistant { align-items: flex-start; }
 
-/* ===== 气泡 ===== */
 .bubble { max-width: 88%; padding: 14px 18px; border-radius: 16px; line-height: 1.65; }
 .user-bubble { background: var(--academic-primary); border-bottom-right-radius: 6px; }
 .user-bubble p { margin: 0; color: #fff; white-space: pre-wrap; }
-.assistant-bubble { background: var(--academic-canvas); border: 1px solid var(--academic-border); border-bottom-left-radius: 6px; color: var(--academic-text-body); }
+.assistant-bubble {
+  width: 100%;
+  max-width: 100%;
+  background: var(--academic-canvas);
+  border: 1px solid var(--academic-border);
+  border-bottom-left-radius: 6px;
+  color: var(--academic-text-body);
+}
 
-/* ===== 聚合引用来源 ===== */
+.msg-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  padding-left: 4px;
+}
+
+.message.user .msg-actions {
+  padding-right: 4px;
+  padding-left: 0;
+}
+
+.msg-actions button {
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  color: var(--academic-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.msg-actions button:hover {
+  color: var(--academic-primary);
+}
+
 .sources-section { margin-top: 10px; width: 100%; max-width: 800px; }
 .sources-head { font-size: 12px; color: var(--academic-text-muted); margin-bottom: 10px; padding-left: 2px; }
 
-/* 父级：文献组容器 */
 .paper-group {
   background: var(--academic-canvas);
   border: 1px solid var(--academic-border);
@@ -256,7 +395,6 @@ function handleCitationClick(e: MouseEvent) {
   min-width: 0;
 }
 
-/* 图表画廊 */
 .paper-visuals {
   display: flex;
   flex-wrap: wrap;
@@ -313,15 +451,4 @@ function handleCitationClick(e: MouseEvent) {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
-
-/* ===== 流式指示 ===== */
-.typing-indicator {
-  display: flex; align-items: center; gap: 8px; padding: 10px 0;
-  align-self: flex-start; margin-left: 12px;
-  color: var(--academic-text-muted); font-size: 13px;
-}
-.dots i { font-style: normal; animation: dotBounce 1.2s infinite; font-weight: 700; color: var(--academic-primary); }
-.dots i:nth-child(2) { animation-delay: 0.2s; }
-.dots i:nth-child(3) { animation-delay: 0.4s; }
-@keyframes dotBounce { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
 </style>

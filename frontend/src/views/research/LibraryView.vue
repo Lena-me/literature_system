@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { papersApi } from '@/api/papers'
 import { usePaperStore } from '@/stores/papers'
 import PaperReader from '@/components/reader/PaperReader.vue'
@@ -78,55 +78,34 @@ function getCategoryName(paper: any): string | null {
   return categories.value.find(c => c.id === paper.category_id)?.name || null
 }
 
-// ── 实时轮询：检测解析中的文献，自动刷新列表 ──
-let pollTimer: ReturnType<typeof setInterval> | null = null
-
-function startPolling() {
-  stopPolling()
-  pollTimer = setInterval(async () => {
-    const hasProcessing = store.list.some(
-      (p: any) => p.parse_status && p.parse_status !== 'completed' && p.parse_status !== 'failed'
-    )
-    if (hasProcessing) {
-      await store.load()
-    }
-  }, 3000)
-}
-
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
-}
-
-onMounted(() => {
-  store.load().then(startPolling)
+onMounted(async () => {
+  await store.load({ limit: 200 })
   loadCategories()
-})
-
-onUnmounted(() => {
-  stopPolling()
+  store.ensureParseSync()
 })
 
 // ── 分类 API ──
 async function loadCategories() {
   try {
-    const { data } = await papersApi.categories()
-    categories.value = (data || []).map((c: any) => ({ id: c.id, name: c.name }))
-  } catch { /* ignore */ }
+    const rows = await papersApi.categories()
+    categories.value = (Array.isArray(rows) ? rows : []).map((c: any) => ({ id: c.id, name: c.name }))
+  } catch {
+    /* ignore */
+  }
 }
 
 async function addCategory() {
   const name = newCategoryName.value.trim()
   if (!name) return
   try {
-    const { data } = await papersApi.createCategory(name)
-    categories.value.unshift({ id: data.id, name: data.name })
+    const created = await papersApi.createCategory(name) as { id: number; name: string }
+    categories.value.unshift({ id: created.id, name: created.name })
     newCategoryName.value = ''
     showNewCategory.value = false
-    activeCategory.value = data.id
-  } catch { /* ignore */ }
+    activeCategory.value = created.id
+  } catch {
+    /* ignore */
+  }
 }
 
 function startEditCategory(cat: Category) {
@@ -180,6 +159,9 @@ function statusLabel(s: string | null | undefined): string {
   switch (s) {
     case 'completed': return '已解析'
     case 'failed': return '解析失败'
+    case 'queued': return '排队中'
+    case 'extracting': return '抽取中'
+    case 'vectorizing': return '向量化中'
     case 'processing':
     case 'parsing': return '解析中'
     case 'pending': return '等待中'
@@ -302,8 +284,7 @@ async function remove(id: number) {
 }
 
 async function reparse(id: number) {
-  await papersApi.reparse(id)
-  await store.load()
+  await store.reparsePaper(id)
 }
 
 // ── 上传 ──
@@ -338,6 +319,8 @@ async function uploadFile(item: UploadItem) {
     item.status = 'done'
     item.progress = 100
     item.message = '已上传，解析中...'
+    await store.load({ limit: 200 })
+    store.ensureParseSync()
   } catch (err: any) {
     item.status = 'error'
     item.message = err?.message || '上传失败'
@@ -347,7 +330,7 @@ async function uploadFile(item: UploadItem) {
 function closeUpload() {
   uploadVisible.value = false
   uploadItems.value = []
-  store.load()
+  store.load({ limit: 200 })
 }
 
 // ── 批量选择 ──

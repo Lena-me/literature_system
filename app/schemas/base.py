@@ -99,6 +99,7 @@ class QAAskIn(BaseModel):
     paper_ids: list[int] | None = None
     session_id: int | None = None
     top_k: int | None = None
+    regenerate: bool = False
 
 class SessionCreateIn(BaseModel):
     title: str | None = None

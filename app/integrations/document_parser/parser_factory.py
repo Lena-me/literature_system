@@ -27,7 +27,12 @@ class HybridDocumentParser:
             final_result = self.mineru.parse(pdf_bytes, filename)
             final_result['parser'] = 'hybrid (mineru+grobid)'
         except Exception as e:
-            logger.warning(f"MinerU failed: {e}. Falling back entirely to Grobid.")
+            logger.warning(
+                'MinerU failed: %s. Falling back entirely to Grobid '
+                '(Grobid 无法提取 figure 图片，Markdown 中可能无图). '
+                '若报错含 PageChars，请 pip install "pdftext>=0.6.3,<0.7" 后重跑解析.',
+                e,
+            )
             return self.grobid.parse(pdf_bytes, filename)
 
         # 2. 并行/串行运行 Grobid 榨取元数据

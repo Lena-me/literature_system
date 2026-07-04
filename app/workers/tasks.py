@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.db.mysql import celery_db
 from app.models import Paper, ParseTask
+from app.services.parse_status_events import publish_parse_status
 from app.services.pipeline_service import PaperPipelineService
 from app.workers.celery_app import celery_app
 
@@ -45,6 +46,17 @@ def _latest_task(db, paper_id: int) -> ParseTask | None:
     return result.scalars().first()
 
 
+def _notify_paper_status(paper: Paper | None, paper_id: int, status: str) -> None:
+    if not paper:
+        return
+    publish_parse_status(
+        paper.user_id,
+        paper_id,
+        status,
+        title=paper.title or paper.original_filename,
+    )
+
+
 def _mark_running(paper_id: int) -> None:
     with celery_db() as db:
         task = _latest_task(db, paper_id)
@@ -57,6 +69,7 @@ def _mark_running(paper_id: int) -> None:
             task.end_time = None
             task.error_log = None
         db.commit()
+        _notify_paper_status(paper, paper_id, 'parsing')
 
 
 def _mark_completed(paper_id: int) -> None:
@@ -69,6 +82,7 @@ def _mark_completed(paper_id: int) -> None:
             task.status = 'completed'
             task.end_time = datetime.now(BEIJING_TZ)
         db.commit()
+        _notify_paper_status(paper, paper_id, 'completed')
 
 
 def _mark_failed(paper_id: int, exc: Exception) -> None:
@@ -82,3 +96,4 @@ def _mark_failed(paper_id: int, exc: Exception) -> None:
             task.end_time = datetime.now(BEIJING_TZ)
             task.error_log = f'{type(exc).__name__}: {str(exc)[:3000]}'
         db.commit()
+        _notify_paper_status(paper, paper_id, 'failed')

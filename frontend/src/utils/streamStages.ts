@@ -1,42 +1,82 @@
-import type { StreamStage } from '@/types/domain'
+import type { StreamFlow, StreamStage } from '@/types/domain'
 
-export const STREAM_STAGES: { id: StreamStage; label: string }[] = [
-  { id: 'embedding', label: '理解问题' },
-  { id: 'searching', label: '检索文献' },
-  { id: 'reranking', label: '重排序' },
-  { id: 'generating', label: '生成回答' },
-]
+export const FLOW_STAGES: Record<StreamFlow, { id: StreamStage; label: string }[]> = {
+  rag: [
+    { id: 'classifying', label: '识别意图' },
+    { id: 'embedding', label: '理解问题' },
+    { id: 'searching', label: '检索文献' },
+    { id: 'reranking', label: '重排序' },
+    { id: 'generating', label: '生成回答' },
+  ],
+  compare: [
+    { id: 'classifying', label: '识别意图' },
+    { id: 'comparing', label: '对比文献' },
+    { id: 'generating', label: '生成回答' },
+  ],
+  general: [
+    { id: 'classifying', label: '识别意图' },
+    { id: 'generating', label: '生成回答' },
+  ],
+}
 
-const STAGE_ORDER: StreamStage[] = ['embedding', 'searching', 'reranking', 'generating']
+/** @deprecated 保留兼容；新代码请用 FLOW_STAGES */
+export const STREAM_STAGES = FLOW_STAGES.rag
+
+const STAGE_LABELS: Record<StreamStage, string> = {
+  classifying: '正在识别意图…',
+  embedding: '正在理解问题…',
+  searching: '正在检索文献…',
+  reranking: '正在重排序…',
+  comparing: '正在对比文献…',
+  generating: '正在生成回答…',
+}
+
+export function inferStreamFlow(stage: StreamStage, currentFlow?: StreamFlow): StreamFlow | undefined {
+  if (stage === 'comparing') return 'compare'
+  if (stage === 'embedding' || stage === 'searching' || stage === 'reranking') return 'rag'
+  if (stage === 'generating') return currentFlow ?? 'general'
+  return currentFlow
+}
 
 export function streamStageLabel(stage: StreamStage | undefined): string {
   if (!stage) return ''
-  const map: Record<StreamStage, string> = {
-    embedding: '正在理解问题…',
-    searching: '正在检索文献…',
-    reranking: '正在重排序…',
-    generating: '正在生成回答…',
+  return STAGE_LABELS[stage] || ''
+}
+
+export function streamStagesForFlow(flow: StreamFlow | undefined): { id: StreamStage; label: string }[] {
+  if (!flow) {
+    return [{ id: 'classifying', label: '识别意图' }]
   }
-  return map[stage] || ''
+  return FLOW_STAGES[flow]
 }
 
-export function streamStageIndex(stage: StreamStage | undefined): number {
-  if (!stage) return -1
-  return STAGE_ORDER.indexOf(stage)
+export function streamStageIndexInFlow(flow: StreamFlow, stage: StreamStage): number {
+  return FLOW_STAGES[flow].findIndex((s) => s.id === stage)
 }
 
-export function isStreamStageDone(step: StreamStage, current: StreamStage | undefined): boolean {
-  if (!current) return true
-  return streamStageIndex(step) < streamStageIndex(current)
+export function isStreamStageDone(
+  step: StreamStage,
+  current: StreamStage | undefined,
+  flow: StreamFlow | undefined,
+): boolean {
+  if (!current || !flow) return false
+  const stepIdx = streamStageIndexInFlow(flow, step)
+  const curIdx = streamStageIndexInFlow(flow, current)
+  if (stepIdx < 0 || curIdx < 0) return false
+  return stepIdx < curIdx
 }
 
 export function isStreamStageActive(step: StreamStage, current: StreamStage | undefined): boolean {
   return step === current
 }
 
-/** 检索阶段可能跳过 embedding / reranking，仅展示到当前步骤 */
-export function visibleStreamStages(current: StreamStage | undefined): typeof STREAM_STAGES {
-  if (!current || current === 'generating') return STREAM_STAGES
-  const idx = streamStageIndex(current)
-  return STREAM_STAGES.filter((_, i) => i <= idx || STREAM_STAGES[i].id === 'generating')
+export function streamProgressPercent(
+  stage: StreamStage | undefined,
+  flow: StreamFlow | undefined,
+): number {
+  if (!stage || !flow) return stage === 'classifying' ? 50 : 0
+  const stages = FLOW_STAGES[flow]
+  const idx = stages.findIndex((s) => s.id === stage)
+  if (idx < 0) return 0
+  return ((idx + 1) / stages.length) * 100
 }

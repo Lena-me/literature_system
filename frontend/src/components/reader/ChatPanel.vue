@@ -1,15 +1,17 @@
 <script lang="ts">
 import StreamProgress from '@/components/notebook/StreamProgress.vue'
+import ThinkingBlock from '@/components/notebook/ThinkingBlock.vue'
 
 export default {
-  components: { StreamProgress },
+  components: { StreamProgress, ThinkingBlock },
 }
 </script>
 
 <script setup lang="ts">
 import { ref, nextTick } from 'vue'
 import { qaApi } from '@/api/qa'
-import type { ChatMessage, Source, StreamStage } from '@/types/domain'
+import type { ChatMessage, Source, StreamFlow, StreamStage } from '@/types/domain'
+import { inferStreamFlow } from '@/utils/streamStages'
 import MarkdownRenderer from '@/components/common/MarkdownRenderer.vue'
 const props = defineProps<{ selectedIds: number[] }>()
 const emit = defineEmits<{ report: []; graph: []; compare: []; guide: []; sourceClick: [source: Source] }>()
@@ -25,21 +27,57 @@ async function ask(q?: string) {
   messages.value.push({ role: 'user', content: text })
   loading.value = true
   try {
-    const assistant: ChatMessage = { role: 'assistant', content: '', sources: [], streamStage: 'embedding' }
-    messages.value.push(assistant)
+    const assistantIndex = messages.value.length
+    messages.value.push({ role: 'assistant', content: '', reasoning: '', sources: [], streamStage: 'classifying', streamFlow: undefined, reasoningExpanded: true })
+
+    const patchAssistant = (patch: Partial<ChatMessage>) => {
+      const current = messages.value[assistantIndex]
+      if (!current || current.role !== 'assistant') return
+      messages.value[assistantIndex] = { ...current, ...patch }
+    }
+
     await qaApi.askStream({ question: text, paper_ids: props.selectedIds, session_id: sessionId.value }, async (event) => {
       if (event.type === 'session') sessionId.value = event.session_id
-      if (event.type === 'sources') assistant.sources = event.sources
-      if (event.type === 'status' && event.stage) assistant.streamStage = event.stage as StreamStage
-      if (event.type === 'delta') {
-        if (event.content) assistant.streamStage = undefined
-        assistant.content += event.content
+      if (event.type === 'sources') patchAssistant({ sources: event.sources })
+      if (event.type === 'status' && event.stage) {
+        const current = messages.value[assistantIndex]
+        const stage = event.stage as StreamStage
+        const streamFlow = inferStreamFlow(stage, current?.streamFlow)
+        patchAssistant({ streamStage: stage, streamFlow })
+      }
+      if (event.type === 'delta' && event.content) {
+        const current = messages.value[assistantIndex]
+        const channel = event.channel || 'content'
+        if (channel === 'reasoning') {
+          patchAssistant({
+            reasoning: (current?.reasoning || '') + event.content,
+            reasoningExpanded: true,
+          })
+        } else {
+          patchAssistant({
+            streamStage: undefined,
+            streamFlow: undefined,
+            content: (current?.content || '') + event.content,
+            reasoningExpanded: false,
+          })
+        }
       }
       if (event.type === 'done') {
-        assistant.streamStage = undefined
-        assistant.content = event.answer || assistant.content
+        const current = messages.value[assistantIndex]
+        patchAssistant({
+          streamStage: undefined,
+          streamFlow: undefined,
+          reasoningExpanded: false,
+          content: event.answer || current?.content || '',
+          reasoning: event.reasoning ?? current?.reasoning ?? '',
+        })
       }
-      if (event.type === 'error') assistant.content = `❌ 对话失败：${event.error}`
+      if (event.type === 'error') {
+        patchAssistant({
+          streamStage: undefined,
+          content: `❌ 对话失败：${event.error}`,
+        })
+      }
       await nextTick(); box.value?.scrollTo({ top: box.value.scrollHeight, behavior: 'smooth' })
     })
   } finally { loading.value = false }
@@ -66,7 +104,13 @@ defineExpose({ ask })
       </div>
       <div v-for="(m,i) in messages" :key="i" class="msg" :class="m.role">
         <div class="bubble">
-          <StreamProgress v-if="m.role === 'assistant' && m.streamStage && !m.content" :stage="m.streamStage" />
+          <StreamProgress v-if="m.role === 'assistant' && m.streamStage && !m.content && !(m.reasoning || '').trim()" :stage="m.streamStage" :flow="m.streamFlow" />
+          <ThinkingBlock
+            v-if="m.role === 'assistant' && (m.reasoning || '').trim()"
+            :reasoning="m.reasoning"
+            :expanded="m.reasoningExpanded ?? false"
+            :streaming="loading && i === messages.length - 1 && !m.content"
+          />
           <MarkdownRenderer v-if="m.content" :content="m.content" />
         </div>
         <div v-if="m.sources?.length" class="sources">

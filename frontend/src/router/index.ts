@@ -56,7 +56,12 @@ router.beforeEach(async (to) => {
     return appMode === 'admin' ? '/admin/login' : '/login'
   }
   if (auth.isAuthed && !auth.user) {
-    await auth.loadMe().catch(() => auth.logout())
+    try {
+      await auth.loadMe()
+    } catch {
+      auth.logout()
+      return appMode === 'admin' ? '/admin/login' : '/login'
+    }
   }
   if (appMode === 'admin' && auth.isAuthed && auth.user?.role !== 'admin') {
     auth.logout()

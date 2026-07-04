@@ -119,7 +119,7 @@ async function onSourceClick(source: Source) {
 }
 
 async function onVisualClick(source: Source, visual: RelatedVisual) {
-  notebook.openReadingDrawer(source.paper_id, visual.page_number, '')
+  notebook.openReadingDrawer(source.paper_id, visual.page_number ?? undefined, '')
   pdfPage.value = visual.page_number || 1
   pdfHighlight.value = ''
   drawerTab.value = 'pdf'

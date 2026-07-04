@@ -29,16 +29,32 @@ export interface Paper {
   journal_conf?: string | null
 }
 export interface ContentItem { id: number; type: string; level?: number | null; content: string; bbox?: [number, number, number, number] | null; page_number?: number | null; order_index: number }
-export type StreamStage = 'embedding' | 'searching' | 'reranking' | 'generating'
+export type StreamStage =
+  | 'classifying'
+  | 'embedding'
+  | 'searching'
+  | 'reranking'
+  | 'comparing'
+  | 'generating'
+
+export type StreamFlow = 'rag' | 'compare' | 'general'
 
 export interface ChatMessage {
   id?: number
   role: 'user' | 'assistant'
   content: string
+  /** LLM 思考/推理过程（与正文分开展示） */
+  reasoning?: string
+  /** 流式思考阶段是否展开 */
+  reasoningExpanded?: boolean
   created_at?: string
   sources?: Source[]
   /** 流式问答当前阶段（仅 assistant 生成过程中） */
   streamStage?: StreamStage
+  /** 流式进度条所属流程（由 stage 事件推断） */
+  streamFlow?: StreamFlow
+  /** 用户中止生成 */
+  cancelled?: boolean
 }
 export interface RelatedVisual {
   id: number

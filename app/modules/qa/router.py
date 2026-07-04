@@ -9,8 +9,10 @@ from app.core.dependencies import get_current_user
 from app.db.mysql import AsyncSessionLocal, get_db
 from app.models import Paper, QAMessage, QAMessageSource, QASession, QASessionPaper, TextChunk, User
 from app.schemas import QAAskIn, SessionCreateIn, SessionUpdateIn
+from app.core.config import get_settings
 from app.services.quota_service import QuotaService
 from app.services.rag_service import get_rag_service
+from app.agents.orchestrator import get_qa_orchestrator
 from app.services.source_enrichment import enrich_qa_sources
 from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
 from app.utils.session_title import fallback_session_title, is_default_session_title, sanitize_session_title
@@ -29,7 +31,16 @@ async def ask_stream(data: QAAskIn, user: User = Depends(get_current_user)):
             # 流式生成器内自行管理 db session，避免 FastAPI 依赖注入在
             # StreamingResponse 返回后过早关闭 session。
             async with AsyncSessionLocal() as db:
-                async for event in get_rag_service().ask_stream(db, user.id, data.question, data.paper_ids, data.session_id, data.top_k):
+                settings = get_settings()
+                stream_fn = (
+                    get_qa_orchestrator().ask_stream
+                    if settings.qa_use_langgraph
+                    else get_rag_service().ask_stream
+                )
+                async for event in stream_fn(
+                    db, user.id, data.question, data.paper_ids, data.session_id, data.top_k,
+                    regenerate=bool(data.regenerate),
+                ):
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             import logging
@@ -207,11 +218,28 @@ async def messages(
             'id': x.id,
             'role': x.role,
             'content': x.content,
+            'reasoning': x.reasoning_content or '',
             'created_at': x.created_at,
             'sources': sources_map.get(x.id, []),
         }
         for x in rows
     ]
+
+@router.delete('/sessions/{session_id}/messages/{message_id}/tail')
+async def delete_message_tail(
+    session_id: int,
+    message_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """从指定消息起（含该条）删除后续所有消息，用于编辑重发。"""
+    try:
+        deleted = await get_rag_service().delete_messages_from(
+            db, user.id, session_id, message_id, inclusive=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {'deleted': deleted}
 
 # ========== 自动生成标题 ==========
 

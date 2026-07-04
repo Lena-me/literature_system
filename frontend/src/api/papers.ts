@@ -1,9 +1,62 @@
-import { http, rawDownload } from './client'
+import { API_PREFIX, http, rawDownload } from './client'
 import type { ContentItem, Paper } from '@/types/domain'
+
+export type ParseStatusEvent = {
+  type: 'connected' | 'parse_status'
+  paper_id?: number
+  parse_status?: string
+  title?: string
+}
 
 export const papersApi = {
   list: (params?: { keyword?: string; status?: string; skip?: number; limit?: number }) =>
     http.get<any, Paper[]>('/papers', { params }),
+
+  parseStatuses: (ids: number[]) =>
+    http.get<any, { id: number; parse_status: string; title?: string }[]>(
+      '/papers/parse-status',
+      { params: { ids: ids.join(',') } },
+    ),
+
+  /** SSE：订阅后端推送的解析状态（需 Bearer token） */
+  async subscribeParseEvents(
+    onEvent: (event: ParseStatusEvent) => void | Promise<void>,
+    options?: { signal?: AbortSignal },
+  ) {
+    const token = localStorage.getItem('access_token')
+    const res = await fetch(`${API_PREFIX}/papers/parse-events`, {
+      method: 'GET',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      signal: options?.signal,
+    })
+    if (!res.ok || !res.body) {
+      throw new Error(await res.text())
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() || ''
+        for (const part of parts) {
+          const line = part.split('\n').find(x => x.startsWith('data:'))
+          if (!line) continue
+          const payload = JSON.parse(line.slice(5).trim()) as ParseStatusEvent
+          await Promise.resolve(onEvent(payload))
+        }
+      }
+    } catch (e: any) {
+      if (e?.name === 'AbortError') throw e
+      console.error('[papersApi] parse-events stream error:', e)
+      throw e
+    }
+  },
 
   upload: (file: File, onProgress?: (n: number) => void) => {
     const form = new FormData()

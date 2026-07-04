@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 import shutil
 from pathlib import Path
@@ -7,6 +9,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from minio.error import S3Error
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +21,7 @@ from app.db.redis import redis_client
 from app.integrations.object_storage.minio_storage import MinioStorage
 from app.models import Category, ContentItem, FiguresTable, Paper, ParseTask, User
 from app.schemas import CategoryIn, ChunkUploadCompleteIn, ChunkUploadInitIn, PaperOut, PaperUpdateIn
+from app.services.parse_status_events import TERMINAL_PARSE_STATUSES, channel_for_user, publish_parse_status
 from app.services.quota_service import QuotaService
 from app.utils.json_utils import dumps, loads
 from app.utils.mineru_text import unwrap_mineru_json_text
@@ -97,6 +101,13 @@ async def _create_paper_from_bytes(db: AsyncSession, user: User, filename: str, 
         'app.workers.tasks.process_paper_pipeline',
         args=[paper.id],
         queue='paper_tasks',
+    )
+    await asyncio.to_thread(
+        publish_parse_status,
+        user.id,
+        paper.id,
+        'queued',
+        title=paper.title or paper.original_filename,
     )
     return paper
 
@@ -260,6 +271,101 @@ async def list_papers(
 
     result = await db.execute(stmt.order_by(Paper.upload_time.desc()).offset(skip).limit(limit))
     return result.scalars().all()
+
+
+@router.get('/parse-events')
+async def parse_events_stream(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """SSE：后端推送文献解析状态（Redis Pub/Sub）。"""
+    pending_rows = (
+        await db.execute(
+            select(Paper.id, Paper.parse_status, Paper.title, Paper.original_filename).where(
+                Paper.user_id == user.id,
+                Paper.is_deleted == False,
+                Paper.parse_status.notin_(list(TERMINAL_PARSE_STATUSES)),
+            )
+        )
+    ).all()
+    initial_events = [
+        {
+            'type': 'parse_status',
+            'paper_id': row.id,
+            'parse_status': row.parse_status,
+            'title': row.title or row.original_filename,
+        }
+        for row in pending_rows
+    ]
+
+    async def gen():
+        channel = channel_for_user(user.id)
+        pubsub = redis_client.pubsub()
+        await pubsub.subscribe(channel)
+        try:
+            yield f"data: {json.dumps({'type': 'connected'}, ensure_ascii=False)}\n\n"
+            for evt in initial_events:
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=25.0)
+                if message is None:
+                    yield ': keepalive\n\n'
+                    continue
+                if message.get('type') != 'message':
+                    continue
+                data = message.get('data')
+                if data:
+                    yield f'data: {data}\n\n'
+        finally:
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()
+
+    return StreamingResponse(
+        gen(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
+@router.get('/parse-status')
+async def parse_status(
+    ids: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """轻量轮询：仅返回指定文献的 parse_status（避免反复拉全量列表）。"""
+    paper_ids: list[int] = []
+    for part in (ids or '').split(','):
+        part = part.strip()
+        if part.isdigit():
+            paper_ids.append(int(part))
+    if not paper_ids:
+        return []
+    if len(paper_ids) > 100:
+        raise HTTPException(status_code=400, detail='一次最多查询 100 篇文献状态')
+
+    rows = (
+        await db.execute(
+            select(Paper.id, Paper.parse_status, Paper.title, Paper.original_filename).where(
+                Paper.user_id == user.id,
+                Paper.is_deleted == False,
+                Paper.id.in_(paper_ids),
+            )
+        )
+    ).all()
+    return [
+        {
+            'id': row.id,
+            'parse_status': row.parse_status,
+            'title': row.title or row.original_filename,
+        }
+        for row in rows
+    ]
 
 
 @router.get('/categories')
@@ -427,6 +533,13 @@ async def reparse_paper(paper_id: int, db: AsyncSession = Depends(get_db), user:
         'app.workers.tasks.process_paper_pipeline',
         args=[paper.id],
         queue='paper_tasks',
+    )
+    await asyncio.to_thread(
+        publish_parse_status,
+        user.id,
+        paper.id,
+        'queued',
+        title=paper.title or paper.original_filename,
     )
     return {'message': '已重新加入解析队列', 'task_id': task.id}
 

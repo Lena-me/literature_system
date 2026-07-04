@@ -84,7 +84,14 @@ class PaperPipelineService:
         """将 MinerU 提取的图片上传到 MinIO，替换本地路径为永久公开 URL 存入数据库。"""
         image_data: dict[str, bytes] = parsed.pop('_image_data', {}) or {}
         if not image_data:
-            logger.info('[paper=%s] No images to upload', paper_id)
+            ft_total = len(parsed.get('figures_tables', []) or [])
+            fig_total = sum(1 for x in (parsed.get('figures_tables', []) or []) if x.get('type') == 'figure')
+            logger.info(
+                '[paper=%s] No figure image files to upload (%d figures/tables entries, %d figures)',
+                paper_id,
+                ft_total,
+                fig_total,
+            )
             return
 
         # 上传并建立双映射：{原始路径: URL} + {文件名: URL}，用文件名做兜底匹配
@@ -177,11 +184,19 @@ class PaperPipelineService:
         return re.sub(r'!\[(.*?)\]\((.*?)\)', replace_match, text)
 
     def _set_paper_status(self, paper_id: int, status: str) -> None:
+        user_id: int | None = None
+        title: str | None = None
         with celery_db() as db:
             paper = db.get(Paper, paper_id)
             if paper:
                 paper.parse_status = status
+                user_id = paper.user_id
+                title = paper.title or paper.original_filename
             db.commit()
+        if user_id is not None:
+            from app.services.parse_status_events import publish_parse_status
+
+            publish_parse_status(user_id, paper_id, status, title=title)
 
     def _truncate_text(self, text, max_length: int = 1048576) -> str:
         if text is None:

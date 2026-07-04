@@ -77,6 +77,7 @@ class OpenAICompatibleLLM:
             return self._extract_content(data, content_only=content_only)
 
     async def stream_chat(self, messages: list[dict], temperature: float | None = None, max_tokens: int | None = None):
+        """流式输出；yield (channel, text)，channel 为 reasoning | content。"""
         url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
         payload = {
             'model': settings.llm_model,
@@ -111,9 +112,12 @@ class OpenAICompatibleLLM:
                             import json
                             obj = json.loads(data)
                             delta = obj['choices'][0].get('delta') or {}
-                            piece = delta.get('content') or delta.get('reasoning_content') or ''
-                            if piece:
-                                yield piece
+                            reasoning = delta.get('reasoning_content') or ''
+                            content = delta.get('content') or ''
+                            if reasoning:
+                                yield ('reasoning', reasoning)
+                            if content:
+                                yield ('content', content)
                         except Exception:
                             continue
             except httpx.HTTPStatusError:

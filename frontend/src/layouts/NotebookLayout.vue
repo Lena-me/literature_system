@@ -1,5 +1,17 @@
 <script setup lang="ts">
+import { onMounted, onUnmounted } from 'vue'
 import UnifiedSidebar from '@/components/notebook/UnifiedSidebar.vue'
+import { usePaperStore } from '@/stores/papers'
+
+const paperStore = usePaperStore()
+
+onMounted(() => {
+  paperStore.ensureParseSync()
+})
+
+onUnmounted(() => {
+  paperStore.disconnectParseEvents()
+})
 </script>
 
 <template>

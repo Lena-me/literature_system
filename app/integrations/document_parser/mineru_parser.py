@@ -8,11 +8,33 @@ from pathlib import Path
 from uuid import uuid4
 
 import fitz
+import logging
 
 from app.core.config import get_settings
 from app.utils.text_utils import normalize_text
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+def _check_pdftext_compatibility() -> None:
+    """MinerU pipeline 依赖 pdftext<0.7；0.7 将 get_chars 改为 PageChars 导致 TypeError。"""
+    if settings.mineru_backend != 'pipeline':
+        return
+    try:
+        from importlib.metadata import version as pkg_version
+
+        ver = pkg_version('pdftext')
+    except Exception:
+        return
+    parts = ver.split('.')
+    major = int(parts[0]) if parts and parts[0].isdigit() else 0
+    if major >= 7:
+        raise RuntimeError(
+            f'pdftext {ver} 与 MinerU pipeline 不兼容（PageChars is not iterable）。'
+            ' 请执行: pip install "pdftext>=0.6.3,<0.7" 后重启 Celery worker，'
+            ' 或在 .env 中改用 MINERU_BACKEND=vlm（需 GPU）。'
+        )
 
 
 class MinerUParser:
@@ -243,6 +265,7 @@ class MinerUParser:
                 shutil.rmtree(job_output_dir, ignore_errors=True)
 
     def _run_mineru(self, input_pdf: Path, output_dir: Path) -> None:
+        _check_pdftext_compatibility()
         cmd = [
             settings.mineru_command,
             '-p',
@@ -1064,6 +1087,26 @@ class MinerUParser:
                 continue
 
         logger.info('Collected %d figure images (%d missed) from %s', found, missed, output_dir)
+
+        # 兜底：扫描 MinerU 输出目录中的图片文件（部分 figure 无 image_path 或路径不一致）
+        if output_dir.is_dir():
+            seen_names = {Path(k).name for k in image_data}
+            for pattern in ('*.png', '*.jpg', '*.jpeg', '*.webp', '*.gif'):
+                for img_file in output_dir.rglob(pattern):
+                    if not img_file.is_file():
+                        continue
+                    name = img_file.name
+                    if name in seen_names:
+                        continue
+                    try:
+                        rel = str(img_file.relative_to(output_dir)).replace('\\', '/')
+                        image_data[rel] = img_file.read_bytes()
+                        image_data[name] = image_data[rel]
+                        seen_names.add(name)
+                        found += 1
+                    except Exception as e:
+                        logger.debug('Skip orphan image %s: %s', img_file, e)
+
         return image_data
 
     # ============================================================

@@ -1,32 +1,54 @@
 <script setup lang="ts">
-import type { StreamStage } from '@/types/domain'
+import { computed } from 'vue'
+import type { StreamFlow, StreamStage } from '@/types/domain'
 import {
-  STREAM_STAGES,
+  inferStreamFlow,
   isStreamStageActive,
   isStreamStageDone,
+  streamProgressPercent,
   streamStageLabel,
+  streamStagesForFlow,
 } from '@/utils/streamStages'
 
-defineProps<{
+const props = defineProps<{
   stage: StreamStage | undefined
+  flow?: StreamFlow
 }>()
+
+const resolvedFlow = computed(() => {
+  if (props.flow) return props.flow
+  if (props.stage) return inferStreamFlow(props.stage)
+  return undefined
+})
+
+const steps = computed(() => streamStagesForFlow(resolvedFlow.value))
+
+const progressWidth = computed(() =>
+  streamProgressPercent(props.stage, resolvedFlow.value),
+)
+
+const isCompareFlow = computed(() => resolvedFlow.value === 'compare')
 </script>
 
 <template>
-  <div v-if="stage" class="stream-progress">
+  <div v-if="stage" class="stream-progress" :class="{ 'stream-progress--compare': isCompareFlow }">
     <p class="stream-progress-title">{{ streamStageLabel(stage) }}</p>
-    <div class="stream-progress-track">
+    <div
+      class="stream-progress-track"
+      :style="{ gridTemplateColumns: `repeat(${steps.length}, 1fr)` }"
+    >
       <div
-        v-for="(step, idx) in STREAM_STAGES"
+        v-for="(step, idx) in steps"
         :key="step.id"
         class="stream-step"
         :class="{
-          done: isStreamStageDone(step.id, stage),
+          done: isStreamStageDone(step.id, stage, resolvedFlow),
           active: isStreamStageActive(step.id, stage),
+          compare: step.id === 'comparing',
         }"
       >
         <div class="step-dot">
-          <span v-if="isStreamStageDone(step.id, stage)">✓</span>
+          <span v-if="isStreamStageDone(step.id, stage, resolvedFlow)">✓</span>
           <span v-else-if="isStreamStageActive(step.id, stage)" class="step-pulse" />
           <span v-else>{{ idx + 1 }}</span>
         </div>
@@ -36,7 +58,8 @@ defineProps<{
     <div class="stream-progress-bar">
       <div
         class="stream-progress-fill"
-        :style="{ width: `${((STREAM_STAGES.findIndex(s => s.id === stage) + 1) / STREAM_STAGES.length) * 100}%` }"
+        :class="{ 'stream-progress-fill--compare': isCompareFlow }"
+        :style="{ width: `${progressWidth}%` }"
       />
     </div>
   </div>
@@ -48,6 +71,10 @@ defineProps<{
   padding: 4px 0;
 }
 
+.stream-progress--compare .stream-progress-title {
+  color: #7c3aed;
+}
+
 .stream-progress-title {
   margin: 0 0 12px;
   font-size: 14px;
@@ -57,7 +84,6 @@ defineProps<{
 
 .stream-progress-track {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
   margin-bottom: 10px;
 }
@@ -101,6 +127,18 @@ defineProps<{
   background: var(--academic-primary);
 }
 
+.stream-step.compare.active .step-dot,
+.stream-step.compare.done .step-dot {
+  border-color: #7c3aed;
+  background: #7c3aed;
+  color: #fff;
+}
+
+.stream-step.compare.done .step-dot {
+  background: #ede9fe;
+  color: #7c3aed;
+}
+
 .step-pulse {
   width: 8px;
   height: 8px;
@@ -121,6 +159,10 @@ defineProps<{
   font-weight: 600;
 }
 
+.stream-step.compare.active .step-label {
+  color: #7c3aed;
+}
+
 .stream-progress-bar {
   height: 4px;
   border-radius: 999px;
@@ -133,6 +175,10 @@ defineProps<{
   border-radius: 999px;
   background: linear-gradient(90deg, var(--academic-primary), #6366f1);
   transition: width 0.35s ease;
+}
+
+.stream-progress-fill--compare {
+  background: linear-gradient(90deg, #7c3aed, #a78bfa);
 }
 
 @keyframes pulse {

@@ -31,3 +31,6 @@ pytest-asyncio==0.25.0
 aiomysql==0.2.0
 pymysql
 neo4j>=5.27.0
+
+# MinerU pipeline 与 pdftext 0.7+ 不兼容（PageChars 不可迭代），锁定 0.6.x
+pdftext>=0.6.3,<0.7

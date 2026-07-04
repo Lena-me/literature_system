@@ -88,6 +88,16 @@ const filteredMentionPapers = ref<{ id: number; title: string }[]>([])
 // 同步草稿
 watch(inputText, (val) => notebook.saveDraft(val))
 
+watch(
+  () => notebook.editingMessageId,
+  (id) => {
+    if (id) {
+      inputText.value = notebook.draftInput
+      nextTick(autoResize)
+    }
+  },
+)
+
 // 检测 @ 输入
 function onInput(e: Event) {
   const el = e.target as HTMLTextAreaElement
@@ -172,10 +182,20 @@ function onBlurPopover() {
     }
   }, 150)
 }
+
+function cancelEdit() {
+  notebook.cancelEditMessage()
+  inputText.value = ''
+}
 </script>
 
 <template>
   <div class="chat-input-bar">
+    <div v-if="notebook.editingMessageId" class="edit-banner">
+      <span>正在编辑消息，发送后将替换该条及之后的对话</span>
+      <button type="button" @click="cancelEdit">取消</button>
+    </div>
+
     <!-- 解析状态 Chip -->
     <Transition name="chip-fade">
       <div v-if="uploadChip" class="upload-status-chip">
@@ -249,15 +269,23 @@ function onBlurPopover() {
         @keydown="onKeydown"
       />
 
-      <!-- 发送按钮 -->
+      <!-- 停止 / 发送 -->
       <button
+        v-if="notebook.isStreaming"
+        class="stop-btn"
+        title="停止生成"
+        @click="notebook.stopStreaming()"
+      >
+        ■
+      </button>
+      <button
+        v-else
         class="send-btn"
-        :class="{ loading: notebook.isStreaming || uploading }"
-        :disabled="!inputText.trim() || notebook.isStreaming || uploading"
+        :class="{ loading: uploading }"
+        :disabled="!inputText.trim() || uploading"
         @click="send"
       >
-        <span v-if="notebook.isStreaming" class="spinner" />
-        <span v-else class="send-arrow">↑</span>
+        <span class="send-arrow">↑</span>
       </button>
     </div>
 
@@ -275,6 +303,30 @@ function onBlurPopover() {
   padding: 14px 20px 16px;
   background: var(--academic-panel);
   border-top: 1px solid var(--academic-border);
+  flex-shrink: 0;
+}
+
+.edit-banner {
+  max-width: 780px;
+  margin: 0 auto 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.edit-banner button {
+  border: none;
+  background: transparent;
+  color: #b45309;
+  cursor: pointer;
+  font-size: 12px;
   flex-shrink: 0;
 }
 
@@ -470,6 +522,29 @@ function onBlurPopover() {
 
 .send-btn.loading {
   opacity: 0.6;
+}
+
+.stop-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: #ef4444;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  margin-bottom: 4px;
+  font-size: 11px;
+  transition: all 0.2s;
+}
+
+.stop-btn:hover {
+  background: #dc2626;
+  transform: scale(1.05);
 }
 
 .send-arrow { line-height: 1; }

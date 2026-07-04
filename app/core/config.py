@@ -119,6 +119,10 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 2048
     enable_llm_extract: bool = False
 
+    # QA Agent（LangGraph）
+    qa_use_langgraph: bool = True
+    qa_history_limit: int = 20
+
     # Neo4j
     neo4j_uri: str = 'bolt://127.0.0.1:7687'
     neo4j_user: str = 'neo4j'

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -33,28 +33,9 @@ _KEYWORD_STOP = frozenset(
     }
 )
 
-_SYSTEM_PROMPT = """你是一位博学且清晰的科研助手，服务正在研读文献的用户。
-
-【回答原则】
-1. 用户可能问任何问题：与挂载文献直接相关、间接相关、或完全无关的通用知识——你都要给出完整、有条理的专业解说（概念、原理、背景、算法步骤、对比分析等）。
-2. 挂载文献的检索片段仅作「佐证」：当某片段能支撑回答中的具体论断时，在句末标注 [1]、[2]；与问题无关或检索为空时，照样用通用知识充分回答，不要局限在文献范围内。
-3. 若问题同时涉及文献中的专有名词/方法/实验，优先说明该文献中的做法（有片段则引用 [n]）；片段不足时，先给出该术语的通用解释，再说明「当前检索片段未覆盖的细节：…」，可提示用户在 PDF 相应章节查阅。
-4. 引用 [1]、[2] 仅对应上下文中标注「来源N」的正文片段；「文献背景参考」段不可引用。严禁照抄片段内部的参考文献编号（如 [40]、[41]）。
-5. 多篇文献时，分别说明各篇相关要点；不要把 A 文的结论说成 B 文的。
-6. 回答结构建议：先直接回应问题 → 分点展开 → 有正文来源处标注 [n] → 可选简短小结。
-
-【禁止】
-- 禁止因检索片段不充分、与问题无关、或问题超出文献范围，就拒绝回答或只输出「未找到」「无法从文献中得知」等敷衍句。
-- 禁止把目录、参考文献列表、版权页当作正文依据。"""
-
-_USER_PROMPT_TEMPLATE = """用户问题：{question}
-
-以下是从当前会话挂载文献中检索到的片段（可能不完整、也可能与问题无关，仅在有据可依时作佐证）：
-{context}
-
-请像一位专业顾问一样完整回答问题——不限于文献内容。仅对标注了「来源N」的正文片段标注 [N]；「文献背景参考」不可引用。其余用通用专业知识补充即可。"""
-
-_EMPTY_CONTEXT = '（未检索到与问题高度相关的正文片段，或当前未挂载文献；请基于通用专业知识完整回答问题。若用户问题与所读文献可能有关，可简要说明潜在关联，但不要因此缩减回答篇幅。）'
+from app.prompts.qa import EMPTY_CONTEXT as _EMPTY_CONTEXT
+from app.prompts.qa import SYSTEM_PROMPT as _SYSTEM_PROMPT
+from app.prompts.qa import USER_PROMPT_TEMPLATE as _USER_PROMPT_TEMPLATE
 
 _rag_service: 'RAGService | None' = None
 
@@ -471,12 +452,34 @@ class RAGService:
         paper_ids: list[int] | None,
         session_id: int | None,
         top_k: int | None,
+        *,
+        regenerate: bool = False,
     ):
         try:
-            session = await self._get_or_create_session(db, user_id, question, paper_ids, session_id)
-            user_msg = QAMessage(session_id=session.id, role='user', content=question)
-            db.add(user_msg)
-            await db.flush()
+            if regenerate:
+                if not session_id:
+                    raise ValueError('重新生成需要指定 session_id')
+                session = await db.get(QASession, session_id)
+                if not session or session.user_id != user_id:
+                    raise ValueError('会话不存在或无权访问')
+                last_user = (
+                    await db.execute(
+                        select(QAMessage)
+                        .where(QAMessage.session_id == session_id, QAMessage.role == 'user')
+                        .order_by(QAMessage.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if not last_user:
+                    raise ValueError('没有可重新生成的用户问题')
+                question = last_user.content
+                await self._delete_messages_after(db, session_id, last_user.created_at)
+                await db.flush()
+            else:
+                session = await self._get_or_create_session(db, user_id, question, paper_ids, session_id)
+                user_msg = QAMessage(session_id=session.id, role='user', content=question)
+                db.add(user_msg)
+                await db.flush()
 
             yield {'type': 'session', 'session_id': session.id}
 
@@ -490,29 +493,105 @@ class RAGService:
             yield {'type': 'status', 'stage': 'generating'}
             context, citable_ranked = self._build_context(ranked or [])
             prompt = _USER_PROMPT_TEMPLATE.format(question=question, context=context)
+            reasoning_parts: list[str] = []
             answer_parts: list[str] = []
-            async for piece in self.llm.stream_chat(
+            async for channel, piece in self.llm.stream_chat(
                 [{'role': 'system', 'content': _SYSTEM_PROMPT}, {'role': 'user', 'content': prompt}],
                 temperature=0.35,
             ):
-                answer_parts.append(piece)
-                yield {'type': 'delta', 'content': piece}
+                if channel == 'reasoning':
+                    reasoning_parts.append(piece)
+                    yield {'type': 'delta', 'channel': 'reasoning', 'content': piece}
+                else:
+                    answer_parts.append(piece)
+                    yield {'type': 'delta', 'channel': 'content', 'content': piece}
             answer = ''.join(answer_parts)
+            reasoning = ''.join(reasoning_parts)
             cited_sources = self._sources_cited_in_answer(answer, citable_ranked)
             if cited_sources:
                 cited_sources = await enrich_qa_sources(db, cited_sources, answer_text=answer)
 
             yield {'type': 'sources', 'sources': cited_sources}
 
-            assistant_msg = QAMessage(session_id=session.id, role='assistant', content=answer)
+            assistant_msg = QAMessage(
+                session_id=session.id,
+                role='assistant',
+                content=answer,
+                reasoning_content=reasoning or None,
+            )
             db.add(assistant_msg)
             await db.flush()
             await self._add_message_sources(db, assistant_msg.id, cited_sources)
             await db.commit()
-            yield {'type': 'done', 'session_id': session.id, 'answer': answer, 'sources': cited_sources}
+            yield {
+                'type': 'done',
+                'session_id': session.id,
+                'answer': answer,
+                'reasoning': reasoning,
+                'message_id': assistant_msg.id,
+                'sources': cited_sources,
+            }
         except Exception as exc:
             logger.error('ask_stream failed: %s', exc, exc_info=True)
             yield {'type': 'error', 'error': str(exc)}
+
+    async def delete_messages_from(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        session_id: int,
+        message_id: int,
+        *,
+        inclusive: bool = True,
+    ) -> int:
+        session = await db.get(QASession, session_id)
+        if not session or session.user_id != user_id:
+            raise ValueError('会话不存在或无权访问')
+        anchor = await db.get(QAMessage, message_id)
+        if not anchor or anchor.session_id != session_id:
+            raise ValueError('消息不存在')
+
+        if inclusive:
+            clause = QAMessage.created_at >= anchor.created_at
+        else:
+            clause = QAMessage.created_at > anchor.created_at
+
+        ids = list(
+            (
+                await db.execute(
+                    select(QAMessage.id).where(QAMessage.session_id == session_id, clause)
+                )
+            ).scalars().all()
+        )
+        if not ids:
+            return 0
+        await self._delete_message_ids(db, ids)
+        await db.commit()
+        return len(ids)
+
+    async def _delete_messages_after(
+        self,
+        db: AsyncSession,
+        session_id: int,
+        after_created_at,
+    ) -> None:
+        ids = list(
+            (
+                await db.execute(
+                    select(QAMessage.id).where(
+                        QAMessage.session_id == session_id,
+                        QAMessage.created_at > after_created_at,
+                    )
+                )
+            ).scalars().all()
+        )
+        if ids:
+            await self._delete_message_ids(db, ids)
+
+    async def _delete_message_ids(self, db: AsyncSession, message_ids: list[int]) -> None:
+        await db.execute(delete(QAMessageSource).where(QAMessageSource.message_id.in_(message_ids)))
+        await db.execute(delete(QAMessage).where(QAMessage.id.in_(message_ids)))
+        await db.flush()
 
 
     async def suggest_questions(self, db: AsyncSession, session_id: int) -> dict:
