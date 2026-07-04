@@ -74,7 +74,7 @@ def _calculate_total_minutes(records: list[LearningRecord]) -> int:
 
     sorted_records = sorted(records, key=lambda r: r.created_at)
     total_seconds = 0
-    gap_threshold = 15 * 60
+    gap_threshold = 10 * 60
 
     for i in range(1, len(sorted_records)):
         prev_time = sorted_records[i-1].created_at
