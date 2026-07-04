@@ -2,7 +2,16 @@ import { defineStore } from 'pinia'
 import { nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { qaApi } from '@/api/qa'
+import { featuresApi } from '@/api/features'
 import type { ChatMessage, KnowledgeDomain, SessionDetail, SessionPaper, SessionSummary, Source, StreamStage } from '@/types/domain'
+
+async function recordLearningEvent(eventType: string, paperId?: number, eventData?: Record<string, unknown>) {
+  try {
+    await featuresApi.record({ paper_id: paperId, event_type: eventType, event_data: eventData })
+  } catch {
+    // 学习记录失败不影响主流程
+  }
+}
 
 export const useNotebookStore = defineStore('notebook', () => {
   const router = useRouter()
@@ -48,6 +57,8 @@ export const useNotebookStore = defineStore('notebook', () => {
   }
 
   async function switchSession(sessionId: number) {
+    recordLearningEvent('session_switch', undefined, { session_id: sessionId })
+
     // ★ 如果不在 /notebook 页面，先跳转，确保 NotebookView 挂载
     if (router.currentRoute.value.path !== '/notebook') {
       router.push('/notebook')
@@ -164,6 +175,11 @@ export const useNotebookStore = defineStore('notebook', () => {
     activeMessages.value.push({ role: 'user', content: question })
     isStreaming.value = true
 
+    const paperIds = mentionedIds && mentionedIds.length > 0
+      ? mentionedIds
+      : (activeSources.value.length > 0 ? activeSources.value.map(p => p.id) : null)
+    recordLearningEvent('ai_message', paperIds?.[0], { question: question.slice(0, 100), session_id: activeSessionId.value })
+
     const assistant: ChatMessage = { role: 'assistant', content: '', sources: [], streamStage: 'embedding' }
     activeMessages.value.push(assistant)
 
@@ -278,6 +294,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     currentReadingPage.value = page || 1
     currentReadingHighlight.value = highlight || ''
     isReadingDrawerOpen.value = true
+    recordLearningEvent('paper_read', paperId, { page })
   }
 
   function closeReadingDrawer() {

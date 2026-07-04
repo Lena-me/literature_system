@@ -1,16 +1,21 @@
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 
+from app.core.dependencies import get_current_user
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.mysql import get_db
 from app.models import User
 from app.schemas import LoginIn, RegisterIn, SendCodeIn, VerifyCodeIn, ResetPasswordIn, TokenOut
 from app.services.audit_service import write_audit
 from app.services.auth_service import LoginGuard, VerificationCodeService
+
+class UpdateProfileIn(BaseModel):
+    username: str
 
 router = APIRouter(prefix='/auth', tags=['认证'])
 
@@ -116,7 +121,6 @@ async def login(data: LoginIn, request: Request, db: AsyncSession = Depends(get_
 
 @router.post('/reset-password')
 async def reset_password(data: ResetPasswordIn, db: AsyncSession = Depends(get_db)):
-    # 使用token验证身份
     phone = await VerificationCodeService().verify_reset_token(data.token)
     user = (
         await db.execute(
@@ -126,3 +130,24 @@ async def reset_password(data: ResetPasswordIn, db: AsyncSession = Depends(get_d
     user.password_hash = hash_password(data.password)
     await db.commit()
     return {'message': '密码已重置'}
+
+@router.put('/profile')
+async def update_profile(data: UpdateProfileIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    username = data.username.strip()
+    if not username:
+        raise HTTPException(400, '用户名不能为空')
+    if len(username) < 2 or len(username) > 20:
+        raise HTTPException(400, '用户名长度必须在2-20个字符之间')
+    
+    exists = (
+        await db.execute(
+            select(User).where(User.username == username, User.id != user.id)
+        )
+    ).scalar_one_or_none()
+    
+    if exists:
+        raise HTTPException(400, '该用户名已被使用')
+    
+    user.username = username
+    await db.commit()
+    return {'message': '用户名修改成功', 'username': username}

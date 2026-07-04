@@ -46,12 +46,52 @@ def _generate_upload_heatmap_data(db_result: list[tuple]) -> dict:
         'max_value': max(upload_counts.values(), default=1),
     }
 
+def _calculate_streak_days(db_result: list[tuple]) -> int:
+    active_dates = set()
+    for row in db_result:
+        dt = row[0]
+        if isinstance(dt, datetime):
+            dt = dt.date()
+        active_dates.add(dt)
+
+    if not active_dates:
+        return 0
+
+    today = date.today()
+    streak = 0
+    check_date = today
+
+    while check_date in active_dates:
+        streak += 1
+        check_date -= timedelta(days=1)
+
+    return streak
+
+
+def _calculate_total_minutes(records: list[LearningRecord]) -> int:
+    if len(records) < 2:
+        return 0
+
+    sorted_records = sorted(records, key=lambda r: r.created_at)
+    total_seconds = 0
+    gap_threshold = 15 * 60
+
+    for i in range(1, len(sorted_records)):
+        prev_time = sorted_records[i-1].created_at
+        curr_time = sorted_records[i].created_at
+        diff = (curr_time - prev_time).total_seconds()
+        if diff <= gap_threshold:
+            total_seconds += diff
+
+    return int(total_seconds // 60)
+
+
 @router.get('/overview')
 async def overview(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     paper_count = (await db.execute(select(func.count()).select_from(Paper).where(Paper.user_id == user.id, Paper.is_deleted == False))).scalar_one()
     report_count = (await db.execute(select(func.count()).select_from(Report).where(Report.user_id == user.id))).scalar_one()
     qa_count = (await db.execute(select(func.count()).select_from(QAMessage).join(QASession, QAMessage.session_id == QASession.id).where(QASession.user_id == user.id, QAMessage.role == 'user'))).scalar_one()
-    records = (await db.execute(select(LearningRecord).where(LearningRecord.user_id == user.id).order_by(LearningRecord.created_at.desc()).limit(50))).scalars().all()
+    records = (await db.execute(select(LearningRecord).where(LearningRecord.user_id == user.id).order_by(LearningRecord.created_at.desc()))).scalars().all()
     papers = (await db.execute(select(Paper).where(Paper.user_id == user.id, Paper.is_deleted == False).order_by(Paper.upload_time.desc()).limit(200))).scalars().all()
     keyword_cloud: dict[str, int] = {}
     for paper in papers:
@@ -76,6 +116,14 @@ async def overview(db: AsyncSession = Depends(get_db), user: User = Depends(get_
     )).all()
     heatmap_data = _generate_upload_heatmap_data(upload_stats)
 
+    active_dates = (await db.execute(
+        select(func.date(LearningRecord.created_at))
+        .where(LearningRecord.user_id == user.id)
+        .group_by(func.date(LearningRecord.created_at))
+    )).all()
+    streak_days = _calculate_streak_days(active_dates)
+    total_minutes = _calculate_total_minutes(list(records))
+
     record_items = [{'id': r.id, 'paper_id': r.paper_id, 'event_type': r.event_type, 'event_data': loads(r.event_data,{}), 'created_at': r.created_at} for r in records]
     return {
         'paper_count': paper_count,
@@ -85,4 +133,6 @@ async def overview(db: AsyncSession = Depends(get_db), user: User = Depends(get_
         'recent_records': record_items,
         'keyword_cloud': keyword_cloud,
         'upload_heatmap': heatmap_data,
+        'streak_days': streak_days,
+        'total_minutes': total_minutes,
     }

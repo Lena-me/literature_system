@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { usePaperStore } from '@/stores/papers'
 import { featuresApi } from '@/api/features'
-import type { Paper } from '@/types/domain'
+import { authApi } from '@/api/auth'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -14,7 +14,50 @@ const user = auth.user!
 const paperCount = ref(0)
 const completedCount = ref(0)
 const learningOverview = ref<any>(null)
-const hotTopics = ref<string[]>([])
+
+const showPhoneModal = ref(false)
+const showEmailModal = ref(false)
+const showUsernameModal = ref(false)
+const editUsername = ref('')
+
+const usernameError = ref('')
+
+function validateUsername() {
+  const name = editUsername.value.trim()
+  if (!name) {
+    usernameError.value = '请输入用户名'
+    return false
+  }
+  if (name.length < 2) {
+    usernameError.value = '用户名至少需要2个字符'
+    return false
+  }
+  if (name.length > 20) {
+    usernameError.value = '用户名最多20个字符'
+    return false
+  }
+  usernameError.value = ''
+  return true
+}
+
+function maskPhone(phone: string): string {
+  if (!phone || phone.length < 7) return phone
+  return phone.slice(0, 3) + '****' + phone.slice(-4)
+}
+
+async function updateUsername() {
+  if (!validateUsername()) return
+  const newName = editUsername.value.trim()
+  try {
+    await authApi.updateProfile({ username: newName })
+    auth.user!.username = newName
+    showUsernameModal.value = false
+    editUsername.value = ''
+    usernameError.value = ''
+  } catch (error: any) {
+    usernameError.value = error.response?.data?.detail || '修改失败'
+  }
+}
 
 onMounted(async () => {
   await store.load()
@@ -23,11 +66,6 @@ onMounted(async () => {
 
   try {
     learningOverview.value = await featuresApi.overview()
-  } catch { /* ignore */ }
-
-  try {
-    const hotspots = await featuresApi.hotspots()
-    hotTopics.value = (hotspots as any)?.keywords || []
   } catch { /* ignore */ }
 })
 
@@ -39,15 +77,13 @@ function logout() {
 
 <template>
   <div class="profile-page slim-scroll">
-    <!-- 头部卡片 -->
     <div class="profile-card">
       <div class="avatar-circle">{{ user.username?.slice(0, 1)?.toUpperCase() }}</div>
       <div class="profile-info">
         <h2>{{ user.name || user.username }}</h2>
-        <span class="role-badge">{{ user.role === 'admin' ? '管理员' : '研究者' }}</span>
         <div class="meta-row">
           <span v-if="user.email">{{ user.email }}</span>
-          <span v-if="user.phone">{{ user.phone }}</span>
+          <span v-if="user.phone">{{ maskPhone(user.phone) }}</span>
           <span>注册时间 {{ user.created_at ? new Date(user.created_at).toLocaleDateString('zh-CN') : '-' }}</span>
         </div>
       </div>
@@ -57,7 +93,10 @@ function logout() {
       </button>
     </div>
 
-    <!-- 统计卡片 -->
+    <div class="section">
+      <h3>学习概览</h3>
+    </div>
+
     <div class="stats-row">
       <div class="stat-card">
         <div class="stat-value">{{ paperCount }}</div>
@@ -77,35 +116,79 @@ function logout() {
       </div>
     </div>
 
-    <!-- 学习概览 -->
     <div v-if="learningOverview" class="section">
-      <h3>学习概览</h3>
       <div class="overview-grid">
-        <div class="kv"><span>总学习记录</span><b>{{ learningOverview.total_records || 0 }}</b></div>
-        <div class="kv"><span>今日记录</span><b>{{ learningOverview.today_records || 0 }}</b></div>
         <div class="kv"><span>连续学习</span><b>{{ learningOverview.streak_days || 0 }} 天</b></div>
         <div class="kv"><span>累计时长</span><b>{{ learningOverview.total_minutes || 0 }} 分钟</b></div>
       </div>
     </div>
 
-    <!-- 热门主题 -->
-    <div v-if="hotTopics.length" class="section">
-      <h3>热门研究主题</h3>
-      <div class="topic-tags">
-        <span v-for="t in hotTopics" :key="t" class="topic-tag">{{ t }}</span>
-      </div>
-    </div>
-
-    <!-- 帐号信息 -->
     <div class="section">
       <h3>帐号信息</h3>
       <div class="info-list">
-        <div class="info-row"><span>用户名</span><b>{{ user.username }}</b></div>
-        <div class="info-row"><span>邮箱</span><b>{{ user.email || '未设置' }}</b></div>
-        <div class="info-row"><span>手机</span><b>{{ user.phone || '未设置' }}</b></div>
-        <div class="info-row"><span>角色</span><b>{{ user.role === 'admin' ? '管理员' : '普通用户' }}</b></div>
+        <div class="info-row">
+          <span>用户名</span>
+          <div class="info-right">
+            <b>{{ user.username }}</b>
+            <button class="edit-btn" @click="editUsername = user.username; showUsernameModal = true" title="编辑用户名">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="info-row">
+          <span>邮箱</span>
+          <div class="info-right">
+            <b>{{ user.email || '未设置' }}</b>
+            <button class="arrow-btn" @click="showEmailModal = true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="info-row">
+          <span>手机</span>
+          <div class="info-right">
+            <b>{{ user.phone ? maskPhone(user.phone) : '未设置' }}</b>
+            <button class="arrow-btn" @click="showPhoneModal = true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
+
+    <Teleport to="body">
+      <div v-if="showPhoneModal" class="modal-overlay" @click="showPhoneModal = false">
+        <div class="modal-content" @click.stop>
+          <h4>手机号码</h4>
+          <p>{{ maskPhone(user.phone || '') }}</p>
+          <button class="modal-close" @click="showPhoneModal = false">关闭</button>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="showEmailModal" class="modal-overlay" @click="showEmailModal = false">
+        <div class="modal-content" @click.stop>
+          <h4>邮箱</h4>
+          <p>{{ user.email || '未设置' }}</p>
+          <button class="modal-close" @click="showEmailModal = false">关闭</button>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="showUsernameModal" class="modal-overlay" @click="showUsernameModal = false">
+        <div class="modal-content" @click.stop>
+          <h4>编辑用户名</h4>
+          <input v-model="editUsername" type="text" class="modal-input" placeholder="请输入用户名" maxlength="20" @input="validateUsername" />
+          <span v-if="usernameError" class="modal-error">{{ usernameError }}</span>
+          <div class="modal-actions">
+            <button class="modal-cancel" @click="showUsernameModal = false">取消</button>
+            <button class="modal-confirm" @click="updateUsername">确认</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -119,7 +202,6 @@ function logout() {
   background: var(--academic-canvas);
 }
 
-/* ====== 头部 ====== */
 .profile-card {
   display: flex;
   align-items: center;
@@ -155,17 +237,6 @@ function logout() {
   color: var(--academic-text-main);
 }
 
-.role-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 8px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--academic-primary);
-  background: var(--academic-primary-light);
-  margin-top: 4px;
-}
-
 .meta-row {
   display: flex;
   gap: 16px;
@@ -195,7 +266,6 @@ function logout() {
   border-color: var(--danger);
 }
 
-/* ====== 统计 ====== */
 .stats-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -224,7 +294,6 @@ function logout() {
   margin-top: 4px;
 }
 
-/* ====== 段落 ====== */
 .section {
   margin-bottom: 20px;
 }
@@ -288,6 +357,7 @@ function logout() {
 .info-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   padding: 14px 20px;
   border-bottom: 1px solid var(--academic-border);
 }
@@ -301,9 +371,140 @@ function logout() {
   color: var(--academic-text-muted);
 }
 
-.info-row b {
+.info-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.info-right b {
   font-size: 13px;
   color: var(--academic-text-body);
   font-weight: 500;
+}
+
+.edit-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--academic-text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.edit-btn:hover {
+  color: var(--academic-primary);
+  background: var(--academic-primary-light);
+}
+
+.arrow-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--academic-text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.arrow-btn:hover {
+  color: var(--academic-primary);
+  background: var(--academic-primary-light);
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px;
+  min-width: 280px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+}
+
+.modal-content h4 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  color: var(--academic-text-main);
+}
+
+.modal-content p {
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: var(--academic-text-body);
+}
+
+.modal-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--academic-border);
+  border-radius: 8px;
+  font-size: 14px;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+
+.modal-error {
+  display: block;
+  color: #ef4444;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+.modal-input:focus {
+  outline: none;
+  border-color: var(--academic-primary);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.modal-close, .modal-cancel {
+  padding: 8px 16px;
+  border: 1px solid var(--academic-border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--academic-text-body);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.modal-close:hover, .modal-cancel:hover {
+  background: var(--academic-canvas);
+}
+
+.modal-confirm {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--academic-primary);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.modal-confirm:hover {
+  background: var(--academic-primary-hover);
 }
 </style>
