@@ -49,5 +49,8 @@ export const authApi = {
       }),
 
   // 获取用户信息
-  me: () => http.get<any, User>('/users/me')
+  me: () => http.get<any, User>('/users/me'),
+
+  // 更新用户信息
+  updateProfile: (payload: { username: string }) => http.put('/auth/profile', payload)
 }

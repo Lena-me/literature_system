@@ -2,6 +2,7 @@ cat > .gitignore << 'EOF'
 # Dependencies
 node_modules/
 
+
 # Environment
 .env
 .env.docker
@@ -9,6 +10,7 @@ node_modules/
 # Build outputs
 frontend/dist/
 frontend/dist-user/
+frontend/dist-admin/
 
 # Python cache
 __pycache__/

@@ -35,7 +35,7 @@ async def seed_initial_data() -> None:
 async def lifespan(app: FastAPI):
     from app.services.rag_service import warmup_rag_models
 
-    await asyncio.to_thread(warmup_rag_models)
+    asyncio.create_task(asyncio.to_thread(warmup_rag_models))
     yield
 
 app = FastAPI(title=settings.app_name, version='1.0.0-doc-strict', lifespan=lifespan)

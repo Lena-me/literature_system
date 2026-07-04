@@ -290,7 +290,7 @@ class LearningRecord(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
     paper_id: Mapped[int | None] = mapped_column(ForeignKey('papers.id'), index=True)
-    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    event_type: Mapped[str] = mapped_column(String(100), index=True)
     event_data: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
