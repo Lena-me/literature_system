@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from datetime import datetime, timezone, timedelta
 
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -11,6 +12,7 @@ from app.db.mysql import celery_db
 from app.models import Paper, ParseTask
 from app.services.parse_status_events import publish_parse_status
 from app.services.pipeline_service import PaperPipelineService
+from app.services.system_log_service import new_trace_id, write_system_log_sync
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -29,10 +31,18 @@ def process_paper_pipeline(paper_id: int) -> None:
         PaperPipelineService().parse_extract_vectorize(paper_id)
         _mark_completed(paper_id)
     except Exception as exc:
+        trace_id = new_trace_id()
         try:
             _mark_failed(paper_id, exc)
         except Exception:
             pass
+        write_system_log_sync(
+            level='ERROR',
+            message=f'文献解析流水线失败 paper_id={paper_id}: {exc}',
+            service_name='celery.paper_pipeline',
+            trace_id=trace_id,
+            exception=exc,
+        )
         raise
 
 
@@ -94,6 +104,6 @@ def _mark_failed(paper_id: int, exc: Exception) -> None:
         if task:
             task.status = 'failed'
             task.end_time = datetime.now(BEIJING_TZ)
-            task.error_log = f'{type(exc).__name__}: {str(exc)[:3000]}'
+            task.error_log = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
         db.commit()
         _notify_paper_status(paper, paper_id, 'failed')

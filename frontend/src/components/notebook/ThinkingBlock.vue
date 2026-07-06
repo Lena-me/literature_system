@@ -64,7 +64,7 @@ const charCount = computed(() => (props.reasoning || '').length)
 }
 
 .thinking-label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: #64748b;
 }
@@ -76,7 +76,7 @@ const charCount = computed(() => (props.reasoning || '').length)
 
 .thinking-body {
   padding: 0 12px 12px;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.65;
   color: #64748b;
   white-space: pre-wrap;

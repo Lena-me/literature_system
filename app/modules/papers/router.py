@@ -21,6 +21,7 @@ from app.db.redis import redis_client
 from app.integrations.object_storage.minio_storage import MinioStorage
 from app.models import Category, ContentItem, FiguresTable, Paper, ParseTask, User
 from app.schemas import CategoryIn, ChunkUploadCompleteIn, ChunkUploadInitIn, PaperOut, PaperUpdateIn
+from app.services.audit_service import audit_action
 from app.services.parse_status_events import TERMINAL_PARSE_STATUSES, channel_for_user, publish_parse_status
 from app.services.quota_service import QuotaService
 from app.utils.json_utils import dumps, loads
@@ -94,6 +95,17 @@ async def _create_paper_from_bytes(db: AsyncSession, user: User, filename: str, 
     db.add(task)
     user.paper_upload_count += 1
 
+    await audit_action(
+        db,
+        user_id=user.id,
+        module='papers',
+        operation_type='upload',
+        content={
+            'paper_id': paper.id,
+            'filename': paper.original_filename,
+            'file_size': paper.file_size,
+        },
+    )
     await db.commit()
     await db.refresh(paper)
 
@@ -458,6 +470,17 @@ async def delete_paper(paper_id: int, db: AsyncSession = Depends(get_db), user: 
 
     paper.is_deleted = True
     paper.parse_status = 'deleted'
+    await audit_action(
+        db,
+        user_id=user.id,
+        module='papers',
+        operation_type='delete',
+        content={
+            'paper_id': paper.id,
+            'filename': paper.original_filename,
+        },
+        risk=1,
+    )
     await db.commit()
     return {'message': '已删除'}
 
@@ -528,6 +551,18 @@ async def reparse_paper(paper_id: int, db: AsyncSession = Depends(get_db), user:
     paper.parse_status = 'queued'
     task = ParseTask(paper_id=paper.id, user_id=user.id, task_type='document_parse', status='queued')
     db.add(task)
+    await db.flush()
+    await audit_action(
+        db,
+        user_id=user.id,
+        module='papers',
+        operation_type='reparse',
+        content={
+            'paper_id': paper.id,
+            'filename': paper.original_filename,
+            'task_id': task.id,
+        },
+    )
     await db.commit()
     await db.refresh(task)
 

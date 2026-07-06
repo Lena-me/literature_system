@@ -1,22 +1,41 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user
 from app.db.mysql import get_db
 from app.models import Report, User
 from app.schemas import ReportCreateIn
+from app.services.audit_service import audit_action
 from app.services.generation_service import GenerationService
 from app.utils.json_utils import loads
 router = APIRouter(prefix='/reports', tags=['研读报告'])
 
 @router.post('')
-async def create_report(data: ReportCreateIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def create_report(
+    data: ReportCreateIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     try:
         obj = await GenerationService().create_report(db, user.id, data.paper_id, data.modules, data.title)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     user.report_generate_count += 1
+    await audit_action(
+        db,
+        user_id=user.id,
+        module='reports',
+        operation_type='generate',
+        content={
+            'report_id': obj.id,
+            'paper_id': obj.paper_id,
+            'title': obj.title,
+            'modules': data.modules,
+        },
+        request=request,
+    )
     await db.commit()
     return {
         'id': obj.id,
@@ -32,10 +51,24 @@ async def list_reports(db: AsyncSession = Depends(get_db), user: User = Depends(
     return [{'id': x.id, 'paper_id': x.paper_id, 'title': x.title, 'content': loads(x.content), 'created_at': x.created_at} for x in rows]
 
 @router.delete('/{report_id}')
-async def delete_report(report_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def delete_report(
+    report_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     report = await db.get(Report, report_id)
     if not report or report.user_id != user.id:
         raise HTTPException(404, '报告不存在')
+    await audit_action(
+        db,
+        user_id=user.id,
+        module='reports',
+        operation_type='delete',
+        content={'report_id': report.id, 'paper_id': report.paper_id, 'title': report.title},
+        request=request,
+        risk=1,
+    )
     await db.delete(report)
     await db.commit()
     return {'message': 'deleted'}

@@ -11,7 +11,7 @@ from app.core.security import create_access_token, hash_password, verify_passwor
 from app.db.mysql import get_db
 from app.models import User
 from app.schemas import LoginIn, RegisterIn, SendCodeIn, VerifyCodeIn, ResetPasswordIn, TokenOut
-from app.services.audit_service import write_audit
+from app.services.audit_service import audit_action, audit_action_standalone
 from app.services.auth_service import LoginGuard, VerificationCodeService
 
 class UpdateProfileIn(BaseModel):
@@ -67,13 +67,13 @@ async def register(data: RegisterIn, request: Request, db: AsyncSession = Depend
     )
     db.add(user)
     await db.flush()
-    await write_audit(
+    await audit_action(
         db,
-        user.id,
-        'auth',
-        'register',
-        f'用户注册：{user.username}',
-        ip=request.client.host if request.client else None,
+        user_id=user.id,
+        module='auth',
+        operation_type='register',
+        content={'username': user.username, 'phone': phone},
+        request=request,
     )
     await db.commit()
 
@@ -96,8 +96,16 @@ async def login(data: LoginIn, request: Request, db: AsyncSession = Depends(get_
     ).scalar_one_or_none()
 
     if not user or not verify_password(data.password, user.password_hash):
+        await audit_action_standalone(
+            user_id=user.id if user else None,
+            module='auth',
+            operation_type='login_failed',
+            content={'phone': data.phone, 'reason': 'invalid_credentials'},
+            request=request,
+            result='failed',
+            risk=1,
+        )
         await guard.record_failure(data.phone)
-        raise HTTPException(401, '账号或密码错误')
 
     if user.status != 'active':
         raise HTTPException(403, '账号已被禁用')
@@ -109,7 +117,15 @@ async def login(data: LoginIn, request: Request, db: AsyncSession = Depends(get_
     try:
         user.last_login_ip = request.client.host if request.client else None
         user.last_login_at = datetime.now(BEIJING_TZ)
-        await write_audit(db, user.id, 'auth', 'login', '用户登录', ip=user.last_login_ip)
+        await audit_action(
+            db,
+            user_id=user.id,
+            module='auth',
+            operation_type='login',
+            content={'username': user.username},
+            request=request,
+            ip=user.last_login_ip,
+        )
         await db.commit()
     except Exception:
         await db.rollback()
@@ -120,7 +136,7 @@ async def login(data: LoginIn, request: Request, db: AsyncSession = Depends(get_
     )
 
 @router.post('/reset-password')
-async def reset_password(data: ResetPasswordIn, db: AsyncSession = Depends(get_db)):
+async def reset_password(data: ResetPasswordIn, request: Request, db: AsyncSession = Depends(get_db)):
     phone = await VerificationCodeService().verify_reset_token(data.token)
     user = (
         await db.execute(
@@ -128,11 +144,20 @@ async def reset_password(data: ResetPasswordIn, db: AsyncSession = Depends(get_d
     if not user:
         raise HTTPException(404, '账号不存在')
     user.password_hash = hash_password(data.password)
+    await audit_action(
+        db,
+        user_id=user.id,
+        module='auth',
+        operation_type='reset_password',
+        content={'phone': phone},
+        request=request,
+        risk=1,
+    )
     await db.commit()
     return {'message': '密码已重置'}
 
 @router.put('/profile')
-async def update_profile(data: UpdateProfileIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def update_profile(data: UpdateProfileIn, request: Request, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     username = data.username.strip()
     if not username:
         raise HTTPException(400, '用户名不能为空')
@@ -148,6 +173,15 @@ async def update_profile(data: UpdateProfileIn, db: AsyncSession = Depends(get_d
     if exists:
         raise HTTPException(400, '该用户名已被使用')
     
+    old_username = user.username
     user.username = username
+    await audit_action(
+        db,
+        user_id=user.id,
+        module='auth',
+        operation_type='update_profile',
+        content={'old_username': old_username, 'new_username': username},
+        request=request,
+    )
     await db.commit()
     return {'message': '用户名修改成功', 'username': username}

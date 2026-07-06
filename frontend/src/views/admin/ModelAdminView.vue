@@ -41,10 +41,10 @@ const monitorSummary = computed(() => monitor.value?.summary || monitor.value ||
 const monitorCards = computed(() => {
   const m = monitorSummary.value || {}
   return [
-    { key: 'calls', label: '今日总调用次数', value: m.total_calls ?? 0, sub: 'LLM 真实调用' },
-    { key: 'tokens', label: 'Token 消耗总计', value: formatTokens(m.total_tokens), sub: '今日累计' },
-    { key: 'success', label: '平均成功率', value: `${m.success_rate ?? 100}%`, sub: `成功 ${m.success_count ?? 0} 次` },
-    { key: 'p95', label: 'P95 延迟', value: m.p95_latency_ms ? `${m.p95_latency_ms} ms` : '—', sub: m.p95_label || '暂无数据' },
+    { key: 'calls', label: '今日总调用次数', value: m.total_calls ?? 0, sub: 'LLM 真实调用', accent: 'blue' },
+    { key: 'tokens', label: 'Token 消耗总计', value: formatTokens(m.total_tokens), sub: '今日累计', accent: 'indigo' },
+    { key: 'success', label: '平均成功率', value: `${m.success_rate ?? 100}%`, sub: `成功 ${m.success_count ?? 0} 次`, accent: 'emerald' },
+    { key: 'p95', label: 'P95 延迟', value: m.p95_latency_ms ? `${m.p95_latency_ms} ms` : '—', sub: m.p95_label || '暂无数据', accent: 'cyan' },
   ]
 })
 
@@ -347,7 +347,7 @@ function renderDetailChart() {
           type: 'bar',
           data: trend.map((d: any) => d.calls),
           barMaxWidth: 28,
-          itemStyle: { color: '#0f172a', borderRadius: [2, 2, 0, 0] },
+          itemStyle: { color: '#2563eb', borderRadius: [2, 2, 0, 0] },
         },
         {
           name: 'Token',
@@ -357,8 +357,8 @@ function renderDetailChart() {
           data: trend.map((d: any) => d.tokens),
           symbol: 'circle',
           symbolSize: 5,
-          lineStyle: { width: 2, color: '#64748b' },
-          itemStyle: { color: '#64748b' },
+          lineStyle: { width: 2, color: '#6366f1' },
+          itemStyle: { color: '#6366f1' },
         },
       ],
     },
@@ -438,9 +438,9 @@ onUnmounted(() => {
     <section v-else class="admin-metrics-bar">
       <template v-for="(card, idx) in monitorCards" :key="card.key">
         <div v-if="idx > 0" class="admin-metric-divider" />
-        <div class="admin-metric">
+        <div class="admin-metric" :class="`admin-metric--${card.accent}`">
           <span class="admin-metric-label">{{ card.label }}</span>
-          <span class="admin-metric-value">{{ card.value }}</span>
+          <span class="admin-metric-value is-accent">{{ card.value }}</span>
           <span class="admin-metric-sub">{{ card.sub }}<template v-if="idx === 0 && monitor.date"> · {{ monitor.date }}</template></span>
         </div>
       </template>
@@ -448,7 +448,7 @@ onUnmounted(() => {
 
     <div class="admin-toolbar">
       <div class="admin-toolbar-left">
-        <span class="toolbar-title">模型列表与配置</span>
+        <span class="admin-toolbar-title">模型列表与配置</span>
         <span class="admin-toolbar-meta">按业务场景配置 LLM 主备路由</span>
       </div>
       <div class="admin-toolbar-right">
@@ -460,10 +460,12 @@ onUnmounted(() => {
 
     <div class="admin-el-table">
       <el-table :data="rows" size="default" height="calc(100vh - 280px)" :row-class-name="getRowClassName">
-        <el-table-column prop="id" label="ID" width="64" />
+        <el-table-column label="序号" width="64" align="center">
+          <template #default="{ $index }">{{ $index + 1 }}</template>
+        </el-table-column>
         <el-table-column prop="model_type" label="类型" width="88">
           <template #default="{ row }">
-            <span class="type-text">{{ typeLabel[row.model_type] || row.model_type }}</span>
+            <span class="type-text admin-tag is-type">{{ typeLabel[row.model_type] || row.model_type }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="model_name" label="模型名称" min-width="220">
@@ -471,9 +473,9 @@ onUnmounted(() => {
             <div class="model-name-cell">
               <span class="model-name-text">{{ row.model_name }}</span>
               <div v-if="isLlmRow(row)" class="model-meta">
-                <span v-if="row.scenario_name" class="meta-tag">{{ row.scenario_name }}</span>
-                <span class="meta-tag" :class="row.is_primary ? 'is-primary' : 'is-fallback'">
-                  {{ row.is_primary ? 'Primary' : 'Fallback' }}
+                <span v-if="row.scenario_name" class="admin-tag is-scenario">{{ row.scenario_name }}</span>
+                <span class="admin-tag" :class="row.is_primary ? 'is-primary' : 'is-fallback'">
+                  {{ row.is_primary ? '主路由' : '备用' }}
                 </span>
               </div>
             </div>
@@ -603,10 +605,9 @@ onUnmounted(() => {
           <section class="detail-block">
             <h3 class="detail-heading">基础信息</h3>
             <dl class="detail-dl">
-              <div><dt>ID</dt><dd>{{ detail.model_id }}</dd></div>
               <div><dt>类型</dt><dd>{{ typeLabel[detail.model_type] || detail.model_type }}</dd></div>
               <div v-if="detail.model_type === 'llm'"><dt>应用场景</dt><dd>{{ detail.scenario_name || detail.scenario || '—' }}</dd></div>
-              <div v-if="detail.model_type === 'llm'"><dt>路由角色</dt><dd>{{ detail.is_primary ? 'Primary 主干' : 'Fallback 备用' }}</dd></div>
+              <div v-if="detail.model_type === 'llm'"><dt>路由角色</dt><dd>{{ detail.is_primary ? '主路由' : '备用路由' }}</dd></div>
               <div><dt>版本</dt><dd>{{ detail.version || '—' }}</dd></div>
               <div><dt>调用地址</dt><dd class="mono">{{ detail.api_endpoint || '—' }}</dd></div>
               <div><dt>状态</dt><dd>{{ detail.is_active ? '已启用' : '未启用' }}</dd></div>
@@ -658,20 +659,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.toolbar-title {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #0f172a;
-}
-
-.type-text {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
 .model-name-cell {
   display: flex;
   flex-direction: column;
@@ -681,24 +668,13 @@ onUnmounted(() => {
 
 .model-name-text {
   font-weight: 600;
-  color: #0f172a;
+  color: var(--academic-text-main, #0f172a);
 }
 
 .model-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-}
-
-.meta-tag {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  color: #64748b;
-  letter-spacing: 0.02em;
-}
-
-.meta-tag.is-primary {
-  color: #059669;
 }
 
 .muted,
@@ -758,7 +734,7 @@ onUnmounted(() => {
 
 .drawer-resize-handle:hover::after,
 .model-detail-drawer.is-resizing .drawer-resize-handle::after {
-  background: #0f172a;
+  background: var(--admin-accent, #2563eb);
 }
 
 .detail-block {
@@ -824,7 +800,7 @@ onUnmounted(() => {
 .detail-metric-value {
   font-size: 1.25rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--admin-accent, #2563eb);
   letter-spacing: -0.02em;
 }
 

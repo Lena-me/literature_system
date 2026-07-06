@@ -8,40 +8,112 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import require_admin
 from app.core.security import hash_password
 from app.db.mysql import get_db
-from app.models import AuditLog, ParseTask, User
+from app.models import AuditLog, Paper, ParseTask, User
 from app.schemas import SystemPauseIn, TaskBatchCancelIn, TaskBatchRetryIn, UserCreateIn, UserUpdateIn
+from app.schemas.admin import (
+    AdminAuditLogListOut,
+    AdminAuditLogOut,
+    AdminOverviewOut,
+    AdminTaskListOut,
+    AdminTaskOut,
+    AdminTaskStatsOut,
+    AdminUserDetailOut,
+    AdminUserOut,
+)
+from app.services.admin_logs_service import audit_operation_summary, list_audit_logs, list_vector_snapshots
 from app.services.admin_overview_service import build_models_monitor, build_overview
 from app.services.model_scenarios import MODEL_SCENARIOS
 from app.services.audit_service import write_audit
 from app.services.quota_service import quota_of
 from app.services.system_pause import is_system_paused, set_system_paused
+from app.utils.admin_privacy import mask_email, mask_phone
 from app.utils.json_utils import dumps, loads
 from app.workers.celery_app import celery_app
 
 router = APIRouter(prefix='/admin', tags=['管理后台'])
 
 
-def _task_dict(x: ParseTask) -> dict:
-    return {
-        'id': x.id,
-        'paper_id': x.paper_id,
-        'user_id': x.user_id,
-        'task_type': x.task_type,
-        'status': x.status,
-        'priority': x.priority,
-        'queue_position': x.queue_position,
-        'start_time': x.start_time,
-        'end_time': x.end_time,
-        'duration_ms': x.duration_ms,
-        'retry_count': x.retry_count,
-        'error_log': x.error_log,
-        'created_at': x.created_at,
-    }
+def _task_item(x: ParseTask, *, username: str | None = None, paper_label: str | None = None) -> dict:
+    return AdminTaskOut(
+        id=x.id,
+        username=username or '未知用户',
+        paper_label=paper_label or '未知文献',
+        task_type=x.task_type,
+        status=x.status,
+        priority=x.priority,
+        queue_position=x.queue_position,
+        start_time=x.start_time,
+        end_time=x.end_time,
+        duration_ms=x.duration_ms,
+        retry_count=x.retry_count,
+        error_log=x.error_log,
+        created_at=x.created_at,
+    ).model_dump()
 
 
-@router.get('/overview')
+async def _tasks_for_admin(db: AsyncSession, rows: list[ParseTask]) -> list[dict]:
+    if not rows:
+        return []
+    user_ids = {int(x.user_id) for x in rows if x.user_id}
+    paper_ids = {int(x.paper_id) for x in rows if x.paper_id}
+    users: dict[int, str] = {}
+    papers: dict[int, str] = {}
+    if user_ids:
+        user_rows = (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
+        users = {u.id: u.username for u in user_rows}
+    if paper_ids:
+        paper_rows = (await db.execute(select(Paper).where(Paper.id.in_(paper_ids)))).scalars().all()
+        papers = {
+            p.id: (p.original_filename or p.title or '未知文献')
+            for p in paper_rows
+        }
+    return [
+        _task_item(
+            task,
+            username=users.get(task.user_id),
+            paper_label=papers.get(task.paper_id, '未知文献'),
+        )
+        for task in rows
+    ]
+
+
+@router.get('/overview', response_model=AdminOverviewOut)
 async def admin_overview(db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
-    return await build_overview(db)
+    return AdminOverviewOut.model_validate(await build_overview(db)).model_dump()
+
+
+@router.get('/logs/audit', response_model=AdminAuditLogListOut)
+async def admin_audit_logs(
+    page: int = 1,
+    size: int = 20,
+    user_id: int | None = None,
+    risk_flag: bool | None = None,
+    keyword: str | None = None,
+    start_at: str | None = None,
+    end_at: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    return await list_audit_logs(
+        db,
+        page=page,
+        size=size,
+        user_id=user_id,
+        risk_flag=risk_flag,
+        keyword=keyword,
+        start_at=start_at,
+        end_at=end_at,
+    )
+
+
+@router.get('/vector/snapshots')
+async def admin_vector_snapshots(
+    days: int = 7,
+    limit: int = 168,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    return await list_vector_snapshots(db, days=days, limit=limit)
 
 
 @router.get('/models/monitor')
@@ -74,7 +146,22 @@ async def set_system_pause(
     return {'paused': data.paused, 'message': label}
 
 
-@router.get('/tasks')
+async def _task_status_stats(db: AsyncSession) -> dict:
+    rows = (
+        await db.execute(select(ParseTask.status, func.count()).group_by(ParseTask.status))
+    ).all()
+    counts = {str(r[0]): int(r[1]) for r in rows}
+    return AdminTaskStatsOut(
+        total=sum(counts.values()),
+        running=counts.get('running', 0),
+        failed=counts.get('failed', 0),
+        queued=counts.get('queued', 0),
+        completed=counts.get('completed', 0),
+        cancelled=counts.get('cancelled', 0),
+    ).model_dump()
+
+
+@router.get('/tasks', response_model=AdminTaskListOut)
 async def admin_list_tasks(
     page: int = 1,
     page_size: int = 20,
@@ -95,12 +182,13 @@ async def admin_list_tasks(
             .limit(page_size)
         )
     ).scalars().all()
-    return {
-        'items': [_task_dict(x) for x in rows],
-        'total': int(total or 0),
-        'page': page,
-        'page_size': page_size,
-    }
+    return AdminTaskListOut(
+        items=await _tasks_for_admin(db, list(rows)),
+        total=int(total or 0),
+        page=page,
+        page_size=page_size,
+        stats=await _task_status_stats(db),
+    ).model_dump()
 
 
 @router.post('/tasks/batch-retry')
@@ -144,7 +232,7 @@ async def admin_batch_cancel(
     return {'cancelled_task_ids': cancelled}
 
 
-@router.get('/users/{user_id}/detail')
+@router.get('/users/{user_id}/detail', response_model=AdminUserDetailOut)
 async def user_detail(
     user_id: int,
     db: AsyncSession = Depends(get_db),
@@ -161,38 +249,41 @@ async def user_detail(
             .limit(10)
         )
     ).scalars().all()
-    return {
-        'user': {
-            'id': user.id,
-            'username': user.username,
-            'name': user.name,
-            'email': user.email,
-            'phone': user.phone,
-            'role': user.role,
-            'status': user.status,
-            'paper_upload_count': user.paper_upload_count,
-            'report_generate_count': user.report_generate_count,
-            'quota': quota_of(user),
-            'created_at': user.created_at.isoformat() if user.created_at else None,
-            'last_login_at': user.last_login_at.isoformat() if user.last_login_at else None,
-            'last_login_ip': user.last_login_ip,
-        },
-        'audit_logs': [
-            {
-                'id': x.id,
-                'module': x.module,
-                'operation_type': x.operation_type,
-                'operation_content': x.operation_content,
-                'operation_result': x.operation_result,
-                'risk_flag': x.risk_flag,
-                'created_at': x.created_at.isoformat() if x.created_at else None,
-            }
+    return AdminUserDetailOut(
+        user=AdminUserOut(
+            id=user.id,
+            username=user.username,
+            name=user.name,
+            email=user.email,
+            phone=user.phone,
+            role=user.role,
+            status=user.status,
+            paper_upload_count=user.paper_upload_count,
+            report_generate_count=user.report_generate_count,
+            quota=quota_of(user),
+            created_at=user.created_at,
+            last_login_at=user.last_login_at,
+            last_login_ip=user.last_login_ip,
+        ),
+        audit_logs=[
+            AdminAuditLogOut(
+                module=x.module,
+                operation_type=x.operation_type,
+                operation_summary=audit_operation_summary(
+                    x.module,
+                    x.operation_type,
+                    content_raw=x.operation_content,
+                ),
+                operation_result=x.operation_result,
+                risk_flag=x.risk_flag,
+                created_at=x.created_at,
+            )
             for x in logs
         ],
-    }
+    ).model_dump()
 
 
-@router.get('/users')
+@router.get('/users', response_model=list[AdminUserOut])
 async def list_users(
     keyword: str | None = None,
     status: str | None = None,
@@ -225,21 +316,21 @@ async def list_users(
         stmt = stmt.order_by(User.created_at.desc())
     rows = (await db.execute(stmt.limit(500))).scalars().all()
     return [
-        {
-            'id': x.id,
-            'username': x.username,
-            'name': x.name,
-            'email': x.email,
-            'phone': x.phone,
-            'role': x.role,
-            'status': x.status,
-            'paper_upload_count': x.paper_upload_count,
-            'report_generate_count': x.report_generate_count,
-            'quota': loads(x.quota_json, {}),
-            'created_at': x.created_at.isoformat() if x.created_at else None,
-            'last_login_at': x.last_login_at.isoformat() if x.last_login_at else None,
-            'last_login_ip': x.last_login_ip,
-        }
+        AdminUserOut(
+            id=x.id,
+            username=x.username,
+            name=x.name,
+            email=x.email,
+            phone=x.phone,
+            role=x.role,
+            status=x.status,
+            paper_upload_count=x.paper_upload_count,
+            report_generate_count=x.report_generate_count,
+            quota=loads(x.quota_json, {}),
+            created_at=x.created_at,
+            last_login_at=x.last_login_at,
+            last_login_ip=x.last_login_ip,
+        ).model_dump()
         for x in rows
     ]
 
@@ -341,7 +432,9 @@ async def export_users(db: AsyncSession = Depends(get_db), admin: User = Depends
     header = 'id,username,name,email,phone,role,status,paper_upload_count,report_generate_count,created_at\n'
     body = ''.join(
         [
-            f'{u.id},{u.username},{u.name or ""},{u.email or ""},{u.phone or ""},{u.role},{u.status},{u.paper_upload_count},{u.report_generate_count},{u.created_at}\n'
+            f'{u.id},{u.username},{u.name or ""},'
+            f'{mask_email(u.email or "") or ""},{mask_phone(u.phone or "") or ""},'
+            f'{u.role},{u.status},{u.paper_upload_count},{u.report_generate_count},{u.created_at}\n'
             for u in rows
         ]
     )

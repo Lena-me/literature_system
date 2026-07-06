@@ -300,6 +300,7 @@ class LearningRecord(Base):
 
 class LearningDuration(Base):
     __tablename__ = 'learning_duration'
+    __table_args__ = (UniqueConstraint('user_id', 'record_date', name='uk_learning_duration_user_date'),)
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
     record_date: Mapped[date] = mapped_column(Date, index=True)

@@ -157,7 +157,7 @@ defineExpose({ ask })
 .spark { font-size:48px; color: var(--brand); text-shadow:0 0 22px var(--brand); }
 .msg { margin: 16px 0; display:flex; flex-direction:column; }
 .msg.user { align-items:flex-end; }
-.bubble { max-width: 82%; padding: 13px 16px; border-radius: 18px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.1); }
+.bubble { max-width: 82%; padding: 13px 16px; border-radius: 18px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.1); font-size: 16px; line-height: 1.65; }
 .msg.user .bubble { background: linear-gradient(135deg, rgba(102,231,255,.32), rgba(138,124,255,.28)); }
 .sources { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }.source-tag{cursor:pointer;transition:.2s}.source-tag:hover{transform:translateY(-1px);box-shadow:0 0 16px rgba(102,231,255,.35)}
 .composer { padding: 14px; display:flex; gap:10px; border-top:1px solid rgba(255,255,255,.1); align-items:flex-end; }

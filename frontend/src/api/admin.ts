@@ -71,11 +71,29 @@ export const adminApi = {
   saveSchedulerConfig: (payload: Record<string, any>) =>
     http.put<any, { message: string }>('/tasks/scheduler-config', payload),
 
-  // ===================== 审计日志模块 =====================
+  // ===================== 风控与审计中心 =====================
+  auditLogs: (params?: {
+    page?: number
+    size?: number
+    user_id?: number
+    risk_flag?: boolean
+    keyword?: string
+    start_at?: string
+    end_at?: string
+  }) =>
+    http.get<any, { items: any[]; total: number; page: number; size: number }>('/admin/logs/audit', {
+      params,
+    }),
+
+  /** @deprecated 请使用 auditLogs */
   logs: (module?: string) => http.get<any, any[]>('/audit-logs', { params: { module } }),
 
-  // ===================== 向量库备份模块 =====================
-  vectorStats: () => http.get<any, any>('/vector-store/stats'),
+  // ===================== 向量库监控（运维总览） =====================
+  vectorSnapshots: (params?: { days?: number; limit?: number }) =>
+    http.get<any, { items: any[]; latest: any; series: number[]; days: number }>(
+      '/admin/vector/snapshots',
+      { params },
+    ),
 
   vectorBackups: () => http.get<any, any[]>('/vector-store/backups'),
 

@@ -13,7 +13,6 @@ const auth = useAuthStore()
 
 const isExpanded = ref(true)
 const mobileOpen = ref(false)
-const searchKeyword = ref('')
 const systemPaused = ref(false)
 const pauseLoading = ref(false)
 
@@ -22,7 +21,7 @@ const navItems = [
   { label: '用户与配额', path: '/admin/users', exact: false, icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857 M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857 M7 20H2v-2a3 3 0 015.356-1.857 M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0 M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' },
   { label: '模型配置', path: '/admin/models', exact: false, icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z' },
   { label: '解析任务', path: '/admin/tasks', exact: false, icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
-  { label: '向量库与日志', path: '/admin/ops', exact: false, icon: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z' },
+  { label: '风控与审计', path: '/admin/ops', exact: false, icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },
 ]
 
 const pageTitle = computed(() => {
@@ -46,12 +45,6 @@ function logout() {
 function go(path: string) {
   mobileOpen.value = false
   router.push(path)
-}
-
-function handleSearch() {
-  const kw = searchKeyword.value.trim()
-  if (!kw) return
-  router.push({ path: '/admin/users', query: { keyword: kw } })
 }
 
 async function loadPauseState() {
@@ -98,7 +91,7 @@ onMounted(loadPauseState)
     <aside class="admin-sidebar" :class="{ expanded: isExpanded, 'mobile-open': mobileOpen }">
       <div class="sidebar-header">
         <button class="brand-toggle" @click="toggleSidebar" :title="isExpanded ? '收起侧边栏' : '展开侧边栏'">
-          <svg class="brand-logo" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0f172a" stroke-width="1.6">
+          <svg class="brand-logo" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--admin-accent, #2563eb)" stroke-width="1.6">
             <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
             <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
           </svg>
@@ -150,20 +143,6 @@ onMounted(loadPauseState)
         </div>
 
         <div class="admin-page-header__actions">
-          <el-input
-            v-model="searchKeyword"
-            placeholder="搜索用户"
-            clearable
-            class="global-search"
-            @keyup.enter="handleSearch"
-          >
-            <template #prefix>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2">
-                <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-            </template>
-          </el-input>
-
           <button
             class="pause-btn"
             :class="{ paused: systemPaused }"
@@ -191,15 +170,15 @@ onMounted(loadPauseState)
   height: 100vh;
   width: 100%;
   overflow: hidden;
-  background: #fff;
+  background: var(--admin-bg-subtle, #f8fafc);
 }
 
 .admin-sidebar {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #fff;
-  border-right: 1px solid #e5e7eb;
+  background: var(--admin-bg-sidebar, #f9fbff);
+  border-right: 1px solid var(--admin-border, #e2e8f0);
   z-index: 50;
   width: 64px;
   min-width: 64px;
@@ -234,13 +213,13 @@ onMounted(loadPauseState)
 }
 
 .brand-toggle:hover {
-  background: #f8fafc;
+  background: var(--admin-accent-soft, #eff6ff);
 }
 
 .brand-text {
   font-size: 0.875rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--academic-text-main, #0f172a);
   white-space: nowrap;
   opacity: 0;
   transition: opacity 0.2s ease 0.05s;
@@ -275,15 +254,15 @@ onMounted(loadPauseState)
 }
 
 .nav-item:hover {
-  background: #f8fafc;
-  color: #0f172a;
+  background: var(--admin-accent-soft, #eff6ff);
+  color: var(--admin-accent, #2563eb);
 }
 
 .nav-item.active {
-  background: #f8fafc;
-  color: #0f172a;
+  background: var(--admin-accent-soft, #eff6ff);
+  color: var(--admin-accent-hover, #1d4ed8);
   font-weight: 600;
-  border-left-color: #0f172a;
+  border-left-color: var(--admin-accent, #2563eb);
 }
 
 .nav-icon {
@@ -361,7 +340,7 @@ onMounted(loadPauseState)
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #fff;
+  background: var(--admin-bg, #fff);
 }
 
 .header-primary {
@@ -369,22 +348,6 @@ onMounted(loadPauseState)
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
-}
-
-.global-search {
-  width: 220px;
-}
-
-.global-search :deep(.el-input__wrapper) {
-  background: #f8fafc;
-  box-shadow: none !important;
-  border: 1px solid #e5e7eb;
-  border-radius: 0;
-}
-
-.global-search :deep(.el-input__wrapper:hover),
-.global-search :deep(.el-input__wrapper.is-focus) {
-  border-color: #cbd5e1;
 }
 
 .pause-btn {
@@ -437,7 +400,7 @@ onMounted(loadPauseState)
   flex: 1;
   min-height: 0;
   overflow: auto;
-  background: #fff;
+  background: var(--admin-bg, #fff);
 }
 
 .sidebar-overlay {
@@ -475,10 +438,6 @@ onMounted(loadPauseState)
 
   .mobile-menu-btn {
     display: inline-flex;
-  }
-
-  .global-search {
-    width: 140px;
   }
 
   .pause-label {

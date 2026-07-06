@@ -3,6 +3,7 @@ import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi } from '@/api/admin'
+import { formatAuditAction, formatAuditSummary, formatDateTime } from '@/utils/adminDisplay'
 
 const route = useRoute()
 const rows = ref<any[]>([])
@@ -49,7 +50,7 @@ function handleSearch() {
 }
 
 function toggleSort(prop: string) {
-  if (['id', 'status', 'created_at', 'last_login_at'].includes(prop)) {
+  if (['status', 'created_at', 'last_login_at'].includes(prop)) {
     if (sortBy.value === prop) {
       sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
     } else {
@@ -158,7 +159,7 @@ watch(
       <div class="admin-toolbar-left">
         <el-input
           v-model="searchKeyword"
-          placeholder="用户名 / ID / 手机号"
+          placeholder="用户名 / 手机号"
           clearable
           style="width: 260px"
           @keyup.enter="handleSearch"
@@ -171,10 +172,8 @@ watch(
 
     <div class="admin-el-table is-clickable">
       <el-table :data="rows" size="default" height="calc(100vh - 168px)" :row-class-name="getRowClassName" @row-click="openDrawer">
-        <el-table-column prop="id" label="ID" width="72">
-          <template #header>
-            <span class="sort-header" @click="toggleSort('id')">ID</span>
-          </template>
+        <el-table-column label="序号" width="64" align="center">
+          <template #default="{ $index }">{{ $index + 1 }}</template>
         </el-table-column>
         <el-table-column prop="username" label="用户名" min-width="140" />
         <el-table-column prop="phone" label="手机号" width="130" />
@@ -193,7 +192,7 @@ watch(
             <span class="sort-header" @click="toggleSort('created_at')">注册时间</span>
           </template>
           <template #default="{ row }">
-            {{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '—' }}
+            {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
         <el-table-column label="操作" width="168" fixed="right">
@@ -211,7 +210,7 @@ watch(
           <div class="drawer-section user-header">
             <div>
               <h3>{{ detail.user.username }}</h3>
-              <p class="sub">ID {{ detail.user.id }} · {{ detail.user.phone || '—' }} · {{ detail.user.email || '—' }}</p>
+              <p class="sub">{{ detail.user.phone || '—' }} · {{ detail.user.email || '—' }}</p>
             </div>
             <el-button
               :type="detail.user.status === 'active' ? 'danger' : 'success'"
@@ -235,11 +234,25 @@ watch(
             </div>
             <div class="quota-row">
               <span>单文件上限 MB</span>
-              <el-input-number v-model="quotaForm.single_file_max_mb" :min="10" :max="2048" size="small" />
+              <el-input-number
+                v-model="quotaForm.single_file_max_mb"
+                class="quota-input-number"
+                :min="10"
+                :max="2048"
+                size="small"
+                controls-position="right"
+              />
             </div>
             <div class="quota-row">
               <span>总文献数</span>
-              <el-input-number v-model="quotaForm.total_papers" :min="1" :max="10000" size="small" />
+              <el-input-number
+                v-model="quotaForm.total_papers"
+                class="quota-input-number"
+                :min="1"
+                :max="10000"
+                size="small"
+                controls-position="right"
+              />
             </div>
             <el-button type="primary" size="small" @click="saveQuota">保存配额</el-button>
           </div>
@@ -248,14 +261,14 @@ watch(
             <h4>最近审计日志</h4>
             <el-timeline v-if="detail.audit_logs?.length">
               <el-timeline-item
-                v-for="log in detail.audit_logs"
-                :key="log.id"
-                :timestamp="log.created_at ? new Date(log.created_at).toLocaleString('zh-CN') : ''"
+                v-for="(log, logIdx) in detail.audit_logs"
+                :key="logIdx"
+                :timestamp="formatDateTime(log.created_at)"
                 placement="top"
               >
                 <div class="log-item">
-                  <span class="log-type">{{ log.operation_type }}</span>
-                  <p>{{ log.operation_content || '—' }}</p>
+                  <span class="log-type">{{ formatAuditAction(log.operation_type) }}</span>
+                  <p>{{ log.operation_summary || formatAuditSummary(log.module, log.operation_type) }}</p>
                 </div>
               </el-timeline-item>
             </el-timeline>
@@ -347,6 +360,30 @@ watch(
   margin-bottom: 0.625rem;
   font-size: 0.8125rem;
   color: #334155;
+}
+
+.quota-input-number {
+  width: 120px;
+}
+
+.quota-item :deep(.el-slider) {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.quota-item :deep(.el-slider__runway) {
+  flex: 1;
+  margin-right: 0;
+}
+
+.quota-item :deep(.el-slider__input) {
+  width: 120px;
+  flex-shrink: 0;
+}
+
+.quota-item :deep(.el-slider__input .el-input-number) {
+  width: 120px;
 }
 
 .log-item .log-type {

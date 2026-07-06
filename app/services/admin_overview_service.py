@@ -6,7 +6,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.milvus.client import MilvusChunkStore
-from app.models import ModelCallStat, Paper, ParseTask, QAMessage, QASession, SystemLog, User
+from app.models import ModelCallStat, Paper, ParseTask, QAMessage, QASession, SystemLog, User, VectorDBSnapshot
 from app.services.system_pause import is_system_paused
 
 # 无 per-user Token 表时，用 QA 次数估算 Token（单次约 800）
@@ -40,7 +40,7 @@ def _cluster_label(exception_type: str | None, message: str | None) -> str:
     msg = (message or '').strip()
     if not msg:
         return 'UnknownError'
-    return msg[:80] + ('…' if len(msg) > 80 else '')
+    return msg[:120] + ('…' if len(msg) > 120 else '')
 
 
 async def _composite_health(db: AsyncSession, since: datetime) -> dict:
@@ -316,7 +316,31 @@ async def _daily_series(db: AsyncSession, days: int = 7) -> dict:
     }
 
 
-async def _vector_total() -> int:
+async def _vector_snapshot_series(db: AsyncSession, days: int = 7) -> list[int]:
+    since = datetime.now() - timedelta(days=days)
+    rows = (
+        await db.execute(
+            select(VectorDBSnapshot.total_vectors)
+            .where(VectorDBSnapshot.created_at >= since)
+            .order_by(VectorDBSnapshot.created_at.asc())
+            .limit(168)
+        )
+    ).all()
+    if rows:
+        return [int(r[0] or 0) for r in rows]
+    return []
+
+
+async def _vector_total(db: AsyncSession) -> int:
+    latest = (
+        await db.execute(
+            select(VectorDBSnapshot.total_vectors)
+            .order_by(VectorDBSnapshot.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if latest is not None:
+        return int(latest or 0)
     try:
         return int(MilvusChunkStore().stats().get('total_vectors', 0))
     except Exception:
@@ -475,7 +499,8 @@ async def build_overview(db: AsyncSession) -> dict:
     health = await _composite_health(db, since)
     llm = await _llm_today_weighted(db)
     series = await _daily_series(db)
-    vector_total = await _vector_total()
+    vector_total = await _vector_total(db)
+    vector_series = await _vector_snapshot_series(db)
     queued = await _queued_tasks_count(db)
     error_clusters = await _error_clusters(db, since)
     top_users = await _top_users(db)
@@ -488,9 +513,13 @@ async def build_overview(db: AsyncSession) -> dict:
             'queued_tasks': queued,
             'sparklines': {
                 'llm': series['qa'][-7:],
-                'vector': series['parse'][-7:],
+                'vector': vector_series[-7:] if vector_series else series['parse'][-7:],
                 'tasks': series['queued_tasks'],
             },
+        },
+        'vector_snapshots': {
+            'total_vectors': vector_total,
+            'series': vector_series[-7:],
         },
         'trends': {
             'dates': series['dates'],

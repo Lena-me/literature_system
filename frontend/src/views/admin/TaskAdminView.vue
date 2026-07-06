@@ -1,8 +1,14 @@
 <!-- frontend/src/views/admin/TaskAdminView.vue -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi } from '@/api/admin'
+import {
+  formatDateTime,
+  formatTaskStatus,
+  formatTaskType,
+  tableRowIndex,
+} from '@/utils/adminDisplay'
 
 const rows = ref<any[]>([])
 const total = ref(0)
@@ -11,7 +17,22 @@ const pageSize = ref(20)
 const status = ref('')
 const loading = ref(true)
 const selectedIds = ref<number[]>([])
-const expandedId = ref<number | null>(null)
+
+const stats = ref({
+  total: 0,
+  running: 0,
+  failed: 0,
+  queued: 0,
+  completed: 0,
+  cancelled: 0,
+})
+
+const errorCard = ref<{ visible: boolean; text: string; x: number; y: number }>({
+  visible: false,
+  text: '',
+  x: 0,
+  y: 0,
+})
 
 const failedSelected = computed(() =>
   rows.value.filter(r => selectedIds.value.includes(r.id) && r.status === 'failed').map(r => r.id),
@@ -19,14 +40,6 @@ const failedSelected = computed(() =>
 const cancellableSelected = computed(() =>
   rows.value.filter(r => selectedIds.value.includes(r.id) && !['completed', 'failed', 'cancelled'].includes(r.status)).map(r => r.id),
 )
-
-const statusCounts = computed(() => {
-  const counts: Record<string, number> = {}
-  for (const row of rows.value) {
-    counts[row.status] = (counts[row.status] || 0) + 1
-  }
-  return counts
-})
 
 async function load() {
   loading.value = true
@@ -38,32 +51,49 @@ async function load() {
     })
     rows.value = res.items || []
     total.value = res.total || 0
+    if (res.stats) {
+      stats.value = { ...stats.value, ...res.stats }
+    }
     selectedIds.value = []
-    expandedId.value = null
+    errorCard.value.visible = false
   } finally {
     loading.value = false
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  document.addEventListener('click', onDocumentClick)
+})
+
+onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 
 function onSelectionChange(val: any[]) {
   selectedIds.value = val.map(v => v.id)
 }
 
-function toggleError(row: any) {
-  expandedId.value = expandedId.value === row.id ? null : row.id
+function openErrorLog(e: MouseEvent, row: any) {
+  if (!row.error_log) return
+  const cardW = 480
+  const cardH = 400
+  errorCard.value = {
+    visible: true,
+    text: row.error_log,
+    x: Math.max(12, Math.min(e.clientX, window.innerWidth - cardW - 12)),
+    y: Math.max(12, Math.min(e.clientY + 10, window.innerHeight - cardH - 12)),
+  }
+}
+
+function closeErrorLog() {
+  errorCard.value.visible = false
+}
+
+function onDocumentClick() {
+  if (errorCard.value.visible) closeErrorLog()
 }
 
 function statusLabel(s: string) {
-  const map: Record<string, string> = {
-    completed: 'Completed',
-    failed: 'Failed',
-    running: 'Running',
-    queued: 'Queued',
-    cancelled: 'Cancelled',
-  }
-  return map[s] || s
+  return formatTaskStatus(s)
 }
 
 function statusClass(s: string) {
@@ -123,39 +153,45 @@ function onPageChange(p: number) {
 <template>
   <div class="admin-page" v-loading="loading">
     <section class="admin-metrics-bar">
-      <div class="admin-metric">
+      <div class="admin-metric admin-metric--blue">
         <span class="admin-metric-label">任务总数</span>
-        <span class="admin-metric-value">{{ total }}</span>
+        <span class="admin-metric-value is-accent">{{ total }}</span>
         <span class="admin-metric-sub">当前筛选结果</span>
       </div>
       <div class="admin-metric-divider" />
-      <div class="admin-metric">
-        <span class="admin-metric-label">Running</span>
-        <span class="admin-metric-value">{{ statusCounts.running || 0 }}</span>
-        <span class="admin-metric-sub">本页执行中</span>
+      <div class="admin-metric admin-metric--cyan">
+        <span class="admin-metric-label">执行中</span>
+        <span class="admin-metric-value is-accent">{{ stats.running }}</span>
+        <span class="admin-metric-sub">全部执行中</span>
       </div>
       <div class="admin-metric-divider" />
-      <div class="admin-metric">
-        <span class="admin-metric-label">Failed</span>
-        <span class="admin-metric-value">{{ statusCounts.failed || 0 }}</span>
-        <span class="admin-metric-sub">本页失败</span>
+      <div class="admin-metric admin-metric--rose">
+        <span class="admin-metric-label">失败</span>
+        <span class="admin-metric-value is-accent">{{ stats.failed }}</span>
+        <span class="admin-metric-sub">全部失败</span>
       </div>
       <div class="admin-metric-divider" />
-      <div class="admin-metric">
+      <div class="admin-metric admin-metric--violet">
         <span class="admin-metric-label">已选</span>
-        <span class="admin-metric-value">{{ selectedIds.length }}</span>
+        <span class="admin-metric-value is-accent">{{ selectedIds.length }}</span>
         <span class="admin-metric-sub">批量操作</span>
       </div>
     </section>
 
     <div class="admin-toolbar">
       <div class="admin-toolbar-left">
-        <el-select v-model="status" clearable placeholder="状态筛选" style="width: 140px" @change="() => { page = 1; load() }">
-          <el-option label="Queued" value="queued" />
-          <el-option label="Running" value="running" />
-          <el-option label="Failed" value="failed" />
-          <el-option label="Completed" value="completed" />
-          <el-option label="Cancelled" value="cancelled" />
+        <el-select
+          v-model="status"
+          clearable
+          placeholder="状态筛选"
+          style="width: 140px"
+          @change="() => { page = 1; load() }"
+        >
+          <el-option label="排队中" value="queued" />
+          <el-option label="执行中" value="running" />
+          <el-option label="失败" value="failed" />
+          <el-option label="已完成" value="completed" />
+          <el-option label="已终止" value="cancelled" />
         </el-select>
       </div>
       <div class="admin-toolbar-right">
@@ -168,29 +204,37 @@ function onPageChange(p: number) {
     <div class="admin-el-table">
       <el-table :data="rows" size="default" row-key="id" @selection-change="onSelectionChange">
         <el-table-column type="selection" width="44" />
-        <el-table-column label="任务" min-width="160">
+        <el-table-column label="序号" width="64" align="center">
+          <template #default="{ $index }">{{ tableRowIndex(page, pageSize, $index) }}</template>
+        </el-table-column>
+        <el-table-column label="任务" min-width="220">
           <template #default="{ row }">
-            <div class="cell-main">文献 #{{ row.paper_id }}</div>
-            <div class="cell-sub">用户 #{{ row.user_id }} · {{ row.task_type }}</div>
+            <div class="cell-main">{{ row.paper_label || formatTaskType(row.task_type) }}</div>
+            <div class="cell-sub">{{ row.username || '未知用户' }} · {{ formatDateTime(row.created_at) }}</div>
           </template>
         </el-table-column>
-        <el-table-column prop="id" label="ID" width="72" />
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
             <span class="admin-status" :class="statusClass(row.status)">{{ statusLabel(row.status) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="priority" label="优先级" width="80" />
-        <el-table-column prop="retry_count" label="重试" width="64" />
+        <el-table-column prop="priority" label="优先级" width="80" align="center" />
+        <el-table-column prop="retry_count" label="重试" width="64" align="center" />
         <el-table-column label="时间" width="160">
           <template #default="{ row }">
-            <span class="cell-sub">{{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '—' }}</span>
+            <span class="cell-sub">{{ formatDateTime(row.created_at) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
-            <el-button v-if="row.status === 'failed'" link type="primary" size="small" @click="toggleError(row)">
-              {{ expandedId === row.id ? '收起日志' : '错误日志' }}
+            <el-button
+              v-if="row.status === 'failed' && row.error_log"
+              link
+              type="primary"
+              size="small"
+              @click.stop="openErrorLog($event, row)"
+            >
+              错误日志
             </el-button>
             <el-button
               v-if="!['completed', 'failed', 'cancelled'].includes(row.status)"
@@ -213,13 +257,27 @@ function onPageChange(p: number) {
           </template>
         </el-table-column>
       </el-table>
-
-      <div v-for="row in rows" :key="'err-' + row.id">
-        <div v-if="expandedId === row.id && row.error_log" class="error-expand">
-          <pre>{{ row.error_log }}</pre>
-        </div>
-      </div>
     </div>
+
+    <Teleport to="body">
+      <Transition name="admin-pop-fade">
+        <div
+          v-if="errorCard.visible"
+          class="admin-error-popover"
+          :style="{ left: `${errorCard.x}px`, top: `${errorCard.y}px` }"
+          @click.stop
+        >
+          <div class="admin-error-popover__accent" aria-hidden="true" />
+          <div class="admin-error-popover__inner">
+            <div class="admin-error-popover__head">
+              <span class="admin-error-popover__title">错误日志</span>
+              <button type="button" class="admin-error-popover__close" aria-label="关闭" @click="closeErrorLog">×</button>
+            </div>
+            <pre class="admin-error-popover__log">{{ errorCard.text }}</pre>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <div class="admin-pager">
       <el-pagination
@@ -245,22 +303,5 @@ function onPageChange(p: number) {
   font-size: 0.75rem;
   color: #64748b;
   margin-top: 0.125rem;
-}
-
-.error-expand {
-  margin: 0 2rem 1rem;
-  padding: 0.75rem 1rem;
-  background: #0f172a;
-  overflow: auto;
-  max-height: 200px;
-}
-
-.error-expand pre {
-  margin: 0;
-  font-size: 0.6875rem;
-  line-height: 1.5;
-  color: #fca5a5;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 </style>

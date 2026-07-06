@@ -36,7 +36,7 @@ const adminRoutes = [
       { path: 'users', component: () => import('@/views/admin/UserAdminView.vue') },
       { path: 'models', component: () => import('@/views/admin/ModelAdminView.vue') },
       { path: 'tasks', component: () => import('@/views/admin/TaskAdminView.vue') },
-      { path: 'ops', component: () => import('@/views/admin/OpsAdminView.vue') },
+      { path: 'ops', component: () => import('@/views/admin/AuditCenter.vue') },
     ],
   },
 ]

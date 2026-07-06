@@ -46,14 +46,14 @@ const html = computed(() => {
 </script>
 <template><article class="markdown-body" v-html="html" /></template>
 <style scoped>
-.markdown-body { color: var(--academic-text-body); line-height: 1.78; font-size: 14px; }
+.markdown-body { color: var(--academic-text-body); line-height: 1.78; font-size: 16px; }
 .markdown-body :deep(h1), .markdown-body :deep(h2), .markdown-body :deep(h3) { color: var(--academic-text-main); margin: 18px 0 8px; font-weight: 600; }
-.markdown-body :deep(code) { background: rgba(37, 99, 235, 0.08); color: var(--academic-primary); padding: 2px 6px; border-radius: 6px; font-size: 13px; }
+.markdown-body :deep(code) { background: rgba(37, 99, 235, 0.08); color: var(--academic-primary); padding: 2px 6px; border-radius: 6px; font-size: 14px; }
 .markdown-body :deep(pre) { background: var(--academic-canvas); border: 1px solid var(--academic-border); border-radius: 14px; padding: 14px; overflow: auto; }
 .markdown-body :deep(pre code) { background: transparent; color: var(--academic-text-body); }
 .markdown-body :deep(blockquote) { margin: 12px 0; padding: 8px 14px; border-left: 3px solid var(--academic-primary); background: var(--academic-primary-light); border-radius: 0 10px 10px 0; color: var(--academic-text-body); }
 .markdown-body :deep(table) { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 12px; }
-.markdown-body :deep(td), .markdown-body :deep(th) { border: 1px solid var(--academic-border); padding: 10px 12px; font-size: 13px; }
+.markdown-body :deep(td), .markdown-body :deep(th) { border: 1px solid var(--academic-border); padding: 10px 12px; font-size: 14px; }
 .markdown-body :deep(th) { background: var(--academic-canvas); color: var(--academic-text-main); font-weight: 600; }
 .markdown-body :deep(a) { color: var(--academic-primary); }
 .markdown-body :deep(a.scholarly-link),

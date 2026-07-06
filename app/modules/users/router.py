@@ -1,6 +1,7 @@
 from datetime import datetime, date, timedelta
 from fastapi import APIRouter, Depends
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user
 from app.db.mysql import get_db
@@ -10,6 +11,44 @@ from app.schemas import UserOut
 router = APIRouter(prefix='/users', tags=['用户'])
 
 
+async def _bump_learning_duration(db: AsyncSession, user_id: int) -> int:
+    """同一用户同一天仅保留一条记录；合并历史重复行并 +1 分钟。"""
+    today = date.today()
+    year, week, _ = today.isocalendar()
+    week_of_year = f'{year}-W{week:02d}'
+    month_of_year = today.strftime('%Y-%m')
+
+    rows = (
+        await db.execute(
+            select(LearningDuration)
+            .where(LearningDuration.user_id == user_id, LearningDuration.record_date == today)
+            .order_by(LearningDuration.id.asc())
+            .with_for_update()
+        )
+    ).scalars().all()
+
+    if rows:
+        record = rows[0]
+        if len(rows) > 1:
+            record.duration_minutes += sum(r.duration_minutes for r in rows[1:])
+            for duplicate in rows[1:]:
+                await db.delete(duplicate)
+        record.duration_minutes += 1
+        return record.duration_minutes
+
+    db.add(
+        LearningDuration(
+            user_id=user_id,
+            record_date=today,
+            duration_minutes=1,
+            week_of_year=week_of_year,
+            month_of_year=month_of_year,
+            year=year,
+        )
+    )
+    return 1
+
+
 @router.get('/me', response_model=UserOut)
 async def me(user: User = Depends(get_current_user)):
     return user
@@ -17,31 +56,14 @@ async def me(user: User = Depends(get_current_user)):
 
 @router.post('/heartbeat')
 async def heartbeat(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    today = date.today()
-    year, week, _ = today.isocalendar()
-    week_of_year = f'{year}-W{week:02d}'
-    month_of_year = today.strftime('%Y-%m')
-
-    existing = await db.execute(
-        select(LearningDuration)
-        .where(LearningDuration.user_id == user.id, LearningDuration.record_date == today)
-    )
-    existing = existing.scalar_one_or_none()
-
-    if existing:
-        existing.duration_minutes += 1
-    else:
-        db.add(LearningDuration(
-            user_id=user.id,
-            record_date=today,
-            duration_minutes=1,
-            week_of_year=week_of_year,
-            month_of_year=month_of_year,
-            year=year,
-        ))
-
-    await db.commit()
-    return {'message': 'heartbeat received', 'today_minutes': existing.duration_minutes + 1 if existing else 1}
+    try:
+        today_minutes = await _bump_learning_duration(db, user.id)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        today_minutes = await _bump_learning_duration(db, user.id)
+        await db.commit()
+    return {'message': 'heartbeat received', 'today_minutes': today_minutes}
 
 
 @router.get('/learning-duration')

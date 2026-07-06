@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel as PydanticBaseModel
 from sqlalchemy import delete, func, select
@@ -13,6 +13,7 @@ from app.db.mysql import AsyncSessionLocal, get_db
 from app.models import Paper, QAMessage, QAMessageSource, QASession, QASessionPaper, TextChunk, User
 from app.schemas import QAAskIn, SessionCreateIn, SessionUpdateIn
 from app.core.config import get_settings
+from app.services.audit_service import audit_action_standalone
 from app.services.quota_service import QuotaService
 from app.services.rag_service import get_rag_service
 from app.agents.orchestrator import get_qa_orchestrator
@@ -75,8 +76,25 @@ async def _iter_sse_with_keepalive(
 
 
 @router.post('/ask')
-async def ask(data: QAAskIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def ask(
+    data: QAAskIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     await QuotaService().check_daily_qa(user)
+    await audit_action_standalone(
+        user_id=user.id,
+        module='qa',
+        operation_type='ask',
+        content={
+            'session_id': data.session_id,
+            'paper_ids': data.paper_ids,
+            'question': (data.question or '')[:200],
+            'regenerate': bool(data.regenerate),
+        },
+        request=request,
+    )
     settings = get_settings()
     if settings.qa_use_langgraph:
         return await get_qa_orchestrator().ask(
@@ -90,8 +108,20 @@ async def ask(data: QAAskIn, db: AsyncSession = Depends(get_db), user: User = De
     return await get_rag_service().ask(db, user.id, data.question, data.paper_ids, data.session_id, data.top_k)
 
 @router.post('/ask-stream')
-async def ask_stream(data: QAAskIn, user: User = Depends(get_current_user_brief)):
+async def ask_stream(data: QAAskIn, request: Request, user: User = Depends(get_current_user_brief)):
     await QuotaService().check_daily_qa(user)
+    await audit_action_standalone(
+        user_id=user.id,
+        module='qa',
+        operation_type='ask_stream',
+        content={
+            'session_id': data.session_id,
+            'paper_ids': data.paper_ids,
+            'question': (data.question or '')[:200],
+            'regenerate': bool(data.regenerate),
+        },
+        request=request,
+    )
     async def gen():
         try:
             settings = get_settings()

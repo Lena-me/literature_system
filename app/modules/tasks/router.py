@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import json
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -10,16 +11,33 @@ from app.core.security import decode_access_token
 from app.db.mysql import AsyncSessionLocal, get_db
 from app.models import ParseTask, TaskSchedulerConfig, User
 from app.schemas import SchedulerConfigIn, TaskBatchRetryIn, TaskPriorityIn
+from app.schemas.admin import AdminFailureReasonOut, AdminTaskOut
 from app.utils.json_utils import dumps, loads
 from app.workers.celery_app import celery_app
 router = APIRouter(prefix='/tasks', tags=['解析任务管理'])
 
-@router.get('')
+@router.get('', response_model=list[AdminTaskOut])
 async def list_tasks(status: str | None = None, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
     stmt = select(ParseTask)
     if status: stmt = stmt.where(ParseTask.status == status)
     rows = (await db.execute(stmt.order_by(ParseTask.priority.asc(), ParseTask.created_at.desc()).limit(300))).scalars().all()
-    return [{'id': x.id, 'paper_id': x.paper_id, 'user_id': x.user_id, 'task_type': x.task_type, 'status': x.status, 'priority': x.priority, 'queue_position': x.queue_position, 'start_time': x.start_time, 'end_time': x.end_time, 'duration_ms': x.duration_ms, 'retry_count': x.retry_count, 'error_log': x.error_log, 'created_at': x.created_at} for x in rows]
+    return [
+        AdminTaskOut(
+            id=x.id,
+            username=None,
+            task_type=x.task_type,
+            status=x.status,
+            priority=x.priority,
+            queue_position=x.queue_position,
+            start_time=x.start_time,
+            end_time=x.end_time,
+            duration_ms=x.duration_ms,
+            retry_count=x.retry_count,
+            error_log=x.error_log,
+            created_at=x.created_at,
+        ).model_dump()
+        for x in rows
+    ]
 
 @router.post('/{task_id}/cancel')
 async def cancel_task(task_id: int, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
@@ -70,7 +88,11 @@ async def set_priority(task_id: int, data: TaskPriorityIn, db: AsyncSession = De
 async def failure_stats(db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
     rows = (await db.execute(select(ParseTask.error_log, func.count(ParseTask.id)).where(ParseTask.status == 'failed').group_by(ParseTask.error_log).limit(20))).all()
     total = (await db.execute(select(func.count(ParseTask.id)).where(ParseTask.status == 'failed'))).scalar() or 0
-    return {'failed_total': total, 'by_reason': [{'reason': (r[0] or 'unknown')[:200], 'count': r[1]} for r in rows]}
+    by_reason = [
+        AdminFailureReasonOut(reason=(r[0] or 'unknown'), count=r[1]).model_dump()
+        for r in rows
+    ]
+    return {'failed_total': total, 'by_reason': by_reason}
 
 
 @router.websocket('/{task_id}/ws')
@@ -127,7 +149,14 @@ async def task_events(task_id: int, admin: User = Depends(require_admin)):
                 task = await db.get(ParseTask, task_id)
                 if not task:
                     yield f"data: {json.dumps({'type':'error','message':'任务不存在'}, ensure_ascii=False)}\n\n"; return
-                payload = {'id': task.id, 'status': task.status, 'queue_position': task.queue_position, 'start_time': task.start_time.isoformat() if task.start_time else None, 'end_time': task.end_time.isoformat() if task.end_time else None, 'error_log': task.error_log}
+                payload = {
+                    'id': task.id,
+                    'status': task.status,
+                    'queue_position': task.queue_position,
+                    'start_time': task.start_time.isoformat() if task.start_time else None,
+                    'end_time': task.end_time.isoformat() if task.end_time else None,
+                    'error_log': task.error_log,
+                }
                 if payload != last:
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"; last = payload
                 if task.status in {'completed','failed','cancelled'}:

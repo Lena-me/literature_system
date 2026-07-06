@@ -128,9 +128,9 @@ function renderChart() {
       axisLabel: { color: '#94a3b8', fontSize: 11 },
     },
     series: [
-      { name: '上传', type: 'line', smooth: true, data: trends.value.upload || [], symbol: 'none', lineStyle: { width: 2, color: '#0f172a' } },
-      { name: '解析', type: 'line', smooth: true, data: trends.value.parse || [], symbol: 'none', lineStyle: { width: 2, color: '#64748b' } },
-      { name: '问答', type: 'line', smooth: true, data: trends.value.qa || [], symbol: 'none', lineStyle: { width: 2, color: '#94a3b8' } },
+      { name: '上传', type: 'line', smooth: true, data: trends.value.upload || [], symbol: 'none', lineStyle: { width: 2, color: '#2563EB' }, itemStyle: { color: '#2563EB' } },
+      { name: '解析', type: 'line', smooth: true, data: trends.value.parse || [], symbol: 'none', lineStyle: { width: 2, color: '#6366F1' }, itemStyle: { color: '#6366F1' } },
+      { name: '问答', type: 'line', smooth: true, data: trends.value.qa || [], symbol: 'none', lineStyle: { width: 2, color: '#0891B2' }, itemStyle: { color: '#0891B2' } },
     ],
   })
 }
@@ -178,7 +178,7 @@ onUnmounted(() => {
     <template v-else>
       <!-- 通栏指标 -->
       <section class="admin-metrics-bar">
-        <div class="admin-metric admin-metric--wide health-metric" :class="healthTone">
+        <div class="admin-metric admin-metric--wide admin-metric--emerald health-metric" :class="healthTone">
           <div class="admin-metric-head">
             <span class="admin-metric-label">综合健康度</span>
             <span class="status-tag">{{ healthStatusLabel }}</span>
@@ -212,14 +212,14 @@ onUnmounted(() => {
 
         <div class="admin-metric-divider" />
 
-        <div class="admin-metric">
+        <div class="admin-metric admin-metric--indigo">
           <div class="admin-metric-head">
             <span class="admin-metric-label">今日大模型调用</span>
             <svg width="64" height="20" viewBox="0 0 64 20" aria-hidden="true">
-              <path :d="sparklinePoints(cards.sparklines?.llm)" fill="none" stroke="#64748b" stroke-width="1.5" />
+              <path :d="sparklinePoints(cards.sparklines?.llm)" fill="none" stroke="#6366f1" stroke-width="1.5" />
             </svg>
           </div>
-          <div class="admin-metric-value">{{ cards.llm_today?.total ?? 0 }}</div>
+          <div class="admin-metric-value is-accent">{{ cards.llm_today?.total ?? 0 }}</div>
           <div class="admin-metric-sub">
             加权成功率 {{ formatRate(cards.llm_today?.success_rate) }} · Token {{ formatTokens(cards.llm_today?.total_tokens) }}
           </div>
@@ -227,28 +227,28 @@ onUnmounted(() => {
 
         <div class="admin-metric-divider" />
 
-        <div class="admin-metric">
+        <div class="admin-metric admin-metric--cyan">
           <div class="admin-metric-head">
             <span class="admin-metric-label">向量库规模</span>
             <svg width="64" height="20" viewBox="0 0 64 20" aria-hidden="true">
-              <path :d="sparklinePoints(cards.sparklines?.vector)" fill="none" stroke="#64748b" stroke-width="1.5" />
+              <path :d="sparklinePoints(cards.sparklines?.vector)" fill="none" stroke="#0891b2" stroke-width="1.5" />
             </svg>
           </div>
-          <div class="admin-metric-value">{{ cards.vector_total ?? 0 }}</div>
+          <div class="admin-metric-value is-accent">{{ cards.vector_total ?? 0 }}</div>
           <div class="admin-metric-sub">Milvus 向量总数</div>
         </div>
 
         <div class="admin-metric-divider" />
 
-        <div class="admin-metric">
+        <div class="admin-metric admin-metric--amber">
           <div class="admin-metric-head">
             <span class="admin-metric-label">排队解析任务</span>
             <svg width="64" height="20" viewBox="0 0 64 20" aria-hidden="true">
-              <path :d="sparklinePoints(cards.sparklines?.tasks)" fill="none" stroke="#64748b" stroke-width="1.5" />
+              <path :d="sparklinePoints(cards.sparklines?.tasks)" fill="none" stroke="#d97706" stroke-width="1.5" />
             </svg>
           </div>
-          <div class="admin-metric-value">{{ cards.queued_tasks ?? 0 }}</div>
-          <div class="admin-metric-sub">queued + running</div>
+          <div class="admin-metric-value is-accent">{{ cards.queued_tasks ?? 0 }}</div>
+          <div class="admin-metric-sub">排队中</div>
         </div>
       </section>
 
@@ -257,7 +257,7 @@ onUnmounted(() => {
         <section class="admin-section">
           <div class="admin-section-header">
             <h2 class="admin-section-title">核心业务趋势</h2>
-            <el-button text size="small" @click="load">刷新</el-button>
+            <el-button text type="primary" size="small" @click="load">刷新</el-button>
           </div>
           <div ref="chartEl" class="chart-box" />
         </section>
@@ -266,7 +266,7 @@ onUnmounted(() => {
         <div class="admin-split">
           <section class="admin-section">
             <div class="admin-section-header">
-              <h2 class="admin-section-title">智能聚类告警</h2>
+              <h2 class="admin-section-title is-amber">智能聚类告警</h2>
               <span class="admin-section-meta">
                 {{ errorClusters.length }} 类<span v-if="errorSourceLabel"> · {{ errorSourceLabel }}</span>
               </span>
@@ -282,7 +282,7 @@ onUnmounted(() => {
 
           <section class="admin-section">
             <div class="admin-section-header">
-              <h2 class="admin-section-title">
+              <h2 class="admin-section-title is-violet">
                 资源消耗 TOP 3
                 <span v-if="topUsersPeriodLabel" class="period-tag">{{ topUsersPeriodLabel }}</span>
               </h2>
@@ -292,8 +292,7 @@ onUnmounted(() => {
                 <div class="top-rank">{{ idx + 1 }}</div>
                 <div class="top-body">
                   <div class="top-name">
-                    {{ u.username }}
-                    <span class="uid">ID {{ u.id }}</span>
+                    {{ u.username || u.name || '未知用户' }}
                   </div>
                   <div class="top-stats">
                     <span class="token-num">{{ formatTokens(u.tokens) }}</span>
@@ -332,7 +331,9 @@ onUnmounted(() => {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: inherit;
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
 .health-inline {
@@ -448,8 +449,8 @@ onUnmounted(() => {
 .top-rank {
   width: 1.25rem;
   font-size: 0.875rem;
-  font-weight: 600;
-  color: #94a3b8;
+  font-weight: 700;
+  color: var(--admin-indigo, #6366f1);
   font-variant-numeric: tabular-nums;
   padding-top: 0.125rem;
 }
@@ -465,13 +466,6 @@ onUnmounted(() => {
   color: #0f172a;
 }
 
-.uid {
-  margin-left: 0.375rem;
-  font-size: 0.75rem;
-  font-weight: 400;
-  color: #94a3b8;
-}
-
 .top-stats {
   display: flex;
   align-items: baseline;
@@ -482,7 +476,7 @@ onUnmounted(() => {
 .token-num {
   font-size: 1.125rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--admin-accent, #2563eb);
   letter-spacing: -0.02em;
 }
 
@@ -500,7 +494,7 @@ onUnmounted(() => {
 
 .progress-fill {
   height: 100%;
-  background: #0f172a;
+  background: linear-gradient(90deg, var(--admin-accent, #2563eb), var(--admin-indigo, #6366f1));
   transition: width 0.35s ease;
 }
 

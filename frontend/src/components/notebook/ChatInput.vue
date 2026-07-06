@@ -548,7 +548,7 @@ function removeAttachment(paperId: number) {
   resize: none;
   line-height: 1.55;
   color: var(--academic-text-body);
-  font-size: 14px;
+  font-size: 16px;
   min-height: 24px;
   max-height: 160px;
   font-family: inherit;

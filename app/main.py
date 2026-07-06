@@ -1,13 +1,19 @@
 from contextlib import asynccontextmanager
 import asyncio
 import logging
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.core.exception_handlers import (
+    handle_http_exception,
+    handle_unhandled_exception,
+    handle_validation_error,
+)
 from app.core.security import hash_password
+from app.core.trace_middleware import TraceMiddleware
 from app.db.mysql import AsyncSessionLocal, create_all_tables
 from app.models import ModelConfig, TaskSchedulerConfig, User
 from app.utils.json_utils import dumps
@@ -15,6 +21,8 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 async def seed_initial_data() -> None:
+    from sqlalchemy import select
+
     async with AsyncSessionLocal() as db:
         admin = (await db.execute(select(User).where(User.username == settings.demo_admin_username))).scalar_one_or_none()
         if not admin:
@@ -40,11 +48,18 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title=settings.app_name, version='1.0.0-doc-strict', lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
+app.add_middleware(TraceMiddleware)
 
-@app.exception_handler(Exception)
-async def handle_exception(request: Request, exc: Exception):
-    return JSONResponse(status_code=500, content={'detail': str(exc), 'path': request.url.path})
+app.add_exception_handler(RequestValidationError, handle_validation_error)
+app.add_exception_handler(StarletteHTTPException, handle_http_exception)
+app.add_exception_handler(Exception, handle_unhandled_exception)
 
 @app.get('/health')
 async def root_health():

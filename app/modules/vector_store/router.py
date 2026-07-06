@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
@@ -15,6 +15,7 @@ from app.db.mysql import get_db
 from app.integrations.milvus.client import MilvusChunkStore
 from app.models import User, VectorBackup, VectorDBSnapshot, VectorRestoreTask
 from app.schemas import VectorRestoreIn
+from app.services.audit_service import audit_action
 settings = get_settings()
 router = APIRouter(prefix='/vector-store', tags=['向量库管理'])
 
@@ -40,7 +41,11 @@ async def _run_optional_command(command: str | None, env: dict[str, str]) -> tup
     return 'executed', (out or b'').decode('utf-8', 'ignore')
 
 @router.post('/backups')
-async def create_backup(db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+async def create_backup(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
     Path(settings.milvus_backup_dir).mkdir(parents=True, exist_ok=True)
     backup_name = f"paper_chunks_{datetime.now(BEIJING_TZ).strftime('%Y%m%d%H%M%S')}"
     location = str(Path(settings.milvus_backup_dir) / backup_name)
@@ -52,6 +57,15 @@ async def create_backup(db: AsyncSession = Depends(get_db), admin: User = Depend
         obj.status = 'completed'
         if Path(location).exists():
             obj.file_size_mb = sum(p.stat().st_size for p in Path(location).rglob('*') if p.is_file()) / 1024 / 1024
+        await audit_action(
+            db,
+            user_id=admin.id,
+            module='admin',
+            operation_type='vector_backup',
+            content={'backup_id': obj.id, 'file_location': location, 'status': obj.status},
+            request=request,
+            risk=1,
+        )
         await db.commit()
         return {'id': obj.id, 'status': obj.status, 'file_location': location, 'command_status': status, 'output': output[:1000]}
     except Exception as exc:
@@ -59,7 +73,12 @@ async def create_backup(db: AsyncSession = Depends(get_db), admin: User = Depend
         raise HTTPException(500, f'向量库备份失败：{exc}')
 
 @router.post('/restore')
-async def restore_backup(data: VectorRestoreIn, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+async def restore_backup(
+    data: VectorRestoreIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
     backup = await db.get(VectorBackup, data.backup_id)
     if not backup:
         raise HTTPException(404, '备份记录不存在')
@@ -68,6 +87,15 @@ async def restore_backup(data: VectorRestoreIn, db: AsyncSession = Depends(get_d
     try:
         status, output = await _run_optional_command(settings.milvus_restore_command, {'BACKUP_ID': str(backup.id), 'BACKUP_LOCATION': backup.file_location, 'MILVUS_COLLECTION': settings.milvus_collection})
         task.restore_progress = 100; task.status = 'completed'; task.finished_at = datetime.now(BEIJING_TZ)
+        await audit_action(
+            db,
+            user_id=admin.id,
+            module='admin',
+            operation_type='vector_restore',
+            content={'backup_id': backup.id, 'restore_task_id': task.id, 'status': task.status},
+            request=request,
+            risk=2,
+        )
         await db.commit()
         return {'restore_task_id': task.id, 'status': task.status, 'command_status': status, 'output': output[:1000]}
     except Exception as exc:

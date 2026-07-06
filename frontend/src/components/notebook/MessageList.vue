@@ -368,9 +368,9 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
 .message.user { align-items: flex-end; }
 .message.assistant { align-items: flex-start; }
 
-.bubble { max-width: 88%; padding: 14px 18px; border-radius: 16px; line-height: 1.65; }
+.bubble { max-width: 88%; padding: 14px 18px; border-radius: 16px; line-height: 1.65; font-size: 16px; }
 .user-bubble { background: var(--academic-primary); border-bottom-right-radius: 6px; box-shadow: 0 2px 12px rgba(37, 99, 235, 0.18); }
-.user-bubble p { margin: 0; color: #fff; white-space: pre-wrap; }
+.user-bubble p { margin: 0; color: #fff; white-space: pre-wrap; font-size: 16px; }
 .assistant-bubble {
   width: 100%;
   max-width: 100%;
