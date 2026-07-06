@@ -79,7 +79,9 @@ function isActive(path: string): boolean {
 }
 
 const navItems = [
+  { label: '工作台', path: '/dashboard', icon: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z' },
   { label: '文献库', path: '/library', icon: 'M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z' },
+  { label: '文献对比', path: '/compare', icon: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01' },
   { label: '研读报告', path: '/reports', icon: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8 M16 17H8' },
   { label: '知识图谱', path: '/graph', icon: 'M12 20a8 8 0 100-16 8 8 0 000 16z M3.5 12h17 M12 3.5a15 15 0 010 17' },
   { label: '学习档案', path: '/archive', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2 M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2 M9 14l2 2 4-4' },
@@ -173,19 +175,6 @@ const navItems = [
 
     <!-- ========== 底部工具栏 ========== -->
     <div class="bottom-toolbar">
-      <button
-        class="toolbar-item compare-item"
-        :class="{ active: isActive('/compare') }"
-        :title="!isExpanded ? '多文献对比' : ''"
-        @click="go('/compare')"
-      >
-        <svg class="toolbar-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
-        </svg>
-        <span class="toolbar-label">多文献对比</span>
-        <div v-if="!isExpanded" class="nav-tooltip">多文献对比</div>
-      </button>
-
       <button
         v-for="item in navItems"
         :key="item.label"
@@ -503,19 +492,6 @@ const navItems = [
   background: var(--academic-primary-light);
   color: var(--academic-primary);
   font-weight: 600;
-}
-
-.compare-item {
-  margin-bottom: 4px;
-  border: 1px solid rgba(124, 58, 237, 0.2);
-  background: linear-gradient(135deg, rgba(124, 58, 237, 0.06), rgba(99, 102, 241, 0.04));
-}
-
-.compare-item:hover,
-.compare-item.active {
-  border-color: rgba(124, 58, 237, 0.35);
-  color: #7c3aed;
-  background: rgba(124, 58, 237, 0.1);
 }
 
 .toolbar-icon { flex-shrink: 0; width: 18px; height: 18px; }

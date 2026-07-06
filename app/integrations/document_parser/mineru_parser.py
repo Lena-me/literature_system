@@ -274,14 +274,10 @@ class MinerUParser:
             str(output_dir),
         ]
 
-        if settings.mineru_backend:
-            cmd.extend(['-b', settings.mineru_backend])
         if settings.mineru_method:
             cmd.extend(['-m', settings.mineru_method])
         if settings.mineru_language:
             cmd.extend(['-l', settings.mineru_language])
-        if settings.mineru_api_url:
-            cmd.extend(['--api-url', settings.mineru_api_url])
 
         try:
             proc = subprocess.run( 

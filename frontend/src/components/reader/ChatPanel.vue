@@ -111,7 +111,7 @@ defineExpose({ ask })
     <div class="quick-actions">
       <el-button @click="emit('report')" :disabled="selectedIds.length!==1">研读报告</el-button>
       <el-button @click="emit('graph')" :disabled="!selectedIds.length">知识图谱</el-button>
-      <el-button @click="emit('compare')" :disabled="selectedIds.length<2">多文献对比</el-button>
+      <el-button @click="emit('compare')" :disabled="selectedIds.length<2">文献对比</el-button>
       <el-button @click="emit('guide')" :disabled="selectedIds.length!==1">实验复现</el-button>
     </div>
     <div ref="box" class="messages slim-scroll">

@@ -1308,7 +1308,6 @@ Input: {dumps(payload)}
         print(f'[create_graph] ===== graph_id={graph.id} 写入完毕 =====')
 
         await db.commit()
-        await db.refresh(graph)
         return graph
 
     async def suggest_domain(

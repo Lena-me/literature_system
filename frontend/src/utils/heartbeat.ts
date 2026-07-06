@@ -1,23 +1,62 @@
 import { authApi } from '@/api/auth'
 
-const HEARTBEAT_INTERVAL_MS = 60_000
+const HEARTBEAT_INTERVAL = 60 * 1000
+const IDLE_TIMEOUT = 60 * 1000
 
-let timer: ReturnType<typeof setInterval> | null = null
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let lastActivityTime = Date.now()
+let isPageVisible = true
 
-function tick() {
-  if (!localStorage.getItem('access_token')) return
-  authApi.heartbeat().catch(() => {})
+function resetActivityTimer() {
+  lastActivityTime = Date.now()
 }
 
-export function startHeartbeat(intervalMs = HEARTBEAT_INTERVAL_MS) {
-  stopHeartbeat()
-  tick()
-  timer = setInterval(tick, intervalMs)
+function isActive(): boolean {
+  return isPageVisible && (Date.now() - lastActivityTime) < IDLE_TIMEOUT
 }
 
-export function stopHeartbeat() {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
+async function sendHeartbeat() {
+  if (!isActive()) return
+  try {
+    await authApi.heartbeat()
+  } catch {
+    // 心跳失败不影响主流程
   }
 }
+
+function startHeartbeat() {
+  if (heartbeatTimer) return
+
+  resetActivityTimer()
+
+  document.addEventListener('visibilitychange', () => {
+    isPageVisible = document.visibilityState === 'visible'
+    if (isPageVisible) {
+      resetActivityTimer()
+      sendHeartbeat()
+    }
+  })
+
+  document.addEventListener('mousemove', resetActivityTimer)
+  document.addEventListener('keydown', resetActivityTimer)
+  document.addEventListener('scroll', resetActivityTimer)
+
+  sendHeartbeat()
+
+  heartbeatTimer = setInterval(() => {
+    sendHeartbeat()
+  }, HEARTBEAT_INTERVAL)
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
+  }
+  document.removeEventListener('visibilitychange', () => {})
+  document.removeEventListener('mousemove', resetActivityTimer)
+  document.removeEventListener('keydown', resetActivityTimer)
+  document.removeEventListener('scroll', resetActivityTimer)
+}
+
+export { startHeartbeat, stopHeartbeat, isActive }
