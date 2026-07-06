@@ -14,7 +14,14 @@ frontend/dist-admin/
 
 # Python cache
 __pycache__/
-*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+
+.DS_Store
+Thumbs.db
+
+# Python cache
 *.pyo
 *.pyd
 
@@ -31,3 +38,16 @@ hf_cache/
 .DS_Store
 Thumbs.db
 EOF
+/start_worker.bat
+/setup_env.bat
+/start_backend.bat
+/start_frontend.bat
+/start_frontend_admin.bat
+/stop
+/test_api_stream.py
+/test_deepseek.py
+/test_milvus.py
+/test_rag_flow.py
+/test_rag_simple.py
+/.env.gpu
+/.env.local
