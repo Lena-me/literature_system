@@ -65,7 +65,13 @@ def _load_model() -> SentenceTransformer | None:
     local_path = _resolve_local_path(model_name)
 
     try:
-        _model = SentenceTransformer(local_path, device=settings.embedding_device)
+        import torch
+        _model = SentenceTransformer(
+            local_path,
+            device=settings.embedding_device,
+        )
+        if settings.embedding_device.startswith('cuda'):
+            _model.half()
         logger.info(
             'BGE embedding model loaded: %s (dims=%d, device=%s)',
             local_path,
@@ -84,8 +90,21 @@ class BGEEmbedding:
         model = _load_model()
         if model is None:
             raise RuntimeError('BGE embedding model not available')
-        vectors = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
-        return [v.tolist() for v in vectors]
+        batch_size = 8
+        all_vectors = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            vectors = model.encode(
+                batch,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+                batch_size=batch_size,
+            )
+            all_vectors.extend([v.tolist() for v in vectors])
+            import torch
+            if settings.embedding_device.startswith('cuda'):
+                torch.cuda.empty_cache()
+        return all_vectors
 
     def encode_query(self, query: str) -> list[float]:
         model = _load_model()

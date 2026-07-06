@@ -19,7 +19,7 @@ const userRoutes = [
       { path: '/library', component: () => import('@/views/research/LibraryView.vue') },
       { path: '/compare', component: () => import('@/views/research/CompareView.vue') },
       { path: '/reports', component: () => import('@/views/research/ReportsView.vue') },
-      { path: '/archive', component: () => import('@/views/research/LearningArchiveView.vue') },
+      
       { path: '/graph', component: () => import('@/views/research/GraphView.vue') },
     ],
   },

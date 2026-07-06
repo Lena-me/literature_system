@@ -18,7 +18,8 @@ from app.integrations.embeddings.bge_embedding import BGEEmbedding
 from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
 from app.integrations.milvus.client import get_milvus_store
 from app.integrations.object_storage.minio_storage import MinioStorage
-from app.models import ContentItem, FiguresTable, Paper, PaperExtractedInfo, TextChunk
+from app.models import ContentItem, FiguresTable, Paper, PaperExtractedInfo, SubjectHierarchy, TextChunk
+from app.services.subject_hierarchy_service import SubjectHierarchyAnalyzer
 from app.utils.json_utils import dumps, loads
 from app.utils.chunk_quality import is_bad_section_title
 from app.utils.content_filter import is_administrative_text, is_likely_cover_image
@@ -36,6 +37,7 @@ class PaperPipelineService:
         self.embedding = BGEEmbedding()
         self.vdb = get_milvus_store()
         self.llm = OpenAICompatibleLLM(scenario='parse') if settings.enable_llm_extract else None
+        self.hierarchy_analyzer = SubjectHierarchyAnalyzer()
 
     def parse_extract_vectorize(self, paper_id: int) -> None:
         logger.info('[paper=%s] Pipeline started', paper_id)
@@ -456,6 +458,7 @@ class PaperPipelineService:
             'authors',
             'abstract',
             'keywords',
+            'subject_labels',
             'doi',
             'publication_year',
             'journal_conf',
@@ -596,7 +599,8 @@ class PaperPipelineService:
 4. keywords 优先从 Keywords、Index Terms、关键词、关键字 后面的显式内容提取；没有显式关键词时，再根据标题、摘要和引言归纳 3-8 个学术术语。
 5. doi 优先从原文中提取 10.xxxx/xxxxx 或 arXiv 编号；没有则为 null。
 6. publication_year 必须是整数年份；无法确定则为 null。
-7. 输出 JSON 必须包含以下全部字段，不得遗漏。
+7. subject_labels 是文献的学科/主题分类标签，从以下常用学科中选择最匹配的 2-5 个：计算机科学,人工智能,机器学习,深度学习,自然语言处理,计算机视觉,数据挖掘,知识图谱,推荐系统,信息检索,软件工程,数据库,分布式系统,网络安全,生物信息学,医学影像,信号处理,通信技术,控制工程,机器人,量子计算,物理学,化学,材料科学,能源科学,环境科学,数学,统计学,经济学,管理学,教育学,心理学,社会学,法学,文学,历史学,哲学,艺术学。如果文献主题不在上述列表中，可以补充自定义标签，但不要超过 5 个。
+8. 输出 JSON 必须包含以下全部字段，不得遗漏。
 
 JSON 示例：
 {{
@@ -604,6 +608,7 @@ JSON 示例：
     "authors": ["蒋温平"],
     "abstract": "本文针对超声图像中存在的散斑噪声问题，提出了一种基于边缘信息增强的去噪算法...",
     "keywords": ["超声图像", "去噪", "边缘信息增强", "深度学习", "Canny算子"],
+    "subject_labels": ["计算机科学", "人工智能", "医学影像"],
     "research_question": "如何在去除超声图像噪声的同时有效保留边缘细节信息",
     "method": "提出基于边缘信息增强的深度学习去噪框架，结合Canny边缘检测与注意力机制",
     "experiment_data": "在公开数据集和临床超声图像上进行实验验证",
@@ -722,6 +727,11 @@ JSON 示例：
             if info.keywords not in (None, '', '[]'):
                 paper.keywords = info.keywords
 
+            subject_labels = extracted.get('subject_labels')
+            if subject_labels and isinstance(subject_labels, list) and len(subject_labels) > 0:
+                paper.subject_labels = dumps(subject_labels)
+                self._save_subject_hierarchy(db, paper_id, paper.user_id, subject_labels, info.title or paper.title)
+
             doi = extracted.get('doi') or meta.get('doi')
             if doi and self._is_valid_doi(str(doi)):
                 paper.doi = str(doi)[:100]
@@ -738,6 +748,38 @@ JSON 示例：
                 paper.journal_conf = str(journal_conf)[:300]
 
             db.commit()
+
+    def _save_subject_hierarchy(self, db, paper_id: int, user_id: int, subject_labels: list, paper_title: str) -> None:
+        """保存学科层级分析结果"""
+        old_rows = db.execute(
+            select(SubjectHierarchy).where(SubjectHierarchy.paper_id == paper_id)
+        ).scalars().all()
+        for row in old_rows:
+            db.delete(row)
+        db.flush()
+
+        if not subject_labels:
+            return
+
+        try:
+            hierarchy_result = self.hierarchy_analyzer.analyze_hierarchy(subject_labels, paper_title)
+        except Exception as e:
+            logger.error(f'[paper={paper_id}] Subject hierarchy analysis failed: {e}')
+            return
+
+        for item in hierarchy_result:
+            hierarchy = SubjectHierarchy(
+                user_id=user_id,
+                paper_id=paper_id,
+                subject_label=item['subject_label'],
+                primary_domain=item['primary_domain'],
+                secondary_domain=item.get('secondary_domain'),
+                tertiary_domain=item.get('tertiary_domain'),
+                domain_path=item['domain_path'],
+                is_core=item.get('is_core', True),
+            )
+            db.add(hierarchy)
+        db.flush()
 
     def _build_context_prefix(self, paper_id: int) -> str:
         with celery_db() as db:

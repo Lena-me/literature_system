@@ -300,7 +300,6 @@ class LearningRecord(Base):
 
 class LearningDuration(Base):
     __tablename__ = 'learning_duration'
-    __table_args__ = (UniqueConstraint('user_id', 'record_date', name='uk_learning_duration_user_date'),)
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
     record_date: Mapped[date] = mapped_column(Date, index=True)
@@ -404,4 +403,19 @@ class ExplorationTask(Base):
     source: Mapped[str] = mapped_column(String(20), default='relation')  # relation / llm
     status: Mapped[str] = mapped_column(String(20), default='clicked')  # clicked / paper_uploaded / completed
     paper_id: Mapped[int | None] = mapped_column(ForeignKey('papers.id'), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class SubjectHierarchy(Base):
+    """学科层级关系表 - 由LLM分析生成"""
+    __tablename__ = 'subject_hierarchy'
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    paper_id: Mapped[int | None] = mapped_column(ForeignKey('papers.id'), index=True)
+    subject_label: Mapped[str] = mapped_column(String(200), index=True)
+    primary_domain: Mapped[str] = mapped_column(String(200), index=True)
+    secondary_domain: Mapped[str | None] = mapped_column(String(200), index=True)
+    tertiary_domain: Mapped[str | None] = mapped_column(String(200), index=True)
+    domain_path: Mapped[str] = mapped_column(String(500))
+    is_core: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

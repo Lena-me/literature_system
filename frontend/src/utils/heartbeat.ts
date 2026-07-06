@@ -19,8 +19,11 @@ async function sendHeartbeat() {
   if (!isActive()) return
   try {
     await authApi.heartbeat()
-  } catch {
-    // 心跳失败不影响主流程
+  } catch (error: any) {
+    const status = error?.response?.status
+    if (status === 401) {
+      stopHeartbeat()
+    }
   }
 }
 
