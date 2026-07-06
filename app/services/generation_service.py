@@ -890,6 +890,25 @@ class GenerationService:
                 return '-'
             return text[:limit]
 
+        def short_title(title: str) -> str:
+            clean = ' '.join(str(title or '').split())
+            rules = [
+                ('Generative QA', ('leveraging passage retrieval with generative models',)),
+                ('REALM', ('realm',)),
+                ('DPR', ('dense passage retrieval',)),
+                ('ColBERT', ('colbert',)),
+                ('RAG', ('retrieval-augmented generation', 'retrieval augmented generation')),
+                ('BM25', ('bm25',)),
+                ('LLM', ('large language model', 'large language models', 'llm', 'llms')),
+            ]
+            lower = clean.lower()
+            matches = [label for label, needles in rules if any(needle in lower for needle in needles)]
+            if matches:
+                if matches[0] in {'Generative QA', 'REALM', 'DPR', 'ColBERT'}:
+                    return matches[0]
+                return ' / '.join(dict.fromkeys(matches[:2]))
+            return clean if len(clean) <= 36 else f'{clean[:34]}...'
+
         papers_meta = []
         for idx, info in enumerate(usable_infos, start=1):
             paper = paper_map.get(info.paper_id)
@@ -899,9 +918,9 @@ class GenerationService:
                 or getattr(paper, 'original_filename', None)
                 or f'Paper {info.paper_id}'
             )
-            papers_meta.append({'key': f'paper_{idx}', 'paper_id': info.paper_id, 'title': title})
+            papers_meta.append({'key': f'paper_{idx}', 'paper_id': info.paper_id, 'title': title, 'short_title': short_title(title)})
 
-        comparison_table = []
+        raw_comparison_table = []
         for dim in selected_dimensions:
             meta = dimension_meta.get(dim, {'label': dim, 'fields': [dim]})
             row = {'dimension': meta['label'], 'dimension_key': dim}
@@ -918,43 +937,78 @@ class GenerationService:
                     if dim in {'research_question', 'method', 'main_results', 'innovations'} and abstract != '-':
                         values.append(f'未单独抽取该字段，可参考摘要：{abstract}')
 
-                row[f'paper_{idx}'] = '\n'.join(values) if values else '-'
+                row[f'paper_{idx}'] = '\n'.join(values) if values else '当前解析未提取到明确证据'
 
-            comparison_table.append(row)
+            raw_comparison_table.append(row)
 
-        summary_prompt = f"""You are comparing multiple research papers.
+        raw_key_schema = {
+            'dimension': '对比维度名称',
+            'dimension_key': '维度标识，必须原样保留',
+            **{item['key']: item['title'] for item in papers_meta},
+        }
+        summary_prompt = f"""你是一个中文学术文献分析助手。请基于给定的多文献结构化对比表，生成面向中文用户阅读的压缩版对比表和综合分析。
 
-Based only on the structured comparison table below, generate JSON only, without Markdown fences.
+要求：
+1. 输出中文；
+2. 不要逐句翻译英文原文；
+3. 不要原封不动复制论文句子；
+4. 每个表格单元格使用 1-3 个短句或 2-3 个简短要点；
+5. 每个单元格尽量不超过 120 个中文字符；
+6. 保留必要英文术语和缩写，例如 RAG、DPR、BM25、ColBERT、LLM 等；
+7. 如果结构化字段缺失或原始表格中是“-”“当前解析未提取到明确证据”，不要断言论文未说明；请写“当前解析未提取到明确证据”或“当前解析未提取到该维度的明确证据”；
+8. summary 保持简短，优先用 2-4 个分点式短句，不要写泛泛的长段落；
+9. key_differences、common_trends、research_gaps、future_directions 必须保持数组形式，每条尽量具体指出不同论文之间的差异、共性或不足；
+10. summary、key_differences、common_trends、research_gaps、future_directions 中不要使用 paper_1、paper_2、paper_3 这类占位名；必须使用参与论文中的 short_title，例如 RAG、REALM、DPR、ColBERT；如果没有明确简称，就使用给定 short_title；
+11. 总结区要突出横向对比，说明不同论文在问题、方法、数据、指标或结果上的区别，不要只写泛泛结论；
+12. 避免“显著提升”“最先进”“大幅领先”等过强表述，除非原始解析中有明确证据；
+13. 严格返回合法 JSON，不要 Markdown 代码块。
 
-Required JSON fields:
+输出 JSON 格式必须包含：
 {{
-  "difference_analysis": "Compare the key differences among the papers.",
-  "trend_summary": "Summarize the research trend reflected by these papers.",
-  "future_direction": "Suggest future research directions."
+  "comparison_table_zh": [
+    {{
+      "dimension": "研究问题",
+      "dimension_key": "research_question",
+      "paper_1": "中文压缩说明",
+      "paper_2": "中文压缩说明"
+    }}
+  ],
+  "summary": "中文总体总结，短句或分点式表达",
+  "key_differences": ["具体差异要点，例如 RAG 侧重什么，DPR 侧重什么"],
+  "common_trends": ["具体共性趋势"],
+  "research_gaps": ["当前解析结果能支持的研究空白；证据不足时说明当前解析未提取到明确证据"],
+  "future_directions": ["具体未来方向"]
 }}
 
-Papers:
+表格字段说明，请在 comparison_table_zh 中沿用这些字段名，不要改成论文标题作为 key：
+{dumps(raw_key_schema)}
+
+参与论文：
 {dumps(papers_meta)}
 
-Comparison table:
-{dumps(comparison_table)}
+原始结构化对比表：
+{dumps(raw_comparison_table)}
 """
-        text = await self.llm.async_chat(
-            [
-                {'role': 'system', 'content': 'You compare research papers and return valid JSON only.'},
-                {'role': 'user', 'content': summary_prompt},
-            ],
-            temperature=0.1,
-            max_tokens=2500,
-        )
-        clean = text.strip()
-        if clean.startswith('```'):
-            clean = clean.strip('`').strip()
-            if clean.lower().startswith('json'):
-                clean = clean[4:].strip()
+        summary: dict[str, object] = {}
+        try:
+            text = await self.llm.async_chat(
+                [
+                    {'role': 'system', 'content': '你是中文学术文献分析助手，只返回合法 JSON。'},
+                    {'role': 'user', 'content': summary_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=3500,
+            )
+            clean = text.strip()
+            if clean.startswith('```'):
+                clean = clean.strip('`').strip()
+                if clean.lower().startswith('json'):
+                    clean = clean[4:].strip()
 
-        summary = loads(clean, default={})
-        if not isinstance(summary, dict):
+            parsed = loads(clean, default={})
+            if isinstance(parsed, dict):
+                summary = parsed
+        except Exception:
             summary = {}
 
         final_name = (name or '').strip()
@@ -966,12 +1020,41 @@ Comparison table:
                 selected_dimensions,
             )
 
+        comparison_table_zh = summary.get('comparison_table_zh')
+        if not isinstance(comparison_table_zh, list) or not comparison_table_zh:
+            comparison_table_zh = raw_comparison_table
+
+        key_differences = summary.get('key_differences')
+        common_trends = summary.get('common_trends')
+        research_gaps = summary.get('research_gaps')
+        future_directions = summary.get('future_directions')
+        key_differences_list = [str(x) for x in key_differences] if isinstance(key_differences, list) else []
+        common_trends_list = [str(x) for x in common_trends] if isinstance(common_trends, list) else []
+        research_gaps_list = [str(x) for x in research_gaps] if isinstance(research_gaps, list) else []
+        future_directions_list = [str(x) for x in future_directions] if isinstance(future_directions, list) else []
+
+        def summary_text(key: str) -> str:
+            value = summary.get(key, '')
+            if value is None:
+                return ''
+            if isinstance(value, (list, dict)):
+                return dumps(value)
+            return str(value)
+
         result = {
             'papers': papers_meta,
-            'comparison_table': comparison_table,
-            'difference_analysis': summary.get('difference_analysis', ''),
-            'trend_summary': summary.get('trend_summary', ''),
-            'future_direction': summary.get('future_direction', ''),
+            'comparison_table': comparison_table_zh,
+            'comparison_table_zh': comparison_table_zh,
+            'raw_comparison_table': raw_comparison_table,
+            'summary': summary_text('summary'),
+            'key_differences': key_differences_list,
+            'common_trends': common_trends_list,
+            'research_gaps': research_gaps_list,
+            'future_directions': future_directions_list,
+            # Backward-compatible fields used by older front-end code.
+            'difference_analysis': '\n'.join(key_differences_list) if key_differences_list else summary_text('difference_analysis'),
+            'trend_summary': '\n'.join(common_trends_list) if common_trends_list else summary_text('trend_summary'),
+            'future_direction': '\n'.join(future_directions_list) if future_directions_list else summary_text('future_direction'),
         }
         obj = ComparisonResult(
             user_id=user_id,

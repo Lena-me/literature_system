@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
@@ -10,6 +13,14 @@ from app.models import Paper, User, UserPaperNote
 from app.schemas import PaperNoteCreateIn, PaperNoteUpdateIn
 
 router = APIRouter(prefix='/paper-notes', tags=['文献笔记'])
+logger = logging.getLogger(__name__)
+
+
+def _is_missing_notes_table(exc: Exception) -> bool:
+    raw = str(exc).lower()
+    if 'user_paper_notes' not in raw:
+        return False
+    return 'doesn\'t exist' in raw or 'does not exist' in raw or '1146' in raw or 'undefined table' in raw
 
 
 def _serialize_note(note: UserPaperNote) -> dict:
@@ -47,13 +58,20 @@ async def list_notes(
     user: User = Depends(get_current_user),
 ):
     await _get_owned_paper(db, user, paper_id)
-    rows = (
-        await db.execute(
-            select(UserPaperNote)
-            .where(UserPaperNote.user_id == user.id, UserPaperNote.paper_id == paper_id)
-            .order_by(UserPaperNote.page_number.asc(), UserPaperNote.created_at.asc())
-        )
-    ).scalars().all()
+    try:
+        rows = (
+            await db.execute(
+                select(UserPaperNote)
+                .where(UserPaperNote.user_id == user.id, UserPaperNote.paper_id == paper_id)
+                .order_by(UserPaperNote.page_number.asc(), UserPaperNote.created_at.asc())
+            )
+        ).scalars().all()
+    except (OperationalError, ProgrammingError) as exc:
+        if _is_missing_notes_table(exc):
+            logger.warning('user_paper_notes table is missing; returning empty notes for paper_id=%s', paper_id)
+            await db.rollback()
+            return []
+        raise
     return [_serialize_note(row) for row in rows]
 
 

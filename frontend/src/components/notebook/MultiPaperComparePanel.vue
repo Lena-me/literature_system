@@ -40,9 +40,12 @@ const evidenceLoading = ref(false)
 const historyLoading = ref(false)
 const nameLoading = ref(false)
 const nameTouched = ref(false)
+const tableViewMode = ref<'zh' | 'raw'>('zh')
 const compareResult = ref<any>(null)
 const evidenceResult = ref<any>(null)
 const history = ref<any[]>([])
+const expandedCompareCells = ref<Set<string>>(new Set())
+const expandedEvidenceItems = ref<Set<string>>(new Set())
 
 const completedPapers = computed(() =>
   paperStore.list.filter(p => completedStatuses.has(String(p.parse_status || '').toLowerCase()))
@@ -57,14 +60,53 @@ const selectedPapers = computed(() =>
 const resultData = computed(() => compareResult.value?.result || compareResult.value || {})
 
 const compareSummary = computed(() => {
+  const joinList = (value: unknown) => Array.isArray(value) ? value.filter(Boolean).join('\n') : ''
   return {
-    difference: resultData.value.difference_analysis || resultData.value.differences || '',
-    trend: resultData.value.trend_summary || '',
-    future: resultData.value.future_direction || '',
+    overview: resultData.value.summary || '',
+    difference: joinList(resultData.value.key_differences) || resultData.value.difference_analysis || resultData.value.differences || '',
+    trend: joinList(resultData.value.common_trends) || resultData.value.trend_summary || '',
+    gaps: joinList(resultData.value.research_gaps) || '',
+    future: joinList(resultData.value.future_directions) || resultData.value.future_direction || '',
   }
 })
 
+const summaryCards = computed(() => {
+  const toItems = (value: unknown) => {
+    if (Array.isArray(value)) {
+      return value.map(item => String(item).trim()).filter(Boolean)
+    }
+    if (typeof value === 'string') {
+      return value.split(/\n+/).map(item => item.trim()).filter(Boolean)
+    }
+    return []
+  }
+  const pickItems = (primary: unknown, fallback: unknown) => {
+    const items = toItems(primary)
+    return items.length ? items : toItems(fallback)
+  }
+  return [
+    { key: 'overview', title: '总体总结', items: toItems(resultData.value.summary) },
+    { key: 'differences', title: '差异分析', items: pickItems(resultData.value.key_differences, compareSummary.value.difference) },
+    { key: 'trends', title: '研究趋势', items: pickItems(resultData.value.common_trends, compareSummary.value.trend) },
+    { key: 'gaps', title: '研究空白', items: pickItems(resultData.value.research_gaps, compareSummary.value.gaps) },
+    { key: 'future', title: '未来方向', items: pickItems(resultData.value.future_directions, compareSummary.value.future) },
+  ].filter(card => card.items.length)
+})
+
 const comparisonTable = computed(() => {
+  if (tableViewMode.value === 'raw') {
+    if (Array.isArray(resultData.value.raw_comparison_table)) {
+      return resultData.value.raw_comparison_table
+    }
+    if (Array.isArray(resultData.value.comparison_table)) {
+      return resultData.value.comparison_table
+    }
+    return []
+  }
+
+  if (Array.isArray(resultData.value.comparison_table_zh)) {
+    return resultData.value.comparison_table_zh
+  }
   return Array.isArray(resultData.value.comparison_table) ? resultData.value.comparison_table : []
 })
 
@@ -98,9 +140,38 @@ function tableHeader(key: string) {
   if (key === 'dimension') return '对比维度'
 
   const paper = resultPapers.value.find((p: any) => p.key === key)
-  if (paper?.title) return paper.title
+  if (paper?.title) return shortPaperHeader(paper.title)
 
   return key
+}
+
+function fullTableHeader(key: string) {
+  if (key === 'dimension') return '对比维度'
+  const paper = resultPapers.value.find((p: any) => p.key === key)
+  return paper?.title || key
+}
+
+function shortPaperHeader(title: string) {
+  const clean = String(title || '').replace(/\s+/g, ' ').trim()
+  const acronymRules = [
+    { label: 'Generative QA', pattern: /leveraging passage retrieval with generative models/i },
+    { label: 'REALM', pattern: /\bREALM\b/i },
+    { label: 'DPR', pattern: /\bDPR\b|dense passage retrieval/i },
+    { label: 'ColBERT', pattern: /\bColBERT\b/i },
+    { label: 'RAG', pattern: /\bRAG\b|retrieval[-\s]?augmented generation/i },
+    { label: 'BM25', pattern: /\bBM25\b/i },
+    { label: 'LLM', pattern: /\bLLMs?\b|large language models?/i },
+  ]
+  const matches = acronymRules.filter(rule => rule.pattern.test(clean)).map(rule => rule.label)
+  if (matches.length) {
+    if (['Generative QA', 'REALM', 'DPR', 'ColBERT'].includes(matches[0])) {
+      return matches[0]
+    }
+    const unique = Array.from(new Set(matches))
+    return unique.slice(0, 2).join(' / ')
+  }
+  if (clean.length <= 36) return clean
+  return `${clean.slice(0, 34)}...`
 }
 
 function toggleAllDimensions(e: Event) {
@@ -124,8 +195,15 @@ function defaultEvidenceQuestion() {
   return ''
 }
 
+function normalizedSelectedPaperIds() {
+  return selectedIds.value
+    .map(id => Number(id))
+    .filter(id => Number.isInteger(id) && id > 0)
+}
+
 async function generateCompareName(force = false) {
-  if (selectedIds.value.length < 2) {
+  const ids = normalizedSelectedPaperIds()
+  if (ids.length < 2) {
     compareName.value = fallbackCompareName()
     return
   }
@@ -134,7 +212,7 @@ async function generateCompareName(force = false) {
   nameLoading.value = true
   try {
     const res = await featuresApi.suggestCompareName({
-      paper_ids: selectedIds.value,
+      paper_ids: ids,
       dimensions: selectedDimensions.value,
     })
     compareName.value = res?.name || fallbackCompareName()
@@ -159,6 +237,7 @@ async function loadHistory() {
 
 function resetPanel() {
   activeTab.value = 'setup'
+  tableViewMode.value = 'zh'
   compareResult.value = null
   evidenceResult.value = null
   selectedDimensions.value = [...defaultDimensionValues]
@@ -178,6 +257,12 @@ watch(selectedIds, () => {
 
 watch(selectedDimensions, () => {
   void generateCompareName()
+})
+
+watch(compareResult, () => {
+  tableViewMode.value = 'zh'
+  expandedCompareCells.value = new Set()
+  expandedEvidenceItems.value = new Set()
 })
 
 async function runCompare() {
@@ -322,6 +407,54 @@ function openEvidenceSource(evidence: any) {
     snippet: evidence.snippet,
   }
   emit('sourceClick', source)
+}
+
+function compareCellKey(rowIndex: number, key: string) {
+  return `${tableViewMode.value}-${rowIndex}-${key}`
+}
+
+function isCompareCellExpanded(rowIndex: number, key: string) {
+  return expandedCompareCells.value.has(compareCellKey(rowIndex, key))
+}
+
+function shouldShowCompareToggle(value: unknown) {
+  return tableViewMode.value === 'raw' && String(value || '').length > 160
+}
+
+function toggleCompareCell(rowIndex: number, key: string) {
+  const id = compareCellKey(rowIndex, key)
+  const next = new Set(expandedCompareCells.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expandedCompareCells.value = next
+}
+
+function evidenceItemKey(evidence: any, prefix = 'evidence') {
+  return `${prefix}-${evidence?.paper_id || ''}-${evidence?.page_number || ''}-${String(evidence?.snippet || '').slice(0, 48)}`
+}
+
+function isEvidenceExpanded(evidence: any, prefix = 'evidence') {
+  return expandedEvidenceItems.value.has(evidenceItemKey(evidence, prefix))
+}
+
+function shouldShowEvidenceToggle(evidence: any) {
+  return String(evidence?.snippet || '').length > 180
+}
+
+function toggleEvidenceItem(evidence: any, prefix = 'evidence') {
+  const id = evidenceItemKey(evidence, prefix)
+  const next = new Set(expandedEvidenceItems.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expandedEvidenceItems.value = next
+}
+
+function evidenceTitle(row: any, evidence: any) {
+  return shortPaperHeader(row?.title || evidence?.title || evidence?.source?.title || `Paper ${evidence?.paper_id || ''}`)
+}
+
+function evidenceSupport(evidence: any) {
+  return String(evidence?.support || evidence?.strength || 'related').toLowerCase()
 }
 </script>
 
@@ -468,20 +601,57 @@ function openEvidenceSource(evidence: any) {
 
       <section v-else-if="activeTab === 'result'" class="panel-body slim-scroll">
         <div class="result-meta">
-          <h3>{{ compareResult?.name || '多文献对比结果' }}</h3>
-          <p>{{ selectedPapers.map(paperTitle).join(' · ') }}</p>
+          <div class="result-title-row">
+            <div>
+              <h3>{{ compareResult?.name || '多文献对比结果' }}</h3>
+              <p>{{ selectedPapers.map(paperTitle).join(' · ') }}</p>
+            </div>
+            <div class="table-view-switch" aria-label="对比表展示模式">
+              <button
+                type="button"
+                :class="{ active: tableViewMode === 'zh' }"
+                @click="tableViewMode = 'zh'"
+              >
+                中文总结
+              </button>
+              <button
+                type="button"
+                :class="{ active: tableViewMode === 'raw' }"
+                @click="tableViewMode = 'raw'"
+              >
+                原始解析
+              </button>
+            </div>
+          </div>
         </div>
 
-        <div v-if="comparisonTable.length" class="compare-table-wrap">
+        <div v-if="comparisonTable.length" class="compare-table-wrap" :class="{ 'raw-mode': tableViewMode === 'raw' }">
           <table class="compare-table">
             <thead>
               <tr>
-                <th v-for="key in comparisonTableKeys" :key="key">{{ tableHeader(key) }}</th>
+                <th v-for="key in comparisonTableKeys" :key="key" :title="fullTableHeader(key)">
+                  <span class="compare-header-text">{{ tableHeader(key) }}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(row, idx) in comparisonTable" :key="idx">
-                <td v-for="key in comparisonTableKeys" :key="key">{{ row[key] || '-' }}</td>
+                <td v-for="key in comparisonTableKeys" :key="key">
+                  <div
+                    class="compare-cell-content"
+                    :class="{ expanded: isCompareCellExpanded(idx, key) }"
+                  >
+                    {{ row[key] || '-' }}
+                  </div>
+                  <button
+                    v-if="shouldShowCompareToggle(row[key])"
+                    type="button"
+                    class="inline-toggle"
+                    @click.stop="toggleCompareCell(idx, key)"
+                  >
+                    {{ isCompareCellExpanded(idx, key) ? '收起' : '展开' }}
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -492,17 +662,15 @@ function openEvidenceSource(evidence: any) {
         </div>
 
         <div class="analysis-grid">
-          <div>
-            <h4>差异分析</h4>
-            <p>{{ compareSummary.difference || '暂无差异分析' }}</p>
+          <div v-for="card in summaryCards" :key="card.key" class="analysis-card">
+            <h4>{{ card.title }}</h4>
+            <ul>
+              <li v-for="(item, idx) in card.items" :key="idx">{{ item }}</li>
+            </ul>
           </div>
-          <div>
-            <h4>研究趋势</h4>
-            <p>{{ compareSummary.trend || '暂无趋势总结' }}</p>
-          </div>
-          <div>
-            <h4>未来方向</h4>
-            <p>{{ compareSummary.future || '暂无未来方向' }}</p>
+          <div v-if="!summaryCards.length" class="analysis-card">
+            <h4>综合分析</h4>
+            <p>暂无总结内容</p>
           </div>
         </div>
       </section>
@@ -527,19 +695,35 @@ function openEvidenceSource(evidence: any) {
               class="evidence-group"
             >
               <h4>{{ row.title }}</h4>
-              <button
+              <div
                 v-for="evidence in row.evidences || []"
                 :key="`${dimension.dimension_key}-${evidence.paper_id}-${evidence.page_number}-${evidence.snippet}`"
                 class="evidence-item"
+                role="button"
+                tabindex="0"
                 @click="openEvidenceSource(evidence)"
+                @keydown.enter="openEvidenceSource(evidence)"
               >
-                <span>{{ evidence.snippet }}</span>
-                <em>
-                  <template v-if="evidence.page_number">Page {{ evidence.page_number }} · </template>
-                  {{ evidence.section_title || '正文片段' }}
-                  · {{ evidence.support || 'related' }}
-                </em>
-              </button>
+                <div class="evidence-item-head">
+                  <strong :title="row.title">{{ evidenceTitle(row, evidence) }}</strong>
+                  <span class="evidence-tags">
+                    <em v-if="evidence.page_number">Page {{ evidence.page_number }}</em>
+                    <em>{{ evidence.section_title || '正文片段' }}</em>
+                    <em :class="['support-tag', evidenceSupport(evidence)]">{{ evidence.support || 'related' }}</em>
+                  </span>
+                </div>
+                <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, dimension.dimension_key) }">
+                  {{ evidence.snippet }}
+                </span>
+                <button
+                  v-if="shouldShowEvidenceToggle(evidence)"
+                  type="button"
+                  class="inline-toggle"
+                  @click.stop="toggleEvidenceItem(evidence, dimension.dimension_key)"
+                >
+                  {{ isEvidenceExpanded(evidence, dimension.dimension_key) ? '收起原文' : '展开原文' }}
+                </button>
+              </div>
               <div v-if="!(row.evidences || []).length" class="empty-note">
                 该文献在此维度下暂未检索到高质量证据。
               </div>
@@ -549,19 +733,35 @@ function openEvidenceSource(evidence: any) {
         <template v-else>
           <div v-for="row in evidenceResult?.rows || []" :key="row.paper_id" class="evidence-group">
             <h4>{{ row.title }}</h4>
-            <button
+            <div
               v-for="evidence in row.evidences || []"
               :key="`${evidence.paper_id}-${evidence.page_number}-${evidence.snippet}`"
               class="evidence-item"
+              role="button"
+              tabindex="0"
               @click="openEvidenceSource(evidence)"
+              @keydown.enter="openEvidenceSource(evidence)"
             >
-              <span>{{ evidence.snippet }}</span>
-              <em>
-                <template v-if="evidence.page_number">Page {{ evidence.page_number }} · </template>
-                {{ evidence.section_title || '正文片段' }}
-                · {{ evidence.support || 'related' }}
-              </em>
-            </button>
+              <div class="evidence-item-head">
+                <strong :title="row.title">{{ evidenceTitle(row, evidence) }}</strong>
+                <span class="evidence-tags">
+                  <em v-if="evidence.page_number">Page {{ evidence.page_number }}</em>
+                  <em>{{ evidence.section_title || '正文片段' }}</em>
+                  <em :class="['support-tag', evidenceSupport(evidence)]">{{ evidence.support || 'related' }}</em>
+                </span>
+              </div>
+              <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, 'flat') }">
+                {{ evidence.snippet }}
+              </span>
+              <button
+                v-if="shouldShowEvidenceToggle(evidence)"
+                type="button"
+                class="inline-toggle"
+                @click.stop="toggleEvidenceItem(evidence, 'flat')"
+              >
+                {{ isEvidenceExpanded(evidence, 'flat') ? '收起原文' : '展开原文' }}
+              </button>
+            </div>
           </div>
         </template>
       </section>
@@ -695,6 +895,43 @@ function openEvidenceSource(evidence: any) {
   color: var(--academic-text-muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.result-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.table-view-switch {
+  display: inline-flex;
+  flex-shrink: 0;
+  overflow: hidden;
+  border: 1px solid var(--academic-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.table-view-switch button {
+  border: 0;
+  border-right: 1px solid var(--academic-border);
+  background: transparent;
+  color: var(--academic-text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+
+.table-view-switch button:last-child {
+  border-right: 0;
+}
+
+.table-view-switch button.active {
+  background: var(--academic-primary);
+  color: #fff;
 }
 
 .icon-button {
@@ -970,11 +1207,12 @@ function openEvidenceSource(evidence: any) {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  table-layout: fixed;
 }
 
 .compare-table th,
 .compare-table td {
-  min-width: 150px;
+  min-width: 190px;
   padding: 10px;
   border-bottom: 1px solid var(--academic-border);
   text-align: left;
@@ -988,13 +1226,114 @@ function openEvidenceSource(evidence: any) {
   font-weight: 700;
 }
 
+.compare-table th:first-child,
+.compare-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  width: 132px;
+  min-width: 132px;
+  background: #fff;
+  box-shadow: 1px 0 0 var(--academic-border);
+}
+
+.compare-table th:first-child {
+  z-index: 3;
+  background: var(--academic-canvas);
+}
+
+.compare-header-text {
+  display: -webkit-box;
+  max-height: 42px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.compare-cell-content {
+  max-height: none;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.raw-mode .compare-cell-content {
+  max-height: 152px;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+}
+
+.raw-mode .compare-cell-content.expanded {
+  max-height: none;
+  overflow: visible;
+}
+
+.raw-mode .compare-cell-content::-webkit-scrollbar,
+.evidence-snippet::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.raw-mode .compare-cell-content::-webkit-scrollbar-thumb,
+.evidence-snippet::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+  border-radius: 999px;
+}
+
+.raw-mode .compare-cell-content::-webkit-scrollbar-track,
+.evidence-snippet::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.inline-toggle {
+  margin-top: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--academic-primary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0;
+}
+
 .analysis-grid {
   display: grid;
-  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
   margin-top: 16px;
 }
 
-.analysis-grid > div,
+.analysis-card {
+  border: 1px solid var(--academic-border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px 16px;
+}
+
+.analysis-card h4 {
+  color: var(--academic-text-main);
+  font-size: 14px;
+}
+
+.analysis-card ul {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding-left: 17px;
+}
+
+.analysis-card li,
+.analysis-card p {
+  color: var(--academic-text-body);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 .evidence-group {
   border-top: 1px solid var(--academic-border);
   padding-top: 14px;
@@ -1036,9 +1375,9 @@ function openEvidenceSource(evidence: any) {
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
-  padding: 10px;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px;
   border: 1px solid var(--academic-border);
   border-radius: 8px;
   background: #fff;
@@ -1051,6 +1390,72 @@ function openEvidenceSource(evidence: any) {
 .evidence-item:hover {
   border-color: var(--academic-primary);
   background: var(--academic-primary-light);
+}
+
+.evidence-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.evidence-item-head strong {
+  color: var(--academic-text-main);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.evidence-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.evidence-tags em {
+  border-radius: 999px;
+  background: var(--academic-canvas);
+  color: var(--academic-text-muted);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1;
+  padding: 5px 7px;
+}
+
+.evidence-tags .support-tag.strong {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.evidence-tags .support-tag.medium {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.evidence-tags .support-tag.weak {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.evidence-snippet {
+  display: -webkit-box;
+  max-height: 96px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  color: var(--academic-text-body);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+}
+
+.evidence-snippet.expanded {
+  display: block;
+  max-height: 220px;
+  overflow: auto;
+  -webkit-line-clamp: unset;
 }
 
 .history-row {
@@ -1094,6 +1499,25 @@ function openEvidenceSource(evidence: any) {
 
   .history-panel {
     max-height: 240px;
+  }
+
+  .analysis-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .analysis-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .result-title-row,
+  .evidence-item-head {
+    flex-direction: column;
+  }
+
+  .evidence-tags {
+    justify-content: flex-start;
   }
 }
 </style>
