@@ -148,52 +148,55 @@ watch(
       searchKeyword.value = String(kw)
       load()
     }
-  }
+  },
 )
 </script>
 
 <template>
-  <div class="user-page" v-loading="loading">
-    <div class="toolbar soft-card">
-      <el-input
-        v-model="searchKeyword"
-        placeholder="用户名 / ID / 手机号"
-        clearable
-        style="width: 280px"
-        @keyup.enter="handleSearch"
-        @clear="handleSearch"
-      />
-      <el-button @click="handleSearch">搜索</el-button>
+  <div class="admin-page" v-loading="loading">
+    <div class="admin-toolbar">
+      <div class="admin-toolbar-left">
+        <el-input
+          v-model="searchKeyword"
+          placeholder="用户名 / ID / 手机号"
+          clearable
+          style="width: 260px"
+          @keyup.enter="handleSearch"
+          @clear="handleSearch"
+        />
+        <el-button text @click="handleSearch">搜索</el-button>
+      </div>
+      <span class="admin-toolbar-meta">共 {{ rows.length }} 位用户</span>
     </div>
 
-    <div class="table-card soft-card">
-      <el-table :data="rows" size="small" height="calc(100vh - 200px)" :row-class-name="getRowClassName" @row-click="openDrawer">
-        <el-table-column prop="id" label="ID" width="64">
+    <div class="admin-el-table is-clickable">
+      <el-table :data="rows" size="default" height="calc(100vh - 168px)" :row-class-name="getRowClassName" @row-click="openDrawer">
+        <el-table-column prop="id" label="ID" width="72">
           <template #header>
             <span class="sort-header" @click="toggleSort('id')">ID</span>
           </template>
         </el-table-column>
-        <el-table-column prop="username" label="用户名" min-width="120" />
-        <el-table-column prop="phone" label="手机号" width="120" />
-        <el-table-column prop="status" label="状态" width="80">
+        <el-table-column prop="username" label="用户名" min-width="140" />
+        <el-table-column prop="phone" label="手机号" width="130" />
+        <el-table-column prop="status" label="状态" width="88">
           <template #header>
             <span class="sort-header" @click="toggleSort('status')">状态</span>
           </template>
           <template #default="{ row }">
-            <el-tag :type="row.status === 'active' ? 'success' : 'warning'" size="small">
+            <span class="admin-status" :class="row.status === 'active' ? 'is-success' : 'is-warning'">
               {{ row.status === 'active' ? '启用' : '禁用' }}
-            </el-tag>
+            </span>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="注册时间" width="160">
+        <el-table-column prop="created_at" label="注册时间" width="168">
           <template #header>
             <span class="sort-header" @click="toggleSort('created_at')">注册时间</span>
           </template>
           <template #default="{ row }">
-            {{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-' }}
+            {{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '—' }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="操作" width="168" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click.stop="openDrawer(row)">编辑</el-button>
             <el-button link size="small" @click.stop="resetPassword(row)">重置密码</el-button>
@@ -208,11 +211,12 @@ watch(
           <div class="drawer-section user-header">
             <div>
               <h3>{{ detail.user.username }}</h3>
-              <p class="sub">ID {{ detail.user.id }} · {{ detail.user.phone || '-' }} · {{ detail.user.email || '-' }}</p>
+              <p class="sub">ID {{ detail.user.id }} · {{ detail.user.phone || '—' }} · {{ detail.user.email || '—' }}</p>
             </div>
             <el-button
               :type="detail.user.status === 'active' ? 'danger' : 'success'"
               size="small"
+              plain
               @click="toggleBan"
             >
               {{ detail.user.status === 'active' ? '封禁用户' : '解除封禁' }}
@@ -251,11 +255,11 @@ watch(
               >
                 <div class="log-item">
                   <span class="log-type">{{ log.operation_type }}</span>
-                  <p>{{ log.operation_content || '-' }}</p>
+                  <p>{{ log.operation_content || '—' }}</p>
                 </div>
               </el-timeline-item>
             </el-timeline>
-            <div v-else class="empty-log">暂无审计记录</div>
+            <div v-else class="admin-empty">暂无审计记录</div>
           </div>
         </template>
       </div>
@@ -276,29 +280,16 @@ watch(
 </template>
 
 <style scoped>
-.user-page {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.toolbar {
-  display: flex;
-  gap: 8px;
-  padding: 10px 12px;
-}
-
-.table-card {
-  padding: 0;
-  overflow: hidden;
-}
-
 .sort-header {
   cursor: pointer;
 }
 
+.sort-header:hover {
+  color: #0f172a;
+}
+
 .disabled-row {
-  opacity: 0.55;
+  opacity: 0.5;
 }
 
 .drawer-body {
@@ -306,85 +297,78 @@ watch(
 }
 
 .drawer-section {
-  margin-bottom: 20px;
+  margin-bottom: 1.5rem;
 }
 
 .drawer-section h4 {
-  margin: 0 0 12px;
-  font-size: 14px;
+  margin: 0 0 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 600;
+  color: #0f172a;
 }
 
 .user-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 12px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--academic-border);
+  gap: 0.75rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .user-header h3 {
-  margin: 0 0 4px;
-  font-size: 18px;
+  margin: 0 0 0.25rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #0f172a;
 }
 
 .sub {
   margin: 0;
-  font-size: 12px;
-  color: var(--academic-text-muted);
+  font-size: 0.75rem;
+  color: #64748b;
 }
 
 .quota-item {
-  margin-bottom: 16px;
+  margin-bottom: 1rem;
 }
 
 .quota-item label {
   display: block;
-  font-size: 12px;
-  color: var(--academic-text-muted);
-  margin-bottom: 6px;
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-bottom: 0.375rem;
 }
 
 .quota-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
-  font-size: 13px;
+  margin-bottom: 0.625rem;
+  font-size: 0.8125rem;
+  color: #334155;
 }
 
 .log-item .log-type {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
-  color: var(--academic-primary);
+  color: #0f172a;
 }
 
 .log-item p {
-  margin: 4px 0 0;
-  font-size: 12px;
-  color: var(--academic-text-body);
-}
-
-.empty-log {
-  font-size: 13px;
-  color: var(--academic-text-muted);
-  text-align: center;
-  padding: 20px;
+  margin: 0.25rem 0 0;
+  font-size: 0.75rem;
+  color: #64748b;
 }
 
 .password-display {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px;
-  background: var(--academic-primary-light);
-  border-radius: 8px;
-  font-family: monospace;
-}
-
-:deep(.el-table__row) {
-  cursor: pointer;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #f1f5f9;
+  font-family: ui-monospace, monospace;
+  font-size: 0.875rem;
 }
 </style>

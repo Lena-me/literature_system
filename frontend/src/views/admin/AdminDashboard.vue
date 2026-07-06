@@ -39,7 +39,7 @@ const errorSourceLabel = computed(() => {
 
 const gaugeDasharray = computed(() => {
   const score = Math.min(100, Math.max(0, health.value.total_score ?? 0))
-  const circumference = 2 * Math.PI * 42
+  const circumference = 2 * Math.PI * 36
   const filled = circumference * (score / 100)
   return `${filled} ${circumference}`
 })
@@ -62,7 +62,7 @@ const healthComponents = computed(() => [
   { key: 'infra', label: '基建', data: health.value.components?.infra },
 ])
 
-function sparklinePoints(values: number[], w = 72, h = 24): string {
+function sparklinePoints(values: number[], w = 64, h = 20): string {
   const arr = values?.length ? values : [0]
   const max = Math.max(...arr, 1)
   const min = Math.min(...arr, 0)
@@ -106,14 +106,31 @@ function renderChart() {
   chartInstance.setOption({
     backgroundColor: 'transparent',
     tooltip: { trigger: 'axis' },
-    legend: { data: ['上传', '解析', '问答'], top: 0, right: 0, textStyle: { fontSize: 11 } },
-    grid: { top: 32, right: 12, bottom: 24, left: 40 },
-    xAxis: { type: 'category', data: dates, axisTick: { show: false } },
-    yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed' } } },
+    legend: {
+      data: ['上传', '解析', '问答'],
+      top: 0,
+      right: 0,
+      textStyle: { fontSize: 11, color: '#64748b' },
+      itemWidth: 12,
+      itemHeight: 2,
+    },
+    grid: { top: 36, right: 8, bottom: 28, left: 44 },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: '#e2e8f0' } },
+      axisLabel: { color: '#94a3b8', fontSize: 11 },
+    },
+    yAxis: {
+      type: 'value',
+      splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } },
+      axisLabel: { color: '#94a3b8', fontSize: 11 },
+    },
     series: [
-      { name: '上传', type: 'line', smooth: true, data: trends.value.upload || [], symbol: 'none', lineStyle: { width: 2 } },
-      { name: '解析', type: 'line', smooth: true, data: trends.value.parse || [], symbol: 'none', lineStyle: { width: 2 } },
-      { name: '问答', type: 'line', smooth: true, data: trends.value.qa || [], symbol: 'none', lineStyle: { width: 2 } },
+      { name: '上传', type: 'line', smooth: true, data: trends.value.upload || [], symbol: 'none', lineStyle: { width: 2, color: '#0f172a' } },
+      { name: '解析', type: 'line', smooth: true, data: trends.value.parse || [], symbol: 'none', lineStyle: { width: 2, color: '#64748b' } },
+      { name: '问答', type: 'line', smooth: true, data: trends.value.qa || [], symbol: 'none', lineStyle: { width: 2, color: '#94a3b8' } },
     ],
   })
 }
@@ -134,134 +151,163 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="overview-page">
+  <div class="admin-page">
     <!-- 骨架屏 -->
     <template v-if="loading">
-      <div class="metrics-grid">
-        <div v-for="i in 4" :key="i" class="metric-card soft-card skeleton-card">
-          <div class="sk-line sk-w60" />
-          <div class="sk-line sk-w40 sk-lg" />
-          <div class="sk-line sk-w80" />
+      <section class="admin-metrics-bar">
+        <div v-for="i in 4" :key="i" class="admin-metric">
+          <div class="sk-line sk-w50" />
+          <div class="sk-line sk-lg" />
+          <div class="sk-line sk-w70" />
         </div>
-      </div>
-      <div class="chart-card soft-card skeleton-card">
-        <div class="sk-line sk-w30" />
-        <div class="sk-chart" />
-      </div>
-      <div class="bottom-grid">
-        <div v-for="i in 2" :key="i" class="panel soft-card skeleton-card">
-          <div class="sk-line sk-w40" />
-          <div v-for="j in 4" :key="j" class="sk-row" />
+      </section>
+      <div class="admin-page-body">
+        <div class="admin-section">
+          <div class="sk-line sk-w30" />
+          <div class="sk-chart" />
+        </div>
+        <div class="admin-split">
+          <div v-for="i in 2" :key="i">
+            <div class="sk-line sk-w40" />
+            <div v-for="j in 4" :key="j" class="sk-row" />
+          </div>
         </div>
       </div>
     </template>
 
     <template v-else>
-      <div class="metrics-grid">
-        <!-- 综合健康度 -->
-        <div class="metric-card soft-card health-card" :class="healthTone">
-          <div class="metric-head">
-            <span class="metric-label">综合健康度</span>
-            <span class="status-chip">{{ healthStatusLabel }}</span>
+      <!-- 通栏指标 -->
+      <section class="admin-metrics-bar">
+        <div class="admin-metric admin-metric--wide health-metric" :class="healthTone">
+          <div class="admin-metric-head">
+            <span class="admin-metric-label">综合健康度</span>
+            <span class="status-tag">{{ healthStatusLabel }}</span>
           </div>
-          <div class="health-gauge-wrap">
-            <svg viewBox="0 0 100 100" class="health-gauge">
-              <circle cx="50" cy="50" r="42" fill="none" stroke="#e5e7eb" stroke-width="8" />
-              <circle
-                cx="50" cy="50" r="42" fill="none"
-                stroke="currentColor" stroke-width="8" stroke-linecap="round"
-                transform="rotate(-90 50 50)"
-                :stroke-dasharray="gaugeDasharray"
-              />
+          <div class="health-inline">
+            <div class="health-gauge-wrap">
+              <svg viewBox="0 0 80 80" class="health-gauge">
+                <circle cx="40" cy="40" r="36" fill="none" stroke="#e2e8f0" stroke-width="6" />
+                <circle
+                  cx="40" cy="40" r="36" fill="none"
+                  stroke="currentColor" stroke-width="6" stroke-linecap="round"
+                  transform="rotate(-90 40 40)"
+                  :stroke-dasharray="gaugeDasharray"
+                />
+              </svg>
+              <div class="gauge-center">
+                <span class="gauge-score">{{ health.total_score ?? '—' }}</span>
+              </div>
+            </div>
+            <div class="component-bars">
+              <div v-for="c in healthComponents" :key="c.key" class="component-row">
+                <span class="component-label">{{ c.label }}</span>
+                <div class="component-track">
+                  <div class="component-fill" :style="{ width: `${c.data?.score ?? 0}%` }" />
+                </div>
+                <span class="component-score">{{ c.data?.score ?? '—' }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="admin-metric-divider" />
+
+        <div class="admin-metric">
+          <div class="admin-metric-head">
+            <span class="admin-metric-label">今日大模型调用</span>
+            <svg width="64" height="20" viewBox="0 0 64 20" aria-hidden="true">
+              <path :d="sparklinePoints(cards.sparklines?.llm)" fill="none" stroke="#64748b" stroke-width="1.5" />
             </svg>
-            <div class="gauge-center">
-              <span class="gauge-score">{{ health.total_score ?? '-' }}</span>
-              <span class="gauge-unit">/ 100</span>
-            </div>
           </div>
-          <div class="component-bars">
-            <div v-for="c in healthComponents" :key="c.key" class="component-row">
-              <span class="component-label">{{ c.label }}</span>
-              <div class="component-track">
-                <div class="component-fill" :style="{ width: `${c.data?.score ?? 0}%` }" />
+          <div class="admin-metric-value">{{ cards.llm_today?.total ?? 0 }}</div>
+          <div class="admin-metric-sub">
+            加权成功率 {{ formatRate(cards.llm_today?.success_rate) }} · Token {{ formatTokens(cards.llm_today?.total_tokens) }}
+          </div>
+        </div>
+
+        <div class="admin-metric-divider" />
+
+        <div class="admin-metric">
+          <div class="admin-metric-head">
+            <span class="admin-metric-label">向量库规模</span>
+            <svg width="64" height="20" viewBox="0 0 64 20" aria-hidden="true">
+              <path :d="sparklinePoints(cards.sparklines?.vector)" fill="none" stroke="#64748b" stroke-width="1.5" />
+            </svg>
+          </div>
+          <div class="admin-metric-value">{{ cards.vector_total ?? 0 }}</div>
+          <div class="admin-metric-sub">Milvus 向量总数</div>
+        </div>
+
+        <div class="admin-metric-divider" />
+
+        <div class="admin-metric">
+          <div class="admin-metric-head">
+            <span class="admin-metric-label">排队解析任务</span>
+            <svg width="64" height="20" viewBox="0 0 64 20" aria-hidden="true">
+              <path :d="sparklinePoints(cards.sparklines?.tasks)" fill="none" stroke="#64748b" stroke-width="1.5" />
+            </svg>
+          </div>
+          <div class="admin-metric-value">{{ cards.queued_tasks ?? 0 }}</div>
+          <div class="admin-metric-sub">queued + running</div>
+        </div>
+      </section>
+
+      <div class="admin-page-body">
+        <!-- 趋势图 -->
+        <section class="admin-section">
+          <div class="admin-section-header">
+            <h2 class="admin-section-title">核心业务趋势</h2>
+            <el-button text size="small" @click="load">刷新</el-button>
+          </div>
+          <div ref="chartEl" class="chart-box" />
+        </section>
+
+        <!-- 双栏列表 -->
+        <div class="admin-split">
+          <section class="admin-section">
+            <div class="admin-section-header">
+              <h2 class="admin-section-title">智能聚类告警</h2>
+              <span class="admin-section-meta">
+                {{ errorClusters.length }} 类<span v-if="errorSourceLabel"> · {{ errorSourceLabel }}</span>
+              </span>
+            </div>
+            <div class="admin-flat-list">
+              <div v-for="(item, idx) in errorClusters" :key="idx" class="admin-flat-row cluster-row">
+                <p class="cluster-summary">{{ item.summary }}</p>
+                <span class="trigger-count">{{ item.count }} 次</span>
               </div>
-              <span class="component-score">{{ c.data?.score ?? '-' }}</span>
+              <div v-if="!errorClusters.length" class="admin-empty">近 24 小时无 ERROR 聚类</div>
             </div>
-          </div>
-        </div>
+          </section>
 
-        <div class="metric-card soft-card">
-          <div class="metric-head">
-            <span class="metric-label">今日大模型调用</span>
-            <svg width="72" height="24" viewBox="0 0 72 24"><path :d="sparklinePoints(cards.sparklines?.llm)" fill="none" stroke="#6366f1" stroke-width="1.5" /></svg>
-          </div>
-          <div class="metric-value">{{ cards.llm_today?.total ?? 0 }}</div>
-          <div class="metric-sub">加权成功率 {{ formatRate(cards.llm_today?.success_rate) }} · Token {{ formatTokens(cards.llm_today?.total_tokens) }}</div>
-        </div>
-
-        <div class="metric-card soft-card">
-          <div class="metric-head">
-            <span class="metric-label">向量库规模</span>
-            <svg width="72" height="24" viewBox="0 0 72 24"><path :d="sparklinePoints(cards.sparklines?.vector)" fill="none" stroke="#0ea5e9" stroke-width="1.5" /></svg>
-          </div>
-          <div class="metric-value">{{ cards.vector_total ?? 0 }}</div>
-          <div class="metric-sub">Milvus 向量总数</div>
-        </div>
-
-        <div class="metric-card soft-card">
-          <div class="metric-head">
-            <span class="metric-label">排队解析任务</span>
-            <svg width="72" height="24" viewBox="0 0 72 24"><path :d="sparklinePoints(cards.sparklines?.tasks)" fill="none" stroke="#f59e0b" stroke-width="1.5" /></svg>
-          </div>
-          <div class="metric-value">{{ cards.queued_tasks ?? 0 }}</div>
-          <div class="metric-sub">queued + running</div>
-        </div>
-      </div>
-
-      <div class="chart-card soft-card">
-        <div class="section-head">
-          <h3>核心业务趋势</h3>
-          <el-button size="small" @click="load">刷新</el-button>
-        </div>
-        <div ref="chartEl" class="chart-box" />
-      </div>
-
-      <div class="bottom-grid">
-        <div class="panel soft-card">
-          <div class="section-head">
-            <h3>智能聚类告警</h3>
-            <span class="cluster-count">{{ errorClusters.length }} 类<span v-if="errorSourceLabel"> · {{ errorSourceLabel }}</span></span>
-          </div>
-          <div class="cluster-list">
-            <div v-for="(item, idx) in errorClusters" :key="idx" class="cluster-item">
-              <p class="cluster-summary">{{ item.summary }}</p>
-              <span class="trigger-badge">🔥 {{ item.count }} 次触发</span>
+          <section class="admin-section">
+            <div class="admin-section-header">
+              <h2 class="admin-section-title">
+                资源消耗 TOP 3
+                <span v-if="topUsersPeriodLabel" class="period-tag">{{ topUsersPeriodLabel }}</span>
+              </h2>
             </div>
-            <div v-if="!errorClusters.length" class="empty">近 24 小时无 ERROR 聚类</div>
-          </div>
-        </div>
-
-        <div class="panel soft-card">
-          <div class="section-head">
-            <h3>资源消耗 TOP 3<span v-if="topUsersPeriodLabel" class="period-tag">{{ topUsersPeriodLabel }}</span></h3>
-          </div>
-          <div class="top-list">
-            <div v-for="(u, idx) in topUsers" :key="u.id" class="top-item">
-              <div class="top-rank">#{{ idx + 1 }}</div>
-              <div class="top-body">
-                <div class="top-name">{{ u.username }} <span class="uid">ID {{ u.id }}</span></div>
-                <div class="token-row">
-                  <span class="token-num">{{ formatTokens(u.tokens) }}</span>
-                  <span class="token-label">Token 估算</span>
+            <div class="admin-flat-list">
+              <div v-for="(u, idx) in topUsers" :key="u.id" class="admin-flat-row top-row">
+                <div class="top-rank">{{ idx + 1 }}</div>
+                <div class="top-body">
+                  <div class="top-name">
+                    {{ u.username }}
+                    <span class="uid">ID {{ u.id }}</span>
+                  </div>
+                  <div class="top-stats">
+                    <span class="token-num">{{ formatTokens(u.tokens) }}</span>
+                    <span class="token-label">Token 估算</span>
+                  </div>
+                  <div class="progress-track">
+                    <div class="progress-fill" :style="{ width: `${u.consumption_pct}%` }" />
+                  </div>
+                  <div class="top-meta">上传 {{ u.uploads }} · 问答 {{ u.qa_calls }}</div>
                 </div>
-                <div class="progress-track">
-                  <div class="progress-fill" :style="{ width: `${u.consumption_pct}%` }" />
-                </div>
-                <div class="top-meta">上传 {{ u.uploads }} · 问答 {{ u.qa_calls }}</div>
               </div>
+              <div v-if="!topUsers.length" class="admin-empty">今日暂无高消耗用户</div>
             </div>
-            <div v-if="!topUsers.length" class="empty">今日暂无高消耗用户</div>
-          </div>
+          </section>
         </div>
       </div>
     </template>
@@ -269,321 +315,235 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.overview-page {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.health-metric {
+  color: #059669;
 }
 
-.metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+.health-metric.warning {
+  color: #d97706;
 }
 
-.metric-card {
-  padding: 12px 14px;
+.health-metric.critical {
+  color: #dc2626;
 }
 
-.metric-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 6px;
-}
-
-.metric-label {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--academic-text-muted);
+.status-tag {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  letter-spacing: 0.02em;
+  color: inherit;
 }
 
-.metric-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--academic-text-main);
-  line-height: 1.2;
+.health-inline {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  margin-top: 0.25rem;
 }
-
-.metric-sub {
-  margin-top: 3px;
-  font-size: 11px;
-  color: var(--academic-text-muted);
-}
-
-/* 健康度卡片 */
-.health-card { color: #059669; }
-.health-card.warning { color: #d97706; }
-.health-card.critical { color: #dc2626; }
-
-.status-chip {
-  font-size: 10px;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: currentColor;
-  color: #fff;
-  filter: brightness(1);
-}
-.health-card .status-chip { background: color-mix(in srgb, currentColor 15%, transparent); color: inherit; }
 
 .health-gauge-wrap {
   position: relative;
-  width: 88px;
-  height: 88px;
-  margin: 4px auto 6px;
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
 }
 
-.health-gauge { width: 100%; height: 100%; }
+.health-gauge {
+  width: 100%;
+  height: 100%;
+}
 
 .gauge-center {
   position: absolute;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
 }
 
 .gauge-score {
-  font-size: 22px;
-  font-weight: 800;
-  color: var(--academic-text-main);
-  line-height: 1;
-}
-
-.gauge-unit {
-  font-size: 10px;
-  color: var(--academic-text-muted);
-}
-
-.deduction-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: center;
-  font-size: 10px;
-  color: var(--academic-text-muted);
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #0f172a;
+  letter-spacing: -0.02em;
 }
 
 .component-bars {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 4px;
+  gap: 0.375rem;
 }
 
 .component-row {
   display: grid;
-  grid-template-columns: 28px 1fr 28px;
+  grid-template-columns: 2rem 1fr 2rem;
   align-items: center;
-  gap: 6px;
-  font-size: 10px;
+  gap: 0.5rem;
+  font-size: 0.6875rem;
 }
 
 .component-label {
-  color: var(--academic-text-muted);
+  color: #64748b;
 }
 
 .component-track {
-  height: 4px;
-  background: #e5e7eb;
-  border-radius: 999px;
+  height: 3px;
+  background: #e2e8f0;
   overflow: hidden;
 }
 
 .component-fill {
   height: 100%;
   background: currentColor;
-  border-radius: 999px;
   transition: width 0.3s ease;
 }
 
 .component-score {
   text-align: right;
   font-weight: 600;
-  color: var(--academic-text-main);
+  color: #334155;
+}
+
+.chart-box {
+  height: 280px;
+  width: 100%;
 }
 
 .period-tag {
-  margin-left: 6px;
-  font-size: 11px;
+  margin-left: 0.375rem;
+  font-size: 0.75rem;
   font-weight: 500;
-  color: var(--academic-text-muted);
+  color: #94a3b8;
 }
 
-.chart-card { padding: 12px 14px; }
-.chart-box { height: 240px; }
-
-.bottom-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.panel {
-  padding: 12px 14px;
-  min-height: 220px;
-}
-
-.section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.section-head h3 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.cluster-count {
-  font-size: 11px;
-  color: var(--academic-text-muted);
-}
-
-.cluster-list, .top-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 200px;
-  overflow: auto;
-}
-
-.cluster-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--academic-canvas);
+.cluster-row {
+  align-items: flex-start;
 }
 
 .cluster-summary {
   margin: 0;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--academic-text-body);
   flex: 1;
   min-width: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: #334155;
   word-break: break-word;
 }
 
-.trigger-badge {
+.trigger-count {
   flex-shrink: 0;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: #fee2e2;
+  font-size: 0.75rem;
+  font-weight: 600;
   color: #dc2626;
+  font-variant-numeric: tabular-nums;
 }
 
-.top-item {
-  display: flex;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--academic-canvas);
+.top-row {
+  align-items: flex-start;
+  gap: 0.875rem;
 }
 
 .top-rank {
-  font-size: 14px;
-  font-weight: 800;
-  color: var(--academic-primary);
-  width: 24px;
+  width: 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  padding-top: 0.125rem;
 }
 
-.top-body { flex: 1; min-width: 0; }
+.top-body {
+  flex: 1;
+  min-width: 0;
+}
 
 .top-name {
-  font-size: 13px;
+  font-size: 0.875rem;
   font-weight: 600;
+  color: #0f172a;
 }
 
 .uid {
+  margin-left: 0.375rem;
+  font-size: 0.75rem;
   font-weight: 400;
-  font-size: 11px;
-  color: var(--academic-text-muted);
+  color: #94a3b8;
 }
 
-.token-row {
+.top-stats {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  margin-top: 2px;
+  gap: 0.375rem;
+  margin-top: 0.125rem;
 }
 
 .token-num {
-  font-size: 18px;
-  font-weight: 800;
-  color: var(--academic-primary);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #0f172a;
+  letter-spacing: -0.02em;
 }
 
 .token-label {
-  font-size: 10px;
-  color: var(--academic-text-muted);
+  font-size: 0.6875rem;
+  color: #94a3b8;
 }
 
 .progress-track {
-  height: 4px;
-  background: #e5e7eb;
-  border-radius: 999px;
-  margin: 6px 0 4px;
+  height: 3px;
+  background: #e2e8f0;
+  margin: 0.5rem 0 0.375rem;
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--academic-primary), #6366f1);
-  border-radius: 999px;
-  transition: width 0.4s ease;
+  background: #0f172a;
+  transition: width 0.35s ease;
 }
 
 .top-meta {
-  font-size: 10px;
-  color: var(--academic-text-muted);
-}
-
-.empty {
-  text-align: center;
-  padding: 20px;
-  font-size: 12px;
-  color: var(--academic-text-muted);
+  font-size: 0.6875rem;
+  color: #94a3b8;
 }
 
 /* 骨架屏 */
-.skeleton-card { animation: pulse 1.5s ease-in-out infinite; }
 .sk-line {
-  height: 12px;
-  background: #e5e7eb;
-  border-radius: 4px;
-  margin-bottom: 8px;
+  height: 10px;
+  background: #e2e8f0;
+  margin-bottom: 0.5rem;
 }
-.sk-lg { height: 28px; }
+
+.sk-lg {
+  height: 24px;
+  width: 40%;
+}
+
 .sk-w30 { width: 30%; }
 .sk-w40 { width: 40%; }
-.sk-w60 { width: 60%; }
-.sk-w80 { width: 80%; }
-.sk-chart { height: 200px; background: #e5e7eb; border-radius: 8px; margin-top: 12px; }
-.sk-row { height: 36px; background: #e5e7eb; border-radius: 6px; margin-bottom: 6px; }
+.sk-w50 { width: 50%; }
+.sk-w70 { width: 70%; }
+
+.sk-chart {
+  height: 280px;
+  background: #f1f5f9;
+  margin-top: 0.75rem;
+}
+
+.sk-row {
+  height: 40px;
+  background: #f1f5f9;
+  margin-bottom: 0.5rem;
+}
+
+.admin-page:has(.sk-line) .admin-metrics-bar {
+  animation: pulse 1.5s ease-in-out infinite;
+}
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
-}
-
-@media (max-width: 1100px) {
-  .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bottom-grid { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 640px) {
-  .metrics-grid { grid-template-columns: 1fr; }
 }
 </style>

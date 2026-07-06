@@ -1,11 +1,11 @@
 <!-- frontend/src/layouts/AdminLayout.vue -->
-
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { adminApi } from '@/api/admin'
+import '@/styles/admin.css'
 
 const router = useRouter()
 const route = useRoute()
@@ -98,7 +98,7 @@ onMounted(loadPauseState)
     <aside class="admin-sidebar" :class="{ expanded: isExpanded, 'mobile-open': mobileOpen }">
       <div class="sidebar-header">
         <button class="brand-toggle" @click="toggleSidebar" :title="isExpanded ? '收起侧边栏' : '展开侧边栏'">
-          <svg class="brand-logo" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--academic-primary)" stroke-width="1.8">
+          <svg class="brand-logo" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0f172a" stroke-width="1.6">
             <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
             <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
           </svg>
@@ -106,7 +106,7 @@ onMounted(loadPauseState)
         <span class="brand-text">管理控制台</span>
       </div>
 
-      <div class="nav-list">
+      <nav class="nav-list">
         <button
           v-for="item in navItems"
           :key="item.label"
@@ -115,17 +115,17 @@ onMounted(loadPauseState)
           :class="{ active: isActive(item) }"
           @click="go(item.path)"
         >
-          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path :d="item.icon" />
           </svg>
           <span class="nav-label">{{ item.label }}</span>
           <div v-if="!isExpanded" class="nav-tooltip">{{ item.label }}</div>
         </button>
-      </div>
+      </nav>
 
       <div class="sidebar-footer">
         <button class="logout-btn" @click="logout">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
             <polyline points="16 17 21 12 16 7" />
             <line x1="21" y1="12" x2="9" y2="12" />
@@ -137,43 +137,43 @@ onMounted(loadPauseState)
     </aside>
 
     <div class="admin-main">
-      <header class="admin-header">
-        <div class="header-left">
+      <header class="admin-page-header">
+        <div class="header-primary">
           <button class="mobile-menu-btn" @click="mobileOpen = !mobileOpen">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
               <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
             </svg>
           </button>
-          <h2 class="header-title">{{ pageTitle }}</h2>
+          <div>
+            <h1 class="admin-page-header__title">{{ pageTitle }}</h1>
+          </div>
         </div>
 
-        <div class="header-center">
+        <div class="admin-page-header__actions">
           <el-input
             v-model="searchKeyword"
-            placeholder="搜索用户（用户名 / ID / 手机号）"
+            placeholder="搜索用户"
             clearable
             class="global-search"
             @keyup.enter="handleSearch"
           >
             <template #prefix>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2">
                 <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
               </svg>
             </template>
           </el-input>
-        </div>
 
-        <div class="header-right">
           <button
-            class="emergency-btn"
+            class="pause-btn"
             :class="{ paused: systemPaused }"
             :disabled="pauseLoading"
             @click="toggleSystemPause"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
               <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
             </svg>
-            {{ systemPaused ? '恢复系统运行' : '全局熔断 / 暂停系统' }}
+            <span class="pause-label">{{ systemPaused ? '恢复运行' : '全局暂停' }}</span>
           </button>
         </div>
       </header>
@@ -191,40 +191,39 @@ onMounted(loadPauseState)
   height: 100vh;
   width: 100%;
   overflow: hidden;
-  background: #eef0f3;
+  background: #fff;
 }
 
 .admin-sidebar {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--academic-panel);
-  border-right: 1px solid var(--academic-border);
+  background: #fff;
+  border-right: 1px solid #e5e7eb;
   z-index: 50;
   width: 64px;
   min-width: 64px;
-  transition: width 0.3s ease, min-width 0.3s ease, transform 0.3s ease;
+  transition: width 0.25s ease, min-width 0.25s ease, transform 0.25s ease;
   overflow: hidden;
 }
 
 .admin-sidebar.expanded {
-  width: 240px;
-  min-width: 240px;
+  width: 220px;
+  min-width: 220px;
 }
 
 .sidebar-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 10px;
-  border-bottom: 1px solid var(--academic-border);
+  padding: 1rem 0.75rem;
+  border-bottom: 1px solid #e5e7eb;
   flex-shrink: 0;
 }
 
 .brand-toggle {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
   display: grid;
   place-items: center;
   border: none;
@@ -235,16 +234,16 @@ onMounted(loadPauseState)
 }
 
 .brand-toggle:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: #f8fafc;
 }
 
 .brand-text {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--academic-text-main);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #0f172a;
   white-space: nowrap;
   opacity: 0;
-  transition: opacity 0.2s ease 0.1s;
+  transition: opacity 0.2s ease 0.05s;
 }
 
 .admin-sidebar.expanded .brand-text {
@@ -254,37 +253,37 @@ onMounted(loadPauseState)
 .nav-list {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 4px;
+  padding: 0.75rem 0.5rem;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 0.625rem;
   width: 100%;
-  height: 40px;
-  padding: 0 12px;
-  border-radius: 8px;
+  height: 38px;
+  padding: 0 0.75rem;
   border: none;
   background: transparent;
   cursor: pointer;
-  transition: all 0.15s;
   font-family: inherit;
-  font-size: 13px;
-  color: var(--academic-text-muted);
+  font-size: 0.8125rem;
+  color: #64748b;
   position: relative;
+  border-left: 2px solid transparent;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
 .nav-item:hover {
-  background: var(--academic-primary-light);
-  color: var(--academic-primary);
+  background: #f8fafc;
+  color: #0f172a;
 }
 
 .nav-item.active {
-  background: var(--academic-primary-light);
-  color: var(--academic-primary);
+  background: #f8fafc;
+  color: #0f172a;
   font-weight: 600;
-  box-shadow: inset 3px 0 0 var(--academic-primary);
+  border-left-color: #0f172a;
 }
 
 .nav-icon {
@@ -294,7 +293,7 @@ onMounted(loadPauseState)
 .nav-label {
   white-space: nowrap;
   opacity: 0;
-  transition: opacity 0.2s ease 0.1s;
+  transition: opacity 0.2s ease 0.05s;
 }
 
 .admin-sidebar.expanded .nav-label {
@@ -302,29 +301,30 @@ onMounted(loadPauseState)
 }
 
 .sidebar-footer {
-  padding: 8px 4px;
-  border-top: 1px solid var(--academic-border);
+  padding: 0.75rem 0.5rem;
+  border-top: 1px solid #e5e7eb;
 }
 
 .logout-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 0.625rem;
   width: 100%;
-  height: 40px;
-  padding: 0 12px;
-  border-radius: 8px;
+  height: 38px;
+  padding: 0 0.75rem;
   border: none;
   background: transparent;
   cursor: pointer;
   font-family: inherit;
-  font-size: 13px;
-  color: var(--danger);
+  font-size: 0.8125rem;
+  color: #64748b;
   position: relative;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .logout-btn:hover {
-  background: rgba(239, 68, 68, 0.08);
+  background: #fef2f2;
+  color: #dc2626;
 }
 
 .logout-label {
@@ -340,10 +340,9 @@ onMounted(loadPauseState)
   position: fixed;
   left: 70px;
   padding: 6px 10px;
-  background: var(--academic-text-main);
+  background: #0f172a;
   color: #fff;
   font-size: 12px;
-  border-radius: 6px;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
@@ -362,96 +361,83 @@ onMounted(loadPauseState)
   display: flex;
   flex-direction: column;
   height: 100vh;
+  background: #fff;
 }
 
-.admin-header {
+.header-primary {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  background: var(--academic-panel);
-  border-bottom: 1px solid var(--academic-border);
-  flex-shrink: 0;
+  gap: 0.75rem;
+  min-width: 0;
 }
 
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 140px;
-}
-
-.header-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--academic-text-main);
-}
-
-.header-center {
-  flex: 1;
-  max-width: 420px;
+.global-search {
+  width: 220px;
 }
 
 .global-search :deep(.el-input__wrapper) {
-  border-radius: 8px;
+  background: #f8fafc;
+  box-shadow: none !important;
+  border: 1px solid #e5e7eb;
+  border-radius: 0;
 }
 
-.header-right {
-  margin-left: auto;
+.global-search :deep(.el-input__wrapper:hover),
+.global-search :deep(.el-input__wrapper.is-focus) {
+  border-color: #cbd5e1;
 }
 
-.emergency-btn {
+.pause-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border: none;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 700;
+  gap: 0.375rem;
+  height: 32px;
+  padding: 0 0.75rem;
+  border: 1px solid #fecaca;
+  background: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
   cursor: pointer;
-  color: #fff;
-  background: linear-gradient(135deg, #dc2626, #b91c1c);
-  box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.3), 0 4px 14px rgba(220, 38, 38, 0.35);
-  animation: pulse-emergency 2s ease-in-out infinite;
+  color: #dc2626;
+  font-family: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.emergency-btn.paused {
-  background: linear-gradient(135deg, #059669, #047857);
-  box-shadow: 0 0 0 1px rgba(5, 150, 105, 0.3), 0 4px 14px rgba(5, 150, 105, 0.25);
-  animation: none;
+.pause-btn:hover:not(:disabled) {
+  background: #fef2f2;
 }
 
-.emergency-btn:disabled {
-  opacity: 0.7;
+.pause-btn.paused {
+  border-color: #bbf7d0;
+  color: #059669;
+}
+
+.pause-btn.paused:hover:not(:disabled) {
+  background: #f0fdf4;
+}
+
+.pause-btn:disabled {
+  opacity: 0.6;
   cursor: not-allowed;
-}
-
-@keyframes pulse-emergency {
-  0%, 100% { box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.3), 0 4px 14px rgba(220, 38, 38, 0.35); }
-  50% { box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2), 0 4px 20px rgba(220, 38, 38, 0.5); }
 }
 
 .mobile-menu-btn {
   display: none;
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--academic-border);
-  border-radius: 8px;
-  background: #fff;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
   cursor: pointer;
   align-items: center;
   justify-content: center;
+  color: #64748b;
 }
 
 .admin-content {
   flex: 1;
   min-height: 0;
-  padding: 16px;
   overflow: auto;
-  background: #eef0f3;
-  box-sizing: border-box;
+  background: #fff;
 }
 
 .sidebar-overlay {
@@ -464,8 +450,8 @@ onMounted(loadPauseState)
     left: 0;
     top: 0;
     transform: translateX(-100%);
-    width: 240px !important;
-    min-width: 240px !important;
+    width: 220px !important;
+    min-width: 220px !important;
   }
 
   .admin-sidebar.mobile-open {
@@ -483,7 +469,7 @@ onMounted(loadPauseState)
     display: block;
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.35);
+    background: rgba(15, 23, 42, 0.24);
     z-index: 40;
   }
 
@@ -491,13 +477,16 @@ onMounted(loadPauseState)
     display: inline-flex;
   }
 
-  .header-center {
-    max-width: none;
-    flex: 1;
+  .global-search {
+    width: 140px;
   }
 
-  .emergency-btn span {
+  .pause-label {
     display: none;
+  }
+
+  .admin-page-header {
+    padding: 1rem 1.25rem;
   }
 }
 </style>

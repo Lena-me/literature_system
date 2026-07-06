@@ -41,10 +41,10 @@ const monitorSummary = computed(() => monitor.value?.summary || monitor.value ||
 const monitorCards = computed(() => {
   const m = monitorSummary.value || {}
   return [
-    { key: 'calls', label: '今日总调用次数', value: m.total_calls ?? 0, sub: 'LLM 真实调用', tone: 'blue' },
-    { key: 'tokens', label: 'Token 消耗总计', value: formatTokens(m.total_tokens), sub: '今日累计', tone: 'purple' },
-    { key: 'success', label: '平均成功率', value: `${m.success_rate ?? 100}%`, sub: `成功 ${m.success_count ?? 0} 次`, tone: m.success_rate >= 95 ? 'green' : m.success_rate >= 80 ? 'amber' : 'red' },
-    { key: 'p95', label: 'P95 延迟健康度', value: m.p95_latency_ms ? `${m.p95_latency_ms} ms` : '-', sub: m.p95_label || '暂无数据', tone: m.p95_health || 'gray' },
+    { key: 'calls', label: '今日总调用次数', value: m.total_calls ?? 0, sub: 'LLM 真实调用' },
+    { key: 'tokens', label: 'Token 消耗总计', value: formatTokens(m.total_tokens), sub: '今日累计' },
+    { key: 'success', label: '平均成功率', value: `${m.success_rate ?? 100}%`, sub: `成功 ${m.success_count ?? 0} 次` },
+    { key: 'p95', label: 'P95 延迟', value: m.p95_latency_ms ? `${m.p95_latency_ms} ms` : '—', sub: m.p95_label || '暂无数据' },
   ]
 })
 
@@ -311,16 +311,9 @@ function renderDetailChart() {
         left: 'center',
         itemWidth: 12,
         itemHeight: 8,
-        itemGap: 16,
         textStyle: { fontSize: 11, color: '#64748b' },
       },
-      grid: {
-        top: 24,
-        right: 16,
-        bottom: 40,
-        left: 16,
-        containLabel: true,
-      },
+      grid: { top: 24, right: 16, bottom: 40, left: 16, containLabel: true },
       xAxis: {
         type: 'category',
         boundaryGap: true,
@@ -328,7 +321,6 @@ function renderDetailChart() {
           const p = d.date.split('-')
           return `${p[1]}/${p[2]}`
         }),
-        axisTick: { alignWithLabel: true },
         axisLabel: { fontSize: 11, color: '#64748b' },
         axisLine: { lineStyle: { color: '#e2e8f0' } },
       },
@@ -339,17 +331,13 @@ function renderDetailChart() {
           minInterval: 1,
           nameTextStyle: { fontSize: 11, color: '#64748b' },
           axisLabel: { fontSize: 11, color: '#64748b' },
-          splitLine: { lineStyle: { type: 'dashed', color: '#e5e7eb' } },
+          splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } },
         },
         {
           type: 'value',
           name: 'Token',
-          nameTextStyle: { fontSize: 11, color: '#64748b', padding: [0, 0, 0, 8] },
-          axisLabel: {
-            fontSize: 11,
-            color: '#64748b',
-            formatter: (v: number) => formatChartAxisTokens(v),
-          },
+          nameTextStyle: { fontSize: 11, color: '#64748b' },
+          axisLabel: { fontSize: 11, color: '#64748b', formatter: (v: number) => formatChartAxisTokens(v) },
           splitLine: { show: false },
         },
       ],
@@ -358,8 +346,8 @@ function renderDetailChart() {
           name: '调用次数',
           type: 'bar',
           data: trend.map((d: any) => d.calls),
-          barMaxWidth: 32,
-          itemStyle: { color: '#3b82f6', borderRadius: [4, 4, 0, 0] },
+          barMaxWidth: 28,
+          itemStyle: { color: '#0f172a', borderRadius: [2, 2, 0, 0] },
         },
         {
           name: 'Token',
@@ -368,9 +356,9 @@ function renderDetailChart() {
           smooth: true,
           data: trend.map((d: any) => d.tokens),
           symbol: 'circle',
-          symbolSize: 6,
-          lineStyle: { width: 2, color: '#8b5cf6' },
-          itemStyle: { color: '#8b5cf6' },
+          symbolSize: 5,
+          lineStyle: { width: 2, color: '#64748b' },
+          itemStyle: { color: '#64748b' },
         },
       ],
     },
@@ -401,8 +389,7 @@ function startDrawerResize(e: MouseEvent) {
   document.body.style.cursor = 'col-resize'
 
   const onMove = (ev: MouseEvent) => {
-    const next = clampDrawerWidth(startWidth + (startX - ev.clientX))
-    drawerWidth.value = next
+    drawerWidth.value = clampDrawerWidth(startWidth + (startX - ev.clientX))
     detailChart?.resize()
   }
   const onUp = () => {
@@ -441,98 +428,73 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="model-page">
-    <!-- Monitor -->
-    <section class="monitor-section soft-card">
-      <div class="section-head">
-        <div>
-          <h2 class="section-title">大模型运行监控</h2>
-          <p class="section-desc">今日实时调用指标 · {{ monitor.date || '—' }}</p>
-        </div>
-        <el-button size="small" :loading="monitorLoading" @click="loadMonitor">刷新监控</el-button>
-      </div>
-
-      <div v-if="monitorLoading" class="monitor-grid">
-        <div v-for="i in 4" :key="i" class="monitor-card skeleton">
-          <div class="sk-bar" /><div class="sk-bar lg" />
-        </div>
-      </div>
-
-      <div v-else class="monitor-grid">
-        <div
-          v-for="card in monitorCards"
-          :key="card.key"
-          class="monitor-card"
-          :class="card.tone"
-        >
-          <span class="monitor-label">{{ card.label }}</span>
-          <span class="monitor-value">{{ card.value }}</span>
-          <span class="monitor-sub">{{ card.sub }}</span>
-        </div>
+  <div class="admin-page">
+    <section v-if="monitorLoading" class="admin-metrics-bar">
+      <div v-for="i in 4" :key="i" class="admin-metric">
+        <div class="sk-line" /><div class="sk-line lg" />
       </div>
     </section>
 
-    <!-- Config -->
-    <section class="config-section soft-card">
-      <div class="section-head">
-        <div>
-          <h2 class="section-title">模型列表与配置</h2>
-          <p class="section-desc">按业务场景配置 LLM 主备路由 · 向量 / 重排 / 解析</p>
+    <section v-else class="admin-metrics-bar">
+      <template v-for="(card, idx) in monitorCards" :key="card.key">
+        <div v-if="idx > 0" class="admin-metric-divider" />
+        <div class="admin-metric">
+          <span class="admin-metric-label">{{ card.label }}</span>
+          <span class="admin-metric-value">{{ card.value }}</span>
+          <span class="admin-metric-sub">{{ card.sub }}<template v-if="idx === 0 && monitor.date"> · {{ monitor.date }}</template></span>
         </div>
-        <div class="head-actions">
-          <el-button size="small" @click="loadConfig">刷新</el-button>
-          <el-button type="primary" size="small" @click="openCreate">新增模型</el-button>
-        </div>
-      </div>
+      </template>
+    </section>
 
-      <el-table :data="rows" size="small" height="calc(100vh - 420px)" :row-class-name="getRowClassName">
-        <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column prop="model_type" label="类型" width="110">
+    <div class="admin-toolbar">
+      <div class="admin-toolbar-left">
+        <span class="toolbar-title">模型列表与配置</span>
+        <span class="admin-toolbar-meta">按业务场景配置 LLM 主备路由</span>
+      </div>
+      <div class="admin-toolbar-right">
+        <el-button text :loading="monitorLoading" @click="loadMonitor">刷新监控</el-button>
+        <el-button text @click="loadConfig">刷新列表</el-button>
+        <el-button type="primary" plain size="small" @click="openCreate">新增模型</el-button>
+      </div>
+    </div>
+
+    <div class="admin-el-table">
+      <el-table :data="rows" size="default" height="calc(100vh - 280px)" :row-class-name="getRowClassName">
+        <el-table-column prop="id" label="ID" width="64" />
+        <el-table-column prop="model_type" label="类型" width="88">
           <template #default="{ row }">
-            <el-tag
-              :type="row.model_type === 'llm' ? 'danger' : row.model_type === 'vector' ? 'primary' : row.model_type === 'reranker' ? 'warning' : 'info'"
-              size="small"
-            >
-              {{ { llm: 'LLM', vector: '向量', reranker: '重排', parse: '解析' }[row.model_type as string] || row.model_type }}
-            </el-tag>
+            <span class="type-text">{{ typeLabel[row.model_type] || row.model_type }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="model_name" label="模型名称" min-width="220">
           <template #default="{ row }">
             <div class="model-name-cell">
               <span class="model-name-text">{{ row.model_name }}</span>
-              <div v-if="isLlmRow(row)" class="model-badges">
-                <span v-if="row.scenario_name" class="badge badge-scenario">{{ row.scenario_name }}</span>
-                <span
-                  class="badge"
-                  :class="row.is_primary ? 'badge-primary' : 'badge-fallback'"
-                >
-                  {{ row.is_primary ? 'Primary 主干' : 'Fallback 备用' }}
+              <div v-if="isLlmRow(row)" class="model-meta">
+                <span v-if="row.scenario_name" class="meta-tag">{{ row.scenario_name }}</span>
+                <span class="meta-tag" :class="row.is_primary ? 'is-primary' : 'is-fallback'">
+                  {{ row.is_primary ? 'Primary' : 'Fallback' }}
                 </span>
               </div>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="version" label="版本" width="90" />
+        <el-table-column prop="version" label="版本" width="88" />
         <el-table-column prop="api_endpoint" label="调用地址" min-width="140" show-overflow-tooltip />
         <el-table-column label="今日调用" width="88" align="right">
-          <template #default="{ row }">
-            {{ row.today_stats?.calls ?? 0 }}
-          </template>
+          <template #default="{ row }">{{ row.today_stats?.calls ?? 0 }}</template>
         </el-table-column>
-        <el-table-column label="Token" width="72" align="right">
-          <template #default="{ row }">
-            {{ formatTokens(row.today_stats?.tokens) }}
-          </template>
+        <el-table-column label="Token" width="80" align="right">
+          <template #default="{ row }">{{ formatTokens(row.today_stats?.tokens) }}</template>
         </el-table-column>
-        <el-table-column label="成功率" width="72" align="right">
+        <el-table-column label="成功率" width="80" align="right">
           <template #default="{ row }">
             {{ row.today_stats?.calls ? `${row.today_stats.success_rate}%` : '—' }}
           </template>
         </el-table-column>
-        <el-table-column label="API Key" width="72">
+        <el-table-column label="API Key" width="80">
           <template #default="{ row }">
-            <span v-if="row.model_type === 'llm'" class="key-mask">
+            <span v-if="row.model_type === 'llm'" class="key-text">
               {{ row.config?.has_api_key ? '已配置' : '—' }}
             </span>
             <span v-else class="muted">—</span>
@@ -550,7 +512,7 @@ onUnmounted(() => {
           </template>
         </el-table-column>
       </el-table>
-    </section>
+    </div>
 
     <el-dialog v-model="visible" :title="editingId ? '编辑模型配置' : '新增模型配置'" width="580px">
       <el-form label-position="top" :model="form">
@@ -588,7 +550,7 @@ onUnmounted(() => {
               <el-radio :label="true">作为主干模型 (Primary)</el-radio>
               <el-radio :label="false">作为降级备用 (Fallback)</el-radio>
             </el-radio-group>
-            <p v-if="form.is_primary" class="form-hint">注意：保存后将自动替换该场景下现有的主模型</p>
+            <p v-if="form.is_primary" class="form-hint">保存后将自动替换该场景下现有的主模型</p>
           </el-form-item>
           <el-form-item label="API Key">
             <el-input
@@ -635,59 +597,55 @@ onUnmounted(() => {
       @opened="onDrawerOpened"
       @closed="detail = null"
     >
-      <div
-        class="drawer-resize-handle"
-        title="拖拽调整宽度"
-        @mousedown="startDrawerResize"
-      />
+      <div class="drawer-resize-handle" title="拖拽调整宽度" @mousedown="startDrawerResize" />
       <div v-loading="detailLoading" class="detail-drawer">
         <template v-if="detail">
           <section class="detail-block">
             <h3 class="detail-heading">基础信息</h3>
-            <el-descriptions :column="1" border size="small">
-              <el-descriptions-item label="ID">{{ detail.model_id }}</el-descriptions-item>
-              <el-descriptions-item label="类型">{{ typeLabel[detail.model_type] || detail.model_type }}</el-descriptions-item>
-              <el-descriptions-item v-if="detail.model_type === 'llm'" label="应用场景">{{ detail.scenario_name || detail.scenario || '—' }}</el-descriptions-item>
-              <el-descriptions-item v-if="detail.model_type === 'llm'" label="路由角色">{{ detail.is_primary ? 'Primary 主干' : 'Fallback 备用' }}</el-descriptions-item>
-              <el-descriptions-item label="版本">{{ detail.version || '—' }}</el-descriptions-item>
-              <el-descriptions-item label="调用地址">{{ detail.api_endpoint || '—' }}</el-descriptions-item>
-              <el-descriptions-item label="状态">
-                <el-tag :type="detail.is_active ? 'success' : 'info'" size="small">{{ detail.is_active ? '已启用' : '未启用' }}</el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="更新时间">{{ detail.updated_at?.replace('T', ' ').slice(0, 19) || '—' }}</el-descriptions-item>
-            </el-descriptions>
+            <dl class="detail-dl">
+              <div><dt>ID</dt><dd>{{ detail.model_id }}</dd></div>
+              <div><dt>类型</dt><dd>{{ typeLabel[detail.model_type] || detail.model_type }}</dd></div>
+              <div v-if="detail.model_type === 'llm'"><dt>应用场景</dt><dd>{{ detail.scenario_name || detail.scenario || '—' }}</dd></div>
+              <div v-if="detail.model_type === 'llm'"><dt>路由角色</dt><dd>{{ detail.is_primary ? 'Primary 主干' : 'Fallback 备用' }}</dd></div>
+              <div><dt>版本</dt><dd>{{ detail.version || '—' }}</dd></div>
+              <div><dt>调用地址</dt><dd class="mono">{{ detail.api_endpoint || '—' }}</dd></div>
+              <div><dt>状态</dt><dd>{{ detail.is_active ? '已启用' : '未启用' }}</dd></div>
+              <div><dt>更新时间</dt><dd>{{ detail.updated_at?.replace('T', ' ').slice(0, 19) || '—' }}</dd></div>
+            </dl>
           </section>
 
           <section class="detail-block">
             <h3 class="detail-heading">配置参数</h3>
-            <el-descriptions :column="1" border size="small">
-              <el-descriptions-item v-for="item in configDetailItems(detail)" :key="item.label" :label="item.label">
-                {{ item.value }}
-              </el-descriptions-item>
-            </el-descriptions>
+            <dl class="detail-dl">
+              <div v-for="item in configDetailItems(detail)" :key="item.label">
+                <dt>{{ item.label }}</dt><dd>{{ item.value }}</dd>
+              </div>
+            </dl>
           </section>
 
           <section class="detail-block">
             <h3 class="detail-heading">运行统计</h3>
-            <div class="detail-stats-grid">
-              <div class="detail-stat">
-                <span class="detail-stat-label">今日调用</span>
-                <span class="detail-stat-value">{{ detail.today?.calls ?? 0 }}</span>
+            <div class="detail-metrics">
+              <div class="detail-metric">
+                <span class="admin-metric-label">今日调用</span>
+                <span class="detail-metric-value">{{ detail.today?.calls ?? 0 }}</span>
               </div>
-              <div class="detail-stat">
-                <span class="detail-stat-label">今日 Token</span>
-                <span class="detail-stat-value">{{ formatTokens(detail.today?.tokens) }}</span>
+              <div class="detail-metric">
+                <span class="admin-metric-label">今日 Token</span>
+                <span class="detail-metric-value">{{ formatTokens(detail.today?.tokens) }}</span>
               </div>
-              <div class="detail-stat">
-                <span class="detail-stat-label">今日成功率</span>
-                <span class="detail-stat-value">{{ detail.today?.success_rate ?? 100 }}%</span>
+              <div class="detail-metric">
+                <span class="admin-metric-label">成功率</span>
+                <span class="detail-metric-value">{{ detail.today?.success_rate ?? 100 }}%</span>
               </div>
-              <div class="detail-stat">
-                <span class="detail-stat-label">平均延迟</span>
-                <span class="detail-stat-value">{{ detail.today?.avg_latency_ms ? `${detail.today.avg_latency_ms} ms` : '—' }}</span>
+              <div class="detail-metric">
+                <span class="admin-metric-label">平均延迟</span>
+                <span class="detail-metric-value">{{ detail.today?.avg_latency_ms ? `${detail.today.avg_latency_ms} ms` : '—' }}</span>
               </div>
             </div>
-            <p class="detail-period">近 7 日累计：{{ detail.period_7d?.total_calls ?? 0 }} 次 · {{ formatTokens(detail.period_7d?.total_tokens) }} Token · 成功率 {{ detail.period_7d?.success_rate ?? 100 }}%</p>
+            <p class="detail-period">
+              近 7 日：{{ detail.period_7d?.total_calls ?? 0 }} 次 · {{ formatTokens(detail.period_7d?.total_tokens) }} Token · 成功率 {{ detail.period_7d?.success_rate ?? 100 }}%
+            </p>
             <div class="detail-chart-wrap">
               <div v-if="!detailHasTrend" class="detail-chart-empty">近 7 日暂无调用趋势数据</div>
               <div v-show="detailHasTrend" ref="detailChartEl" class="detail-chart" />
@@ -700,144 +658,72 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.model-page {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.toolbar-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #0f172a;
 }
 
-.monitor-section,
-.config-section {
-  padding: 14px 16px;
+.type-text {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
-
-.section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 12px;
-  gap: 12px;
-}
-
-.section-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--academic-text-main);
-}
-
-.section-desc {
-  margin: 2px 0 0;
-  font-size: 11px;
-  color: var(--academic-text-muted);
-}
-
-.head-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.monitor-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.monitor-card {
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--academic-canvas);
-  border: 1px solid var(--academic-border);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.monitor-card.blue { border-left: 3px solid #3b82f6; }
-.monitor-card.purple { border-left: 3px solid #8b5cf6; }
-.monitor-card.green { border-left: 3px solid #10b981; }
-.monitor-card.amber { border-left: 3px solid #f59e0b; }
-.monitor-card.red { border-left: 3px solid #ef4444; }
-.monitor-card.gray { border-left: 3px solid #9ca3af; }
-
-.monitor-label {
-  font-size: 11px;
-  color: var(--academic-text-muted);
-}
-
-.monitor-value {
-  font-size: 22px;
-  font-weight: 800;
-  color: var(--academic-text-main);
-  line-height: 1.2;
-}
-
-.monitor-sub {
-  font-size: 10px;
-  color: var(--academic-text-muted);
-}
-
-.muted { color: var(--academic-text-muted); margin-left: 4px; }
 
 .model-name-cell {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 2px 0;
+  gap: 0.25rem;
+  padding: 0.125rem 0;
 }
 
 .model-name-text {
   font-weight: 600;
-  color: var(--academic-text-main);
+  color: #0f172a;
 }
 
-.model-badges {
+.model-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 0.5rem;
 }
 
-.badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 10px;
+.meta-tag {
+  font-size: 0.6875rem;
   font-weight: 600;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-
-.badge-scenario {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-.badge-primary {
-  background: #dcfce7;
-  color: #15803d;
-}
-
-.badge-fallback {
-  background: #f1f5f9;
   color: #64748b;
+  letter-spacing: 0.02em;
+}
+
+.meta-tag.is-primary {
+  color: #059669;
+}
+
+.muted,
+.key-text {
+  font-size: 0.75rem;
+  color: #94a3b8;
 }
 
 .form-hint {
-  margin: 8px 0 0;
-  font-size: 11px;
-  color: #b45309;
+  margin: 0.5rem 0 0;
+  font-size: 0.6875rem;
+  color: #d97706;
 }
 
 .role-radio-group {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
+  gap: 0.5rem;
 }
 
-.detail-drawer { padding: 0 4px 16px; min-height: 200px; }
+.detail-drawer {
+  padding: 0 0.25rem 1rem;
+  min-height: 200px;
+}
 
 .model-detail-drawer :deep(.el-drawer__body) {
   position: relative;
@@ -857,7 +743,6 @@ onUnmounted(() => {
   margin-left: -4px;
   cursor: col-resize;
   z-index: 20;
-  touch-action: none;
 }
 
 .drawer-resize-handle::after {
@@ -868,111 +753,136 @@ onUnmounted(() => {
   transform: translateY(-50%);
   width: 2px;
   height: 48px;
-  border-radius: 2px;
-  background: #cbd5e1;
-  transition: background 0.15s, height 0.15s;
+  background: #e2e8f0;
 }
 
 .drawer-resize-handle:hover::after,
 .model-detail-drawer.is-resizing .drawer-resize-handle::after {
-  background: #3b82f6;
-  height: 72px;
+  background: #0f172a;
 }
 
-.detail-block { margin-bottom: 18px; }
+.detail-block {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.detail-block:last-child {
+  border-bottom: none;
+}
 
 .detail-heading {
-  margin: 0 0 8px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--academic-text-main);
+  margin: 0 0 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #0f172a;
 }
 
-.detail-stats-grid {
+.detail-dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.detail-dl div {
+  display: grid;
+  grid-template-columns: 6rem 1fr;
+  gap: 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.detail-dl dt {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.detail-dl dd {
+  margin: 0;
+  color: #334155;
+  word-break: break-all;
+}
+
+.detail-dl .mono {
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+
+.detail-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 1rem 1.5rem;
+  margin-bottom: 0.75rem;
 }
 
-.detail-stat {
-  padding: 10px 12px;
-  border: 1px solid var(--academic-border);
-  border-radius: 8px;
-  background: #f8fafc;
+.detail-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
-.detail-stat-label {
-  display: block;
-  font-size: 11px;
-  color: var(--academic-text-muted);
-}
-
-.detail-stat-value {
-  display: block;
-  margin-top: 2px;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--academic-text-main);
+.detail-metric-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #0f172a;
+  letter-spacing: -0.02em;
 }
 
 .detail-period {
-  margin: 0 0 10px;
-  font-size: 11px;
-  color: var(--academic-text-muted);
+  margin: 0 0 0.75rem;
+  font-size: 0.75rem;
+  color: #64748b;
 }
 
 .detail-chart-wrap {
-  border: 1px solid var(--academic-border);
-  border-radius: 10px;
-  background: #fafbfc;
-  padding: 10px 12px 6px;
-  overflow: hidden;
+  padding-top: 0.5rem;
 }
 
 .detail-chart {
   width: 100%;
-  height: 280px;
-  min-height: 280px;
+  height: 260px;
 }
 
 .detail-chart-empty {
-  height: 280px;
+  height: 160px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  color: var(--academic-text-muted);
-}
-
-.key-mask {
-  font-size: 11px;
-  color: var(--academic-text-muted);
+  font-size: 0.8125rem;
+  color: #94a3b8;
 }
 
 .api-key-input.is-masked :deep(.el-input__inner) {
   letter-spacing: 0.12em;
-  color: var(--academic-text-muted);
+  color: #64748b;
 }
 
-.w-full { width: 100%; }
-
-.disabled-row { opacity: 0.5; }
-
-:deep(.el-table) {
-  --el-table-header-bg-color: #f8f9fb;
+.w-full {
+  width: 100%;
 }
 
-.monitor-card.skeleton { animation: pulse 1.5s ease-in-out infinite; }
-.sk-bar { height: 10px; background: #e5e7eb; border-radius: 4px; margin-bottom: 8px; width: 60%; }
-.sk-bar.lg { height: 24px; width: 40%; }
+.disabled-row {
+  opacity: 0.45;
+}
+
+.sk-line {
+  height: 10px;
+  background: #e2e8f0;
+  margin-bottom: 0.5rem;
+  width: 50%;
+}
+
+.sk-line.lg {
+  height: 22px;
+  width: 35%;
+}
+
+.admin-metrics-bar:has(.sk-line) {
+  animation: pulse 1.5s ease-in-out infinite;
+}
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
-}
-
-@media (max-width: 960px) {
-  .monitor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 </style>
