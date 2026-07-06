@@ -116,7 +116,7 @@ class Settings(BaseSettings):
 
     # LLM
     llm_base_url: str
-    llm_api_key: str = 'sk-SGPOwrqL3jy6WvB6Y8SSI8N2Go8xBhmdRTGpTAXoEkUTEZ4p'
+    llm_api_key: str = ''
     llm_model: str = 'gpt-4o-mini'
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
