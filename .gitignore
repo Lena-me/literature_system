@@ -51,3 +51,5 @@ EOF
 /test_rag_simple.py
 /.env.gpu
 /.env.local
+docker_data/
+pip_cache/

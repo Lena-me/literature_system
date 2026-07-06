@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { authApi } from '@/api/auth'
+import { startHeartbeat } from '@/utils/heartbeat'
 import type { User } from '@/types/domain'
 
 export const useAuthStore = defineStore('auth', {
@@ -12,6 +13,7 @@ export const useAuthStore = defineStore('auth', {
         const res = await authApi.login(account, password)
         this.token = res.access_token; this.user = res.user
         localStorage.setItem('access_token', res.access_token)
+        startHeartbeat()
         return res.user
       } finally { this.loading = false }
     },

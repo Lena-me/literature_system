@@ -14,6 +14,7 @@ const user = auth.user!
 const paperCount = ref(0)
 const completedCount = ref(0)
 const learningOverview = ref<any>(null)
+const learningDuration = ref<any>(null)
 
 const showPhoneModal = ref(false)
 const showEmailModal = ref(false)
@@ -67,6 +68,10 @@ onMounted(async () => {
   try {
     learningOverview.value = await featuresApi.overview()
   } catch { /* ignore */ }
+
+  try {
+    learningDuration.value = await authApi.getAllLearningDuration()
+  } catch { /* ignore */ }
 })
 
 function logout() {
@@ -116,10 +121,10 @@ function logout() {
       </div>
     </div>
 
-    <div v-if="learningOverview" class="section">
+    <div v-if="learningOverview || learningDuration" class="section">
       <div class="overview-grid">
-        <div class="kv"><span>连续学习</span><b>{{ learningOverview.streak_days || 0 }} 天</b></div>
-        <div class="kv"><span>累计时长</span><b>{{ learningOverview.total_minutes || 0 }} 分钟</b></div>
+        <div class="kv"><span>连续学习</span><b>{{ learningOverview?.streak_days || 0 }} 天</b></div>
+        <div class="kv"><span>累计时长</span><b>{{ learningDuration?.total || learningOverview?.total_minutes || 0 }} 分钟</b></div>
       </div>
     </div>
 

@@ -296,6 +296,17 @@ class LearningRecord(Base):
     event_data: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
+class LearningDuration(Base):
+    __tablename__ = 'learning_duration'
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    record_date: Mapped[date] = mapped_column(Date, index=True)
+    duration_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    week_of_year: Mapped[str] = mapped_column(String(10), index=True)
+    month_of_year: Mapped[str] = mapped_column(String(7), index=True)
+    year: Mapped[int] = mapped_column(Integer, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
 class OperationStat(Base):
     __tablename__ = 'operation_stats'
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

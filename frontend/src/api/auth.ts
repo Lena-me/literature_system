@@ -52,5 +52,11 @@ export const authApi = {
   me: () => http.get<any, User>('/users/me'),
 
   // 更新用户信息
-  updateProfile: (payload: { username: string }) => http.put('/auth/profile', payload)
+  updateProfile: (payload: { username: string }) => http.put('/auth/profile', payload),
+
+  heartbeat: () => http.post('/users/heartbeat'),
+
+  getLearningDuration: (period: string = 'today') => http.get<any, { period: string; minutes: number }>(`/users/learning-duration?period=${period}`),
+
+  getAllLearningDuration: () => http.get<any, { today: number; week: number; month: number; year: number; total: number }>('/users/learning-duration/all'),
 }
