@@ -58,10 +58,8 @@ async function ask(q?: string) {
           })
         } else {
           patchAssistant({
-            streamStage: undefined,
-            streamFlow: undefined,
             content: (current?.content || '') + event.content,
-            reasoningExpanded: false,
+            reasoningExpanded: (current?.reasoning || '').trim() ? false : (current?.reasoningExpanded ?? false),
           })
         }
       }
@@ -124,12 +122,12 @@ defineExpose({ ask })
       </div>
       <div v-for="(m,i) in messages" :key="i" class="msg" :class="m.role">
         <div class="bubble">
-          <StreamProgress v-if="m.role === 'assistant' && m.streamStage && !m.content && !(m.reasoning || '').trim()" :stage="m.streamStage" :flow="m.streamFlow" />
+          <StreamProgress v-if="m.role === 'assistant' && m.streamStage && loading && i === messages.length - 1" :stage="m.streamStage" :flow="m.streamFlow" />
           <ThinkingBlock
             v-if="m.role === 'assistant' && (m.reasoning || '').trim()"
             :reasoning="m.reasoning"
             :expanded="m.reasoningExpanded ?? false"
-            :streaming="loading && i === messages.length - 1 && !m.content"
+            :streaming="loading && i === messages.length - 1 && !(m.content || '').trim()"
           />
           <MarkdownRenderer
             v-if="m.content"

@@ -13,7 +13,9 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: env.VITE_API_BASE_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
-          timeout: 60000
+          // QA 流式链路含检索 + 多轮 LLM，常超过 60s；过短会导致 ERR_INCOMPLETE_CHUNKED_ENCODING
+          timeout: 600_000,
+          proxyTimeout: 600_000,
         }
       }
     },

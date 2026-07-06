@@ -13,6 +13,7 @@ from app.agents.deps import get_deps, is_cancelled
 from app.agents.state import AgentIntent, AgentState, ChatTurn, StreamStage
 from app.core.config import get_settings
 from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
+from app.integrations.llm.runtime_config import get_llm_runtime_config
 from app.models import QAMessage, QASession, QASessionPaper
 from app.prompts.intent import (
     INTENT_CLASSIFY_SYSTEM,
@@ -465,7 +466,7 @@ async def generate_node(state: AgentState, config: RunnableConfig, writer: Strea
     answer_parts: list[str] = []
     try:
         async for channel, piece in deps.llm.stream_chat(
-            _build_llm_messages(state), temperature=get_settings().llm_temperature,
+            _build_llm_messages(state), temperature=get_llm_runtime_config(scenario='qa').temperature,
         ):
             if is_cancelled(deps, state):
                 deps.cancel_ctrl['cancelled'] = True
@@ -568,6 +569,9 @@ async def persist_node(state: AgentState, config: RunnableConfig, writer: Stream
             'type': 'done',
             'session_id': session_id,
             'message_id': assistant_msg.id,
+            'answer': content_to_save,
+            'reasoning': reasoning,
+            'sources': cited_sources,
             'artifacts': artifacts,
             'external_refs': external_refs,
         })

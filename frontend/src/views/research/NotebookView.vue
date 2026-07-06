@@ -2,10 +2,11 @@
 import { nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useNotebookStore } from '@/stores/notebook'
-import { papersApi } from '@/api/papers'
 import { ElMessage } from 'element-plus'
+import { useSessionPaperUpload } from '@/composables/useSessionPaperUpload'
 import type { RelatedVisual, Source } from '@/types/domain'
-import SourceBar from '@/components/notebook/SourceBar.vue'
+import ContextIsland from '@/components/notebook/ContextIsland.vue'
+import SessionTitleBar from '@/components/notebook/SessionTitleBar.vue'
 import MessageList from '@/components/notebook/MessageList.vue'
 import ChatInput from '@/components/notebook/ChatInput.vue'
 import PaperReader from '@/components/reader/PaperReader.vue'
@@ -14,8 +15,8 @@ import SuggestedQuestions from '@/components/notebook/SuggestedQuestions.vue'
 
 const route = useRoute()
 const notebook = useNotebookStore()
+const { uploadLocalFiles } = useSessionPaperUpload()
 
-const sourceBarRef = ref<InstanceType<typeof SourceBar> | null>(null)
 const readerRef = ref<InstanceType<typeof PaperReader> | null>(null)
 const readerPaper = ref<{ id: number; title: string } | null>(null)
 const pendingReaderNav = ref<{ source?: Source; visual?: RelatedVisual } | null>(null)
@@ -50,29 +51,11 @@ async function onDrop(e: DragEvent) {
   const files = e.dataTransfer?.files
   if (!files || files.length === 0) return
 
-  const uploadedIds: number[] = []
-  for (const file of Array.from(files)) {
-    if (file.type !== 'application/pdf') {
-      ElMessage.warning(`${file.name} 不是 PDF 文件，已跳过`)
-      continue
-    }
-    try {
-      const paper = await papersApi.upload(file)
-      uploadedIds.push(paper.id)
-      await notebook.addSources([paper.id])
-    } catch (e: any) {
-      const msg = e?.response?.data?.detail || e?.message || '上传失败'
-      ElMessage.error(`${file.name}: ${msg}`)
-    }
-  }
+  const uploadedIds = await uploadLocalFiles(files)
 
   if (uploadedIds.length > 0) {
     ElMessage.success(`已上传并挂载 ${uploadedIds.length} 篇文献`)
   }
-}
-
-function onChatInputOpenLibraryPicker() {
-  sourceBarRef.value?.openPicker()
 }
 
 function onChatInputFilesUploaded(_ids: number[]) {
@@ -179,24 +162,23 @@ onMounted(async () => {
     </div>
 
     <template v-else>
-      <div class="top-bar">
-        <SourceBar ref="sourceBarRef" @chip-click="onChipClick" />
-      </div>
-      <div class="chat-body">
-        <div v-if="notebook.isSwitchingSession" class="switch-loading">
-          <span class="loading-pulse"></span>
-          <span>加载对话中...</span>
+      <div class="chat-stage">
+        <div class="chat-body">
+          <div class="chat-header">
+            <SessionTitleBar />
+            <ContextIsland @paper-click="onChipClick" />
+          </div>
+          <div v-if="notebook.isSwitchingSession" class="switch-loading">
+            <span class="loading-pulse"></span>
+            <span>加载对话中...</span>
+          </div>
+          <template v-else>
+            <SuggestedQuestions />
+            <MessageList @source-click="onSourceClick" @visual-click="onVisualClick" />
+          </template>
         </div>
-        <template v-else>
-          <SuggestedQuestions />
-          <MessageList @source-click="onSourceClick" @visual-click="onVisualClick" />
-        </template>
+        <ChatInput class="chat-input-dock" @files-uploaded="onChatInputFilesUploaded" />
       </div>
-      <ChatInput
-        class="chat-input-fixed"
-        @open-library-picker="onChatInputOpenLibraryPicker"
-        @files-uploaded="onChatInputFilesUploaded"
-      />
     </template>
 
     <PaperReader
@@ -257,16 +239,35 @@ onMounted(async () => {
 .dnd-fade-enter-from,
 .dnd-fade-leave-to { opacity: 0; }
 
-.top-bar {
+.chat-stage {
+  flex: 1;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  border-bottom: 1px solid var(--academic-border);
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.top-bar :deep(.source-bar) {
+.chat-body {
   flex: 1;
-  border-bottom: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  position: relative;
+}
+
+.chat-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px 6px;
+  min-height: 36px;
+}
+
+.chat-input-dock {
+  flex-shrink: 0;
 }
 
 .welcome-screen {
@@ -299,16 +300,6 @@ onMounted(async () => {
   max-width: 380px;
   line-height: var(--line-academic);
 }
-
-.chat-body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  min-height: 0;
-}
-
-.chat-input-fixed { flex-shrink: 0; }
 
 .switch-loading {
   flex: 1;

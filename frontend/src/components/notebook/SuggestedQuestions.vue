@@ -72,8 +72,8 @@ function askQuestion(q: string) {
 
 <style scoped>
 .suggested-questions {
-  padding: 18px 24px 10px;
-  max-width: 780px;
+  padding: 0 24px 10px;
+  max-width: 800px;
   margin: 0 auto;
   width: 100%;
 }

@@ -169,18 +169,21 @@ function statusLabel(s: string | null | undefined): string {
   }
 }
 
-function parsedAuthors(row: any): string[] {
-  const val = row.authors
+function parseListField(val: unknown): string[] {
   if (!val) return []
-  if (Array.isArray(val)) return val.filter(Boolean)
+  if (Array.isArray(val)) return val.map(String).map(s => s.trim()).filter(Boolean)
   if (typeof val === 'string') {
     try {
       const arr = JSON.parse(val)
-      if (Array.isArray(arr)) return arr.filter(Boolean)
+      if (Array.isArray(arr)) return arr.map(String).map(s => s.trim()).filter(Boolean)
     } catch {}
-    return val.split(/[,;，；]/).map((s: string) => s.trim().replace(/^\[|\]$/g, '')).filter(Boolean)
+    return val.split(/[,;，；]/).map(s => s.trim()).filter(Boolean)
   }
   return []
+}
+
+function parsedAuthors(row: any): string[] {
+  return parseListField(row.authors)
 }
 
 const ALPHABET = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -261,6 +264,17 @@ const filteredPapers = computed(() => {
   return list
 })
 
+function buildUpdatePayload(formData: any) {
+  return {
+    title: formData.title,
+    doi: formData.doi,
+    journal_conf: formData.journal_conf,
+    publication_year: formData.publication_year,
+    notes: formData.notes,
+    category_id: formData.category_id,
+  }
+}
+
 // ── CRUD ──
 function edit(row: any) {
   form.value = { ...row }
@@ -270,7 +284,7 @@ function edit(row: any) {
 async function save() {
   loading.value = true
   try {
-    await papersApi.update(form.value.id, form.value)
+    await papersApi.update(form.value.id, buildUpdatePayload(form.value))
     editVisible.value = false
     await store.load()
   } finally {

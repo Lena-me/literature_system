@@ -1,34 +1,58 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import { useNotebookStore } from '@/stores/notebook'
-import { papersApi } from '@/api/papers'
-import { ElMessage } from 'element-plus'
+import PaperLibraryPicker from '@/components/notebook/PaperLibraryPicker.vue'
+import { useSessionPaperUpload } from '@/composables/useSessionPaperUpload'
+import { parseStatusClass, parseStatusLabel } from '@/utils/parseStatus'
 
 const notebook = useNotebookStore()
-const emit = defineEmits<{
-  openLibraryPicker: []
-  filesUploaded: [paperIds: number[]]
-}>()
+const emit = defineEmits<{ filesUploaded: [paperIds: number[]] }>()
 
+const pickerRef = ref<InstanceType<typeof PaperLibraryPicker> | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 const inputText = ref(notebook.draftInput)
 
-// —— + 按钮 Popover ——
+const { uploading, uploadChip, onFileInputChange } = useSessionPaperUpload()
+
 const showActionMenu = ref(false)
 const actionBtnRef = ref<HTMLButtonElement | null>(null)
+const popoverStyle = ref({ top: '0px', left: '0px' })
+const showMention = ref(false)
+const mentionQuery = ref('')
+const mentionPosition = ref({ top: 0, left: 0 })
+const filteredMentionPapers = ref<{ id: number; title: string }[]>([])
+
+watch(inputText, val => notebook.saveDraft(val))
+
+watch(
+  () => notebook.editingMessageId,
+  id => {
+    if (id) {
+      inputText.value = notebook.draftInput
+      nextTick(autoResize)
+    }
+  },
+)
+
+function updatePopoverPosition() {
+  const btn = actionBtnRef.value
+  if (!btn) return
+  const rect = btn.getBoundingClientRect()
+  popoverStyle.value = {
+    top: `${rect.top - 8}px`,
+    left: `${rect.left}px`,
+  }
+}
 
 function toggleActionMenu() {
   showActionMenu.value = !showActionMenu.value
+  if (showActionMenu.value) nextTick(updatePopoverPosition)
 }
 
 function closeActionMenu() {
   showActionMenu.value = false
 }
-
-// —— 文件上传 ——
-const fileInputRef = ref<HTMLInputElement | null>(null)
-const uploading = ref(false)
-const uploadChip = ref<{ filename: string; status: string } | null>(null)
 
 function triggerFileUpload() {
   closeActionMenu()
@@ -37,68 +61,14 @@ function triggerFileUpload() {
 
 function triggerLibraryPicker() {
   closeActionMenu()
-  emit('openLibraryPicker')
+  pickerRef.value?.openPicker()
 }
 
 async function handleFilesSelected(e: Event) {
-  const input = e.target as HTMLInputElement
-  const files = input.files
-  if (!files || files.length === 0) return
-
-  // ★ 捕获当前会话ID，防止上传期间用户切换会话导致挂载错误
-  const targetSessionId = notebook.activeSessionId
-  if (!targetSessionId) {
-    ElMessage.warning('请先创建或选择一个会话')
-    input.value = ''
-    return
-  }
-
-  const uploadedIds: number[] = []
-  for (const file of Array.from(files)) {
-    uploading.value = true
-    uploadChip.value = { filename: file.name, status: '上传中...' }
-    try {
-      const paper = await papersApi.upload(file)
-      uploadedIds.push(paper.id)
-      uploadChip.value = { filename: file.name, status: '解析中...' }
-      // 添加到目标会话（使用捕获的 sessionId，而非当前活跃会话）
-      await notebook.addSources([paper.id], targetSessionId)
-    } catch (e: any) {
-      const msg = e?.response?.data?.detail || e?.message || '上传失败'
-      ElMessage.error(`${file.name}: ${msg}`)
-    }
-  }
-
-  uploading.value = false
-  uploadChip.value = null
-  input.value = '' // 清空 input 以便重复选同一文件
-
-  if (uploadedIds.length > 0) {
-    emit('filesUploaded', uploadedIds)
-    ElMessage.success(`已上传并挂载 ${uploadedIds.length} 篇文献`)
-  }
+  const uploadedIds = await onFileInputChange(e)
+  if (uploadedIds.length > 0) emit('filesUploaded', uploadedIds)
 }
 
-// —— @ 提及状态 ——
-const showMention = ref(false)
-const mentionQuery = ref('')
-const mentionPosition = ref({ top: 0, left: 0 })
-const filteredMentionPapers = ref<{ id: number; title: string }[]>([])
-
-// 同步草稿
-watch(inputText, (val) => notebook.saveDraft(val))
-
-watch(
-  () => notebook.editingMessageId,
-  (id) => {
-    if (id) {
-      inputText.value = notebook.draftInput
-      nextTick(autoResize)
-    }
-  },
-)
-
-// 检测 @ 输入
 function onInput(e: Event) {
   const el = e.target as HTMLTextAreaElement
   const text = el.value
@@ -111,7 +81,7 @@ function onInput(e: Event) {
     const lines = textBeforeCursor.split('\n')
     const currentLine = lines[lines.length - 1] || ''
     const charWidth = 8
-    const left = Math.min((currentLine.length) * charWidth + 20, 300)
+    const left = Math.min(currentLine.length * charWidth + 20, 300)
     mentionPosition.value = { top: -180, left }
     showMention.value = true
 
@@ -125,7 +95,6 @@ function onInput(e: Event) {
   }
 }
 
-// 选中 @ 文献
 function selectMention(paperId: number) {
   const el = textareaRef.value
   if (!el) return
@@ -141,7 +110,6 @@ function selectMention(paperId: number) {
   })
 }
 
-// 发送
 async function send() {
   const text = inputText.value.trim()
   if (!text || notebook.isStreaming) return
@@ -161,9 +129,7 @@ async function send() {
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
-    if (!showMention.value && !showActionMenu.value) {
-      send()
-    }
+    if (!showMention.value && !showActionMenu.value) send()
   }
 }
 
@@ -171,15 +137,12 @@ function autoResize() {
   const el = textareaRef.value
   if (!el) return
   el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+  el.style.height = `${Math.min(el.scrollHeight, 160)}px`
 }
 
-// 点击外部关闭 popover
 function onBlurPopover() {
   setTimeout(() => {
-    if (!actionBtnRef.value?.matches(':focus-within')) {
-      showActionMenu.value = false
-    }
+    if (!actionBtnRef.value?.matches(':focus-within')) showActionMenu.value = false
   }, 150)
 }
 
@@ -187,130 +150,163 @@ function cancelEdit() {
   notebook.cancelEditMessage()
   inputText.value = ''
 }
+
+function removeAttachment(paperId: number) {
+  notebook.removeSource(paperId)
+}
 </script>
 
 <template>
-  <div class="chat-input-bar">
+  <div class="input-dock">
     <div v-if="notebook.editingMessageId" class="edit-banner">
       <span>正在编辑消息，发送后将替换该条及之后的对话</span>
       <button type="button" @click="cancelEdit">取消</button>
     </div>
 
-    <!-- 解析状态 Chip -->
-    <Transition name="chip-fade">
-      <div v-if="uploadChip" class="upload-status-chip">
-        <span class="chip-spinner" />
-        <span>{{ uploadChip.filename }}</span>
-        <span class="chip-tag">{{ uploadChip.status }}</span>
-      </div>
-    </Transition>
+    <div class="dock-shell">
+      <!-- 附件胶囊区：仅展示已挂载文献 -->
+      <div v-if="notebook.activeSources.length || uploadChip" class="attachment-strip">
+        <div class="attachment-scroll">
+          <Transition name="chip-fade">
+            <span v-if="uploadChip" class="attach-pill upload-pill">
+              <span class="chip-spinner" />
+              <span class="pill-text">{{ uploadChip.filename }}</span>
+            </span>
+          </Transition>
 
-    <div class="input-wrapper">
-      <!-- @ 提及弹出菜单 -->
-      <Transition name="mention-fade">
-        <div v-if="showMention && filteredMentionPapers.length" class="mention-menu" :style="{ bottom: '100%', left: mentionPosition.left + 'px' }">
-          <div class="mention-header">选择要 @ 的文献：</div>
-          <div
-            v-for="paper in filteredMentionPapers"
+          <span
+            v-for="paper in notebook.activeSources"
             :key="paper.id"
-            class="mention-item"
-            @click="selectMention(paper.id)"
+            class="attach-pill"
+            :title="`${paper.title || paper.original_filename} · ${parseStatusLabel(paper.parse_status)}`"
           >
-            📄 {{ paper.title }}
+            <span
+              class="status-dot"
+              :class="parseStatusClass(paper.parse_status)"
+              :title="parseStatusLabel(paper.parse_status)"
+            />
+            <span class="pill-text">{{ paper.title || paper.original_filename }}</span>
+            <button
+              type="button"
+              class="pill-remove"
+              title="移出会话"
+              @click="removeAttachment(paper.id)"
+            >
+              ×
+            </button>
+          </span>
+        </div>
+      </div>
+
+      <div class="input-row">
+        <Transition name="mention-fade">
+          <div
+            v-if="showMention && filteredMentionPapers.length"
+            class="mention-menu"
+            :style="{ bottom: '100%', left: mentionPosition.left + 'px' }"
+          >
+            <div class="mention-header">选择要 @ 的文献：</div>
+            <div
+              v-for="paper in filteredMentionPapers"
+              :key="paper.id"
+              class="mention-item"
+              @click="selectMention(paper.id)"
+            >
+              📄 {{ paper.title }}
+            </div>
           </div>
-        </div>
-      </Transition>
+        </Transition>
 
-      <!-- Action Popover 菜单 -->
-      <Transition name="popover-fade">
-        <div v-if="showActionMenu" class="action-popover" @mouseleave="closeActionMenu">
-          <button class="action-item" @click="triggerFileUpload">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            <span>上传本地文献</span>
-          </button>
-          <button class="action-item" @click="triggerLibraryPicker">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-            <span>从文献库选择</span>
-          </button>
-        </div>
-      </Transition>
+        <button
+          ref="actionBtnRef"
+          type="button"
+          class="plus-btn"
+          title="添加文献"
+          @click="toggleActionMenu"
+          @blur="onBlurPopover"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
 
-      <!-- + 按钮 -->
-      <button
-        ref="actionBtnRef"
-        class="plus-btn"
-        @click="toggleActionMenu"
-        @blur="onBlurPopover"
-        title="添加文献"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-      </button>
+        <Teleport to="body">
+          <Transition name="popover-fade">
+            <div
+              v-if="showActionMenu"
+              class="action-popover"
+              :style="popoverStyle"
+              @mouseleave="closeActionMenu"
+            >
+              <button type="button" class="action-item" :disabled="uploading" @mousedown.prevent @click="triggerFileUpload">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <span>上传本地文献</span>
+              </button>
+              <button type="button" class="action-item" @mousedown.prevent @click="triggerLibraryPicker">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                <span>从文献库选择</span>
+              </button>
+            </div>
+          </Transition>
+        </Teleport>
 
-      <!-- 隐藏文件输入 -->
-      <input
-        ref="fileInputRef"
-        type="file"
-        hidden
-        accept=".pdf"
-        multiple
-        @change="handleFilesSelected"
-      />
+        <input
+          ref="fileInputRef"
+          type="file"
+          hidden
+          accept=".pdf"
+          multiple
+          @change="handleFilesSelected"
+        />
 
-      <!-- 输入框 -->
-      <textarea
-        ref="textareaRef"
-        v-model="inputText"
-        class="chat-textarea"
-        placeholder="输入你的科研问题... (Shift+Enter 换行，输入 @ 提及特定文献)"
-        :rows="2"
-        @input="autoResize(); onInput($event)"
-        @keydown="onKeydown"
-      />
+        <textarea
+          ref="textareaRef"
+          v-model="inputText"
+          class="chat-textarea"
+          placeholder="输入消息，或使用 @ 引用知识库已有文献"
+          rows="1"
+          @input="autoResize(); onInput($event)"
+          @keydown="onKeydown"
+        />
 
-      <!-- 停止 / 发送 -->
-      <button
-        v-if="notebook.isStreaming"
-        class="stop-btn"
-        title="停止生成"
-        @click="notebook.stopStreaming()"
-      >
-        ■
-      </button>
-      <button
-        v-else
-        class="send-btn"
-        :class="{ loading: uploading }"
-        :disabled="!inputText.trim() || uploading"
-        @click="send"
-      >
-        <span class="send-arrow">↑</span>
-      </button>
+        <button
+          v-if="notebook.isStreaming"
+          type="button"
+          class="stop-btn"
+          title="停止生成"
+          @click="notebook.stopStreaming()"
+        >
+          ■
+        </button>
+        <button
+          v-else
+          type="button"
+          class="send-btn"
+          :class="{ loading: uploading }"
+          :disabled="!inputText.trim() || uploading"
+          @click="send"
+        >
+          <span class="send-arrow">↑</span>
+        </button>
+      </div>
     </div>
 
-    <div class="hint-text">
-      {{ notebook.activeSources.length > 0
-        ? `基于 ${notebook.activeSources.length} 篇文献回答 · 输入 @ 针对特定文献提问`
-        : '直接对话模式 · 点击 ⊕ 上传文献获得更精准回答'
-      }}
-    </div>
+    <PaperLibraryPicker ref="pickerRef" />
   </div>
 </template>
 
 <style scoped>
-.chat-input-bar {
-  padding: 14px 20px 16px;
-  background: var(--academic-panel);
-  border-top: 1px solid var(--academic-border);
+.input-dock {
   flex-shrink: 0;
+  padding: 12px 20px 20px;
+  background: transparent;
 }
 
 .edit-banner {
-  max-width: 780px;
-  margin: 0 auto 8px;
+  max-width: 820px;
+  margin: 0 auto 10px;
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: 12px;
   background: #fffbeb;
   border: 1px solid #fde68a;
   color: #92400e;
@@ -330,19 +326,8 @@ function cancelEdit() {
   flex-shrink: 0;
 }
 
-/* ===== 解析状态 Chip ===== */
 .upload-status-chip {
-  max-width: 780px;
-  margin: 0 auto 8px;
-  padding: 8px 16px;
-  border-radius: 20px;
-  background: var(--academic-primary-light);
-  border: 1px solid rgba(37, 99, 235, 0.2);
-  font-size: 13px;
-  color: var(--academic-primary);
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: none;
 }
 
 .chip-spinner {
@@ -363,42 +348,134 @@ function cancelEdit() {
   font-weight: 600;
 }
 
-.chip-fade-enter-active,
-.chip-fade-leave-active {
-  transition: all 0.25s ease;
-}
-
-.chip-fade-enter-from,
-.chip-fade-leave-to {
-  opacity: 0;
-  transform: translateY(-8px);
-}
-
-/* ===== 输入包裹 ===== */
-.input-wrapper {
-  max-width: 780px;
+.dock-shell {
+  max-width: 820px;
   margin: 0 auto;
+  border-radius: 20px;
+  border: 1px solid var(--academic-border);
+  background: var(--academic-panel);
+  box-shadow: 0 8px 32px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.04);
+  overflow: visible;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.dock-shell:focus-within {
+  border-color: rgba(37, 99, 235, 0.45);
+  box-shadow: 0 8px 32px rgba(37, 99, 235, 0.1), 0 0 0 3px rgba(37, 99, 235, 0.08);
+}
+
+.attachment-strip {
+  padding: 10px 12px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 20px 20px 0 0;
+  overflow: hidden;
+}
+
+.attach-pill.upload-pill {
+  border-color: rgba(37, 99, 235, 0.35);
+  background: var(--academic-primary-light);
+  color: var(--academic-primary);
+}
+
+.attach-pill.upload-pill .chip-spinner {
+  width: 8px;
+  height: 8px;
+  border: 2px solid rgba(37, 99, 235, 0.25);
+  border-top-color: var(--academic-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.ready {
+  background: #10b981;
+}
+
+.status-dot.processing {
+  background: #f59e0b;
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+.status-dot.failed {
+  background: #ef4444;
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.attachment-scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  scrollbar-width: thin;
+}
+
+.attach-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 220px;
+  padding: 5px 8px 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--academic-border);
+  background: var(--academic-canvas);
+  font-size: 12px;
+  color: var(--academic-text-body);
+}
+
+.pill-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.pill-remove {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--academic-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  transition: all 0.12s;
+}
+
+.pill-remove:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.input-row {
   position: relative;
+  z-index: 2;
   display: flex;
   align-items: flex-end;
-  gap: 12px;
-  padding: 8px 12px;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 0 0 20px 20px;
   background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  border-radius: 24px;
-  transition: border-color 0.2s, box-shadow 0.2s;
-  box-shadow: var(--shadow-soft);
 }
 
-.input-wrapper:focus-within {
-  border-color: var(--academic-primary);
-  box-shadow: 0 4px 20px -2px rgba(37, 99, 235, 0.1), var(--shadow-soft);
-}
-
-/* ===== + 按钮 ===== */
 .plus-btn {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: 1.5px dashed var(--academic-border-hover);
   background: transparent;
@@ -409,7 +486,7 @@ function cancelEdit() {
   justify-content: center;
   flex-shrink: 0;
   padding: 0;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   transition: all 0.2s;
 }
 
@@ -420,17 +497,15 @@ function cancelEdit() {
   border-style: solid;
 }
 
-/* ===== Action Popover ===== */
 .action-popover {
-  position: absolute;
-  bottom: calc(100% + 10px);
-  left: 0;
+  position: fixed;
+  transform: translateY(-100%);
   background: var(--academic-panel);
   border: 1px solid var(--academic-border);
   border-radius: 16px;
   padding: 6px;
   min-width: 200px;
-  z-index: 25;
+  z-index: 4000;
   box-shadow: var(--shadow-float);
   display: flex;
   flex-direction: column;
@@ -454,31 +529,24 @@ function cancelEdit() {
   text-align: left;
 }
 
-.action-item:hover {
+.action-item:hover:not(:disabled) {
   background: var(--academic-primary-light);
   color: var(--academic-primary);
 }
 
-.popover-fade-enter-active,
-.popover-fade-leave-active {
-  transition: all 0.15s ease;
+.action-item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
-.popover-fade-enter-from,
-.popover-fade-leave-to {
-  opacity: 0;
-  transform: translateY(6px) scale(0.96);
-}
-
-/* ===== 输入框 ===== */
 .chat-textarea {
   flex: 1;
   border: none;
   outline: none;
   background: transparent;
-  padding: 8px 0;
+  padding: 8px 4px;
   resize: none;
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--academic-text-body);
   font-size: 14px;
   min-height: 24px;
@@ -490,24 +558,27 @@ function cancelEdit() {
   color: var(--academic-text-muted);
 }
 
-/* ===== 发送按钮 ===== */
-.send-btn {
-  width: 32px;
-  height: 32px;
+.send-btn,
+.stop-btn {
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: none;
-  background: var(--academic-primary);
-  color: #fff;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   padding: 0;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
+  transition: all 0.2s;
+}
+
+.send-btn {
+  background: var(--academic-primary);
+  color: #fff;
   font-size: 16px;
   font-weight: 700;
-  transition: all 0.2s;
 }
 
 .send-btn:hover:not(:disabled) {
@@ -520,26 +591,10 @@ function cancelEdit() {
   cursor: not-allowed;
 }
 
-.send-btn.loading {
-  opacity: 0.6;
-}
-
 .stop-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: none;
   background: #ef4444;
   color: #fff;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  padding: 0;
-  margin-bottom: 4px;
   font-size: 11px;
-  transition: all 0.2s;
 }
 
 .stop-btn:hover {
@@ -547,28 +602,6 @@ function cancelEdit() {
   transform: scale(1.05);
 }
 
-.send-arrow { line-height: 1; }
-
-.spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* ===== 提示文字 ===== */
-.hint-text {
-  text-align: center;
-  font-size: 11px;
-  color: var(--academic-text-muted);
-  margin-top: 8px;
-}
-
-/* ===== @ 提及菜单 ===== */
 .mention-menu {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -609,14 +642,26 @@ function cancelEdit() {
   color: var(--academic-primary);
 }
 
+.chip-fade-enter-active,
+.chip-fade-leave-active,
+.popover-fade-enter-active,
+.popover-fade-leave-active,
 .mention-fade-enter-active,
 .mention-fade-leave-active {
   transition: all 0.15s ease;
 }
 
+.chip-fade-enter-from,
+.chip-fade-leave-to,
+.popover-fade-enter-from,
+.popover-fade-leave-to,
 .mention-fade-enter-from,
 .mention-fade-leave-to {
   opacity: 0;
   transform: translateY(6px);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>

@@ -149,7 +149,47 @@ def celery_db():
         session.close()
 
 
+async def migrate_model_config_schema() -> None:
+    """为已有库补齐 model_configs 的场景路由字段。"""
+    from sqlalchemy import text
+
+    async with engine.begin() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'model_configs'
+                      AND COLUMN_NAME IN ('scenario', 'is_primary')
+                    """
+                )
+            )
+        ).all()
+        existing = {row[0] for row in rows}
+
+        if 'scenario' not in existing:
+            await conn.execute(text('ALTER TABLE model_configs ADD COLUMN scenario VARCHAR(30) NULL'))
+        if 'is_primary' not in existing:
+            await conn.execute(
+                text('ALTER TABLE model_configs ADD COLUMN is_primary TINYINT(1) NOT NULL DEFAULT 0')
+            )
+
+        await conn.execute(
+            text(
+                """
+                UPDATE model_configs
+                SET scenario = 'qa', is_primary = 1
+                WHERE model_type = 'llm'
+                  AND (scenario IS NULL OR scenario = '')
+                """
+            )
+        )
+
+
 async def create_all_tables() -> None:
     """FastAPI startup 时建表（幂等）。"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await migrate_model_config_schema()

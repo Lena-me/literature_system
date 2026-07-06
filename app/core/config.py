@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     app_env: str = 'development'
     api_v1_prefix: str = '/api/v1'
     secret_key: str = Field(default='replace-me')
+    # 模型 config_json 中 api_key 的 AES 加密主密钥；未设置时回退 secret_key
+    model_config_secret_key: str = ''
     access_token_expire_minutes: int = 1440
     cors_origins: str = 'http://localhost:5173,http://127.0.0.1:5173'
 
@@ -114,14 +116,8 @@ class Settings(BaseSettings):
     milvus_backup_command: str | None = None
     milvus_restore_command: str | None = None
 
-    # LLM
-    llm_base_url: str
-    llm_api_key: str = ''
-    llm_model: str = 'gpt-4o-mini'
-    llm_temperature: float = 0.2
-    llm_max_tokens: int = 2048
+    # LLM（连接参数仅在管理后台 model_configs 中配置）
     enable_llm_extract: bool = False
-
     # QA Agent（LangGraph）
     qa_use_langgraph: bool = True
     qa_history_limit: int = 20

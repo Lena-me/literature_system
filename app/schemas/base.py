@@ -1,7 +1,9 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.utils.json_utils import coerce_str_list
 
 class APIResponse(BaseModel):
     code: int = 0
@@ -73,15 +75,20 @@ class PaperOut(BaseModel):
     upload_time: datetime
     parse_status: str
     title: str | None = None
-    authors: Any = None
-    keywords: Any = None
-    subject_labels: Any = None
+    authors: list[str] | None = None
+    keywords: list[str] | None = None
+    subject_labels: list[str] | None = None
     notes: str | None = None
     category_id: int | None = None
     doi: str | None = None
     publication_year: int | None = None
     journal_conf: str | None = None
     model_config = {'from_attributes': True}
+
+    @field_validator('authors', 'keywords', 'subject_labels', mode='before')
+    @classmethod
+    def _parse_list_fields(cls, value: Any) -> list[str] | None:
+        return coerce_str_list(value)
 
 class PaperUpdateIn(BaseModel):
     title: str | None = None
@@ -93,6 +100,11 @@ class PaperUpdateIn(BaseModel):
     doi: str | None = None
     publication_year: int | None = None
     journal_conf: str | None = None
+
+    @field_validator('authors', 'keywords', 'subject_labels', mode='before')
+    @classmethod
+    def _coerce_list_fields(cls, value: Any) -> list[str] | None:
+        return coerce_str_list(value)
 
 class QAAskIn(BaseModel):
     question: str = Field(min_length=1)
@@ -244,6 +256,8 @@ class ModelConfigIn(BaseModel):
     api_endpoint: str | None = None
     config: dict[str, Any] | None = None
     is_active: bool = True
+    scenario: Literal['parse', 'qa', 'report', 'tagging'] | None = None
+    is_primary: bool = False
 
 class SchedulerConfigIn(BaseModel):
     max_concurrent_tasks: int = 4
@@ -274,6 +288,11 @@ class TaskPriorityIn(BaseModel):
 
 class TaskBatchRetryIn(BaseModel):
     task_ids: list[int] = Field(min_length=1, max_length=100)
+
+TaskBatchCancelIn = TaskBatchRetryIn
+
+class SystemPauseIn(BaseModel):
+    paused: bool
 
 class VectorRestoreIn(BaseModel):
     backup_id: int

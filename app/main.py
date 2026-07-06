@@ -25,7 +25,6 @@ async def seed_initial_data() -> None:
                 ModelConfig(model_type='parse', model_name='GROBID+PyMuPDF+pdfplumber', version='0.8.0/1.25/0.11', api_endpoint=settings.grobid_base_url, config_json=dumps({'engine_chain':['GROBID','PyMuPDF','pdfplumber']}), is_active=True),
                 ModelConfig(model_type='vector', model_name=settings.bge_embedding_model, version='BGE', api_endpoint='local://sentence-transformers', config_json=dumps({'dim': settings.milvus_vector_dim, 'normalize': True}), is_active=True),
                 ModelConfig(model_type='reranker', model_name=settings.bge_reranker_model, version='BGE', api_endpoint='local://sentence-transformers', config_json=dumps({'top_n': settings.rerank_top_n}), is_active=True),
-                ModelConfig(model_type='llm', model_name=settings.llm_model, version='openai-compatible', api_endpoint=settings.llm_base_url, config_json=dumps({'temperature': settings.llm_temperature, 'max_tokens': settings.llm_max_tokens}), is_active=True),
             ])
         if not (await db.execute(select(TaskSchedulerConfig))).first():
             db.add(TaskSchedulerConfig(max_concurrent_tasks=4, per_user_concurrent=2, timeout_seconds=300))
@@ -35,6 +34,8 @@ async def seed_initial_data() -> None:
 async def lifespan(app: FastAPI):
     from app.services.rag_service import warmup_rag_models
 
+    await create_all_tables()
+    await seed_initial_data()
     asyncio.create_task(asyncio.to_thread(warmup_rag_models))
     yield
 

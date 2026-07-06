@@ -4,6 +4,7 @@ import { featuresApi } from '@/api/features'
 import type { ParseStatusEvent } from '@/api/papers'
 import type { ContentItem, Paper } from '@/types/domain'
 import { useNotebookStore } from '@/stores/notebook'
+import { isParseTerminal, TERMINAL_PARSE_STATUSES } from '@/utils/parseStatus'
 
 const DEFAULT_CHUNK_SIZE = 2 * 1024 * 1024
 
@@ -14,7 +15,6 @@ async function recordLearningEvent(eventType: string, paperId?: number, eventDat
     // 学习记录失败不影响主流程
   }
 }
-const TERMINAL_PARSE_STATUSES = new Set(['completed', 'indexed', 'failed', 'deleted'])
 const PARSE_POLL_MS = 5000
 const PARSE_SSE_RECONNECT_MS = 2000
 
@@ -80,13 +80,7 @@ export const usePaperStore = defineStore('papers', {
 
       try {
         const notebook = useNotebookStore()
-        if (notebook.activeSources.some(p => p.id === update.id)) {
-          notebook.activeSources = notebook.activeSources.map(p =>
-            p.id === update.id
-              ? { ...p, parse_status: update.parse_status, title: update.title ?? p.title }
-              : p,
-          )
-        }
+        notebook.applyPaperParseUpdate(update)
       } catch {
         // notebook store 未初始化时忽略
       }
@@ -149,9 +143,19 @@ export const usePaperStore = defineStore('papers', {
     },
 
     processingPaperIds(): number[] {
-      return this.list
-        .filter(p => p.parse_status && !TERMINAL_PARSE_STATUSES.has(p.parse_status))
-        .map(p => p.id)
+      const ids = new Set<number>()
+      for (const p of this.list) {
+        if (p.parse_status && !isParseTerminal(p.parse_status)) ids.add(p.id)
+      }
+      try {
+        const notebook = useNotebookStore()
+        for (const p of notebook.activeSources) {
+          if (p.parse_status && !isParseTerminal(p.parse_status)) ids.add(p.id)
+        }
+      } catch {
+        // ignore
+      }
+      return [...ids]
     },
 
     syncParsePolling() {

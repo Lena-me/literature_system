@@ -74,7 +74,7 @@ class GenerationService:
     }
 
     def __init__(self) -> None:
-        self.llm = OpenAICompatibleLLM()
+        self.llm = OpenAICompatibleLLM(scenario='report')
 
     @staticmethod
     def _clean_report_value(value: object, limit: int = 4000) -> str:

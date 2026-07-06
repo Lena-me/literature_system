@@ -172,7 +172,7 @@ class RecommendationService:
 [{{"concept": "概念名", "entity_type": "concept/method/model/algorithm", "reason": "推荐理由"}}]"""
 
         try:
-            llm = OpenAICompatibleLLM()
+            llm = OpenAICompatibleLLM(scenario='tagging')
             raw = await llm.async_chat([
                 {'role': 'user', 'content': prompt},
             ], temperature=0.5, max_tokens=800)

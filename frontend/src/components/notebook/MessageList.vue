@@ -107,6 +107,31 @@ async function scrollToBottom(force = false) {
   })
 }
 
+async function scrollToLatestExchange(force = true) {
+  stickToBottom.value = true
+  await nextTick()
+  const msgs = notebook.activeMessages
+  if (!msgs.length) return
+
+  let targetIdx = msgs.length - 1
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    if (msgs[i].role === 'user') {
+      targetIdx = i
+      break
+    }
+  }
+
+  const el = listRef.value?.querySelector(`[data-message-index="${targetIdx}"]`)
+  if (el) {
+    el.scrollIntoView({
+      behavior: force ? 'auto' : 'smooth',
+      block: 'start',
+    })
+    return
+  }
+  await scrollToBottom(force)
+}
+
 function scrollToLatest(force = true) {
   stickToBottom.value = true
   scrollToBottom(force)
@@ -133,7 +158,17 @@ function canEditUser(m: ChatMessage, index: number) {
 
 watch(
   () => notebook.scrollTick,
-  () => scrollToBottom(false),
+  async () => {
+    if (notebook.scrollForce) {
+      if (notebook.isStreaming) {
+        await scrollToBottom(true)
+      } else {
+        await scrollToLatestExchange(true)
+      }
+    } else {
+      await scrollToBottom(false)
+    }
+  },
 )
 
 watch(
@@ -188,21 +223,6 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
 
 <template>
   <div ref="listRef" class="message-list" @scroll="onListScroll" @click="handleCitationClick">
-    <div class="list-toolbar">
-      <button type="button" class="toolbar-btn" title="滚动到最新" @click="scrollToLatest(true)">
-        ↓ 最新
-      </button>
-      <button
-        type="button"
-        class="toolbar-btn"
-        :disabled="notebook.isStreaming || !notebook.activeMessages.length"
-        title="刷新消息"
-        @click="notebook.reloadMessages()"
-      >
-        ↻ 刷新
-      </button>
-    </div>
-
     <div v-if="notebook.activeMessages.length === 0" class="empty-state">
       <div class="spark">✦</div>
       <h3>开始你的研究对话</h3>
@@ -231,7 +251,7 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
       <template v-else>
         <div class="bubble assistant-bubble">
           <StreamProgress
-            v-if="m.streamStage && !m.content && !(m.reasoning || '').trim()"
+            v-if="m.streamStage && notebook.isStreaming && isLastAssistant(i, m)"
             :stage="m.streamStage"
             :flow="m.streamFlow"
           />
@@ -239,7 +259,7 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
             v-if="(m.reasoning || '').trim()"
             :reasoning="m.reasoning"
             :expanded="m.reasoningExpanded ?? false"
-            :streaming="notebook.isStreaming && isLastAssistant(i, m) && !m.content"
+            :streaming="notebook.isStreaming && isLastAssistant(i, m) && !(m.content || '').trim()"
             @update:expanded="updateReasoningExpanded(i, $event)"
           />
           <MarkdownRenderer
@@ -325,43 +345,11 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 24px 24px;
+  padding: 8px 24px 32px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-}
-
-.list-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  width: 100%;
-  max-width: 800px;
-  display: flex;
   gap: 8px;
-  padding: 4px 0 12px;
-  background: linear-gradient(var(--academic-canvas) 70%, transparent);
-}
-
-.toolbar-btn {
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--academic-border);
-  background: var(--academic-panel);
-  color: var(--academic-text-muted);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.toolbar-btn:hover:not(:disabled) {
-  color: var(--academic-primary);
-  border-color: rgba(37, 99, 235, 0.35);
-}
-
-.toolbar-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .scroll-anchor {
@@ -376,19 +364,20 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
 .empty-state p { font-size: 14px; color: var(--academic-text-muted); line-height: 1.65; }
 .empty-state b { color: var(--academic-primary); font-weight: 600; }
 
-.message { width: 100%; max-width: 800px; margin: 12px 0; display: flex; flex-direction: column; }
+.message { width: 100%; max-width: 800px; margin: 16px 0; display: flex; flex-direction: column; }
 .message.user { align-items: flex-end; }
 .message.assistant { align-items: flex-start; }
 
 .bubble { max-width: 88%; padding: 14px 18px; border-radius: 16px; line-height: 1.65; }
-.user-bubble { background: var(--academic-primary); border-bottom-right-radius: 6px; }
+.user-bubble { background: var(--academic-primary); border-bottom-right-radius: 6px; box-shadow: 0 2px 12px rgba(37, 99, 235, 0.18); }
 .user-bubble p { margin: 0; color: #fff; white-space: pre-wrap; }
 .assistant-bubble {
   width: 100%;
   max-width: 100%;
-  background: var(--academic-canvas);
-  border: 1px solid var(--academic-border);
-  border-bottom-left-radius: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
   color: var(--academic-text-body);
 }
 

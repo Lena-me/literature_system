@@ -35,7 +35,7 @@ class PaperPipelineService:
         self.parser = get_document_parser()
         self.embedding = BGEEmbedding()
         self.vdb = get_milvus_store()
-        self.llm = OpenAICompatibleLLM() if settings.enable_llm_extract else None
+        self.llm = OpenAICompatibleLLM(scenario='parse') if settings.enable_llm_extract else None
 
     def parse_extract_vectorize(self, paper_id: int) -> None:
         logger.info('[paper=%s] Pipeline started', paper_id)

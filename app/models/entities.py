@@ -152,11 +152,13 @@ class ModelConfig(Base):
     __tablename__ = 'model_configs'
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     model_type: Mapped[str] = mapped_column(String(30), index=True)
+    scenario: Mapped[str | None] = mapped_column(String(30), index=True)
     model_name: Mapped[str] = mapped_column(String(100))
     version: Mapped[str | None] = mapped_column(String(50))
     api_endpoint: Mapped[str | None] = mapped_column(String(255))
     config_json: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

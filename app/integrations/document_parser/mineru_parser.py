@@ -284,7 +284,7 @@ class MinerUParser:
             cmd.extend(['--api-url', settings.mineru_api_url])
 
         try:
-            proc = subprocess.run(
+            proc = subprocess.run( 
                 cmd,
                 capture_output=True,
                 check=False,
@@ -1431,7 +1431,7 @@ class MinerUParser:
         try:
             from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
 
-            llm = OpenAICompatibleLLM()
+            llm = OpenAICompatibleLLM(scenario='parse')
             prompt = f"""请根据以下论文信息提取最多10个关键词。
 标题：{title}
 摘要：{abstract}

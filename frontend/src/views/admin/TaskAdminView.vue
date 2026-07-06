@@ -1,27 +1,38 @@
-<!-- frontend\src\views\admin\TaskAdminView.vue -->
+<!-- frontend/src/views/admin/TaskAdminView.vue -->
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi } from '@/api/admin'
 
 const rows = ref<any[]>([])
-const cfg = ref<any>({})
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(20)
 const status = ref('')
-const failure = ref<any>({})
 const loading = ref(true)
+const selectedIds = ref<number[]>([])
+const expandedId = ref<number | null>(null)
+
+const failedSelected = computed(() =>
+  rows.value.filter(r => selectedIds.value.includes(r.id) && r.status === 'failed').map(r => r.id)
+)
+const cancellableSelected = computed(() =>
+  rows.value.filter(r => selectedIds.value.includes(r.id) && !['completed', 'failed', 'cancelled'].includes(r.status)).map(r => r.id)
+)
 
 async function load() {
   loading.value = true
   try {
-    const [r, c, f] = await Promise.all([
-      adminApi.tasks(status.value),
-      adminApi.schedulerConfig(),
-      adminApi.failureStats().catch(() => ({ failed_total: 0, by_reason: [] }))
-    ])
-    rows.value = r
-    cfg.value = c
-    failure.value = f
+    const res = await adminApi.tasks({
+      page: page.value,
+      page_size: pageSize.value,
+      status: status.value || undefined,
+    })
+    rows.value = res.items || []
+    total.value = res.total || 0
+    selectedIds.value = []
+    expandedId.value = null
   } finally {
     loading.value = false
   }
@@ -29,356 +40,246 @@ async function load() {
 
 onMounted(load)
 
-async function saveConfig() {
-  await adminApi.saveSchedulerConfig(cfg.value)
-  ElMessage.success('配置已保存')
+function onSelectionChange(val: any[]) {
+  selectedIds.value = val.map(v => v.id)
 }
 
-function getStatusLabel(status: string) {
+function toggleError(row: any) {
+  expandedId.value = expandedId.value === row.id ? null : row.id
+}
+
+function statusLabel(s: string) {
   const map: Record<string, string> = {
-    completed: '已完成',
-    failed: '失败',
-    running: '运行中',
-    queued: '排队中'
+    completed: 'Completed',
+    failed: 'Failed',
+    running: 'Running',
+    queued: 'Queued',
+    cancelled: 'Cancelled',
   }
-  return map[status] || status
+  return map[s] || s
+}
+
+async function batchRetry() {
+  const ids = failedSelected.value.length ? failedSelected.value : selectedIds.value.filter(id => {
+    const row = rows.value.find(r => r.id === id)
+    return row && ['failed', 'cancelled'].includes(row.status)
+  })
+  if (!ids.length) {
+    ElMessage.warning('请选择失败或已终止的任务')
+    return
+  }
+  const res = await adminApi.batchRetryTasks(ids)
+  ElMessage.success(`已重试 ${res.retried_task_ids?.length || 0} 个任务`)
+  await load()
+}
+
+async function batchCancel() {
+  const ids = cancellableSelected.value.length ? cancellableSelected.value : selectedIds.value.filter(id => {
+    const row = rows.value.find(r => r.id === id)
+    return row && !['completed', 'failed', 'cancelled'].includes(row.status)
+  })
+  if (!ids.length) {
+    ElMessage.warning('请选择可终止的任务')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确认终止选中的 ${ids.length} 个任务？`, '批量终止', { type: 'warning' })
+  } catch {
+    return
+  }
+  const res = await adminApi.batchCancelTasks(ids)
+  ElMessage.success(`已终止 ${res.cancelled_task_ids?.length || 0} 个任务`)
+  await load()
+}
+
+function onPageChange(p: number) {
+  page.value = p
+  load()
 }
 </script>
 
 <template>
-  <div class="task-admin-page" v-loading="loading" element-loading-text="加载中...">
-    <div class="page-header">
-      <div>
-        <h1 class="page-title">解析任务管理</h1>
-        <p class="page-subtitle">监控和管理文献解析任务队列</p>
+  <div class="task-page" v-loading="loading">
+    <div class="toolbar soft-card">
+      <div class="toolbar-left">
+        <el-select v-model="status" clearable placeholder="状态筛选" style="width: 130px" @change="() => { page = 1; load() }">
+          <el-option label="Queued" value="queued" />
+          <el-option label="Running" value="running" />
+          <el-option label="Failed" value="failed" />
+          <el-option label="Completed" value="completed" />
+          <el-option label="Cancelled" value="cancelled" />
+        </el-select>
+        <span class="count">共 {{ total }} 条</span>
       </div>
-      <div class="header-actions">
-        <el-button class="btn-secondary" @click="load">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M4 20v-6h6"/><path d="M20.49 15a9 9 0 00-2.12-9.36L5 18"/></svg>
-          <span>刷新</span>
-        </el-button>
+      <div class="toolbar-right">
+        <el-button type="primary" plain size="small" @click="batchRetry">批量重试失败任务</el-button>
+        <el-button type="danger" plain size="small" @click="batchCancel">批量终止</el-button>
+        <el-button size="small" @click="load">刷新</el-button>
       </div>
     </div>
 
-    <div class="content-grid">
-      <div class="tasks-panel soft-card">
-        <div class="panel-header">
-          <h3 class="panel-title">任务列表</h3>
-          <div class="panel-header-right">
-            <span class="panel-count">共 {{ rows.length }} 条</span>
-            <el-select v-model="status" clearable placeholder="状态筛选" @change="load" style="width: 120px; margin-left: 12px">
-              <el-option label="排队中" value="queued" />
-              <el-option label="运行中" value="running" />
-              <el-option label="失败" value="failed" />
-              <el-option label="已完成" value="completed" />
-            </el-select>
-          </div>
-        </div>
-        <div class="table-wrapper">
-          <el-table :data="rows" height="100%">>
-          <el-table-column prop="id" label="ID" width="70" />
-          <el-table-column prop="paper_id" label="文献 ID" />
-          <el-table-column prop="user_id" label="用户 ID" width="100" />
-          <el-table-column prop="task_type" label="任务类型" width="110" />
-          <el-table-column prop="status" label="状态" width="100">
-            <template #default="{ row }">
-              <el-tag
-                :type="row.status === 'completed' ? 'success' : row.status === 'failed' ? 'danger' : row.status === 'running' ? 'warning' : 'info'"
-                size="small"
-              >
-                {{ getStatusLabel(row.status) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="priority" label="优先级" width="100">
-            <template #default="{ row }">
-              <el-input-number v-model="row.priority" size="small" :min="0" :max="9" @change="adminApi.setTaskPriority(row.id, row.priority)" />
-            </template>
-          </el-table-column>
-          <el-table-column prop="retry_count" label="重试次数" width="90" />
-          <el-table-column prop="error_log" label="错误日志" show-overflow-tooltip />
-          <el-table-column label="操作" width="140">
-            <template #default="{ row }">
-              <el-button size="small" @click="adminApi.cancelTask(row.id).then(load)">终止</el-button>
-              <el-button size="small" type="primary" @click="adminApi.retryTask(row.id).then(load)">重试</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+    <div class="table-card soft-card">
+      <el-table :data="rows" size="small" row-key="id" @selection-change="onSelectionChange">
+        <el-table-column type="selection" width="42" />
+        <el-table-column label="任务" min-width="140">
+          <template #default="{ row }">
+            <div class="cell-main">文献 #{{ row.paper_id }}</div>
+            <div class="cell-sub">用户 #{{ row.user_id }} · {{ row.task_type }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="id" label="ID" width="64" />
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">
+            <span class="status-badge" :class="row.status">{{ statusLabel(row.status) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="priority" label="优先级" width="72" />
+        <el-table-column prop="retry_count" label="重试" width="56" />
+        <el-table-column label="时间" width="150">
+          <template #default="{ row }">
+            <div class="cell-sub">{{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="200" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="row.status === 'failed'" link type="primary" size="small" @click="toggleError(row)">
+              {{ expandedId === row.id ? '收起日志' : '查看错误日志' }}
+            </el-button>
+            <el-button
+              v-if="!['completed', 'failed', 'cancelled'].includes(row.status)"
+              link
+              type="danger"
+              size="small"
+              @click="adminApi.cancelTask(row.id).then(load)"
+            >
+              终止
+            </el-button>
+            <el-button
+              v-if="['failed', 'cancelled'].includes(row.status)"
+              link
+              type="primary"
+              size="small"
+              @click="adminApi.retryTask(row.id).then(load)"
+            >
+              重试
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div v-for="row in rows" :key="'err-' + row.id">
+        <div v-if="expandedId === row.id && row.error_log" class="error-expand">
+          <pre>{{ row.error_log }}</pre>
         </div>
       </div>
 
-      <div class="config-panel soft-card">
-        <div class="config-section">
-          <div class="panel-header">
-            <h3 class="panel-title">调度策略</h3>
-          </div>
-          <el-form label-position="top" :model="cfg">
-            <el-form-item label="最大并发任务数">
-              <el-input-number v-model="cfg.max_concurrent_tasks" class="w-full" />
-            </el-form-item>
-            <el-form-item label="单用户并发限制">
-              <el-input-number v-model="cfg.per_user_concurrent" class="w-full" />
-            </el-form-item>
-            <el-form-item label="超时秒数">
-              <el-input-number v-model="cfg.timeout_seconds" class="w-full" />
-            </el-form-item>
-            <el-form-item>
-              <el-button class="btn-primary w-full" @click="saveConfig">保存配置</el-button>
-            </el-form-item>
-          </el-form>
-        </div>
-
-        <el-divider />
-
-        <div class="failure-section">
-          <div class="panel-header">
-            <h3 class="panel-title">失败原因分类</h3>
-          </div>
-          <div class="failure-summary">
-            <div class="failure-stat">
-              <span class="stat-value">{{ failure.failed_total || 0 }}</span>
-              <span class="stat-label">失败总数</span>
-            </div>
-          </div>
-          <div class="failure-tags">
-            <div v-for="r in failure.by_reason" :key="r.reason" class="failure-item">
-              <span class="reason-text">{{ r.reason }}</span>
-              <span class="reason-count">× {{ r.count }}</span>
-            </div>
-          </div>
-        </div>
+      <div class="pager">
+        <el-pagination
+          v-model:current-page="page"
+          :page-size="pageSize"
+          :total="total"
+          layout="total, prev, pager, next"
+          small
+          @current-change="onPageChange"
+        />
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.task-admin-page {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  flex: 1;
-  min-height: 0;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.page-title {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--academic-text-main);
-  margin: 0;
-  letter-spacing: -0.01em;
-}
-
-.page-subtitle {
-  font-size: 14px;
-  color: var(--academic-text-muted);
-  margin: 6px 0 0;
-}
-
-.header-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.btn-secondary {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 7px 14px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  background: var(--academic-panel);
-  border-color: var(--academic-border);
-  color: var(--academic-text-body);
-}
-
-.btn-secondary:hover {
-  background: var(--academic-primary-light);
-  border-color: var(--academic-primary);
-  color: var(--academic-primary);
-}
-
-.content-grid {
-  display: grid;
-  grid-template-columns: 1fr 380px;
-  gap: 20px;
-  align-items: stretch;
-  flex: 1;
-  min-height: 0;
-  height: 0;
-}
-
-.tasks-panel {
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  box-sizing: border-box;
-  overflow: hidden;
-}
-
-.table-wrapper {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.panel-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--academic-text-main);
-  margin: 0;
-}
-
-.panel-count {
-  font-size: 13px;
-  color: var(--academic-text-muted);
-}
-
-.panel-header-right {
-  display: flex;
-  align-items: center;
-}
-
-.config-panel {
-  padding: 24px;
-  height: 100%;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.config-section {
-  flex-shrink: 0;
-}
-
-.failure-section {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.btn-primary {
-  padding: 9px 18px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  background: var(--academic-primary);
-  border-color: var(--academic-primary);
-  color: #fff;
-  transition: all 0.2s;
-}
-
-.btn-primary:hover {
-  background: var(--academic-primary-hover);
-  border-color: var(--academic-primary-hover);
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
-}
-
-.failure-summary {
-  margin-bottom: 16px;
-}
-
-.failure-stat {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.failure-stat .stat-value {
-  font-size: 32px;
-  font-weight: 700;
-  color: var(--danger);
-}
-
-.failure-stat .stat-label {
-  font-size: 13px;
-  color: var(--academic-text-muted);
-}
-
-/* 失败列表大容器 */
-.failure-tags {
+.task-page {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-width: 100%;
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden; /* 彻底禁用横向滚动 */
-  /* Firefox 滚动条 */
-  scrollbar-width: thin;
-  scrollbar-color: #c0c4cc transparent;
-}
-/* Chrome / Edge 滚动条样式，和 el-table 原生滚动条一致 */
-.failure-tags::-webkit-scrollbar {
-  width: 6px;
-}
-.failure-tags::-webkit-scrollbar-track {
-  background: transparent;
-}
-.failure-tags::-webkit-scrollbar-thumb {
-  background: #c0c4cc;
-  border-radius: 3px;
-}
-.failure-tags::-webkit-scrollbar-thumb:hover {
-  background: #909399;
 }
 
-/* 每一个独立的报错条目样式 */
-.failure-item {
+.toolbar {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-start; /* 顶部对齐 */
+  padding: 10px 12px;
   gap: 12px;
-  padding: 8px 12px;
-  background-color: #fef2f2; /* 浅红底色，类似 plain danger tag */
-  border: 1px solid #fee2e2;
-  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.toolbar-left, .toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.count {
+  font-size: 12px;
+  color: var(--academic-text-muted);
+}
+
+.table-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.cell-main {
   font-size: 13px;
-  line-height: 1.6;
-}
-
-/* 报错文本：允许彻底换行，撑开高度 */
-.reason-text {
-  color: #ef4444; /* 红色高亮 */
-  word-break: break-all;
-  white-space: pre-wrap; /* 保持文本天然换行与空格 */
-  flex: 1; /* 撑满左侧剩余空间 */
-}
-
-/* 错误次数角标 */
-.reason-count {
   font-weight: 600;
-  color: #b91c1c;
-  background: #fca5a5;
-  padding: 2px 6px;
-  border-radius: 4px;
+  color: var(--academic-text-main);
+}
+
+.cell-sub {
   font-size: 11px;
-  white-space: nowrap; /* 数量不换行 */
+  color: var(--academic-text-muted);
   margin-top: 2px;
 }
 
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.status-badge.completed { background: #dcfce7; color: #15803d; }
+.status-badge.failed { background: #fee2e2; color: #dc2626; }
+.status-badge.running {
+  background: #dbeafe;
+  color: #1d4ed8;
+  animation: pulse-running 1.5s ease-in-out infinite;
+}
+.status-badge.queued { background: #f3f4f6; color: #6b7280; }
+.status-badge.cancelled { background: #fef3c7; color: #b45309; }
+
+@keyframes pulse-running {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+.error-expand {
+  margin: 0 12px 12px;
+  padding: 10px 12px;
+  background: #1e1e1e;
+  border-radius: 8px;
+  overflow: auto;
+  max-height: 200px;
+}
+
+.error-expand pre {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #fca5a5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 12px;
+  border-top: 1px solid var(--academic-border);
+}
+
 :deep(.el-table) {
-  --el-table-header-bg-color: var(--academic-canvas);
-  --el-table-row-hover-bg-color: var(--academic-primary-light);
+  --el-table-header-bg-color: #f8f9fb;
 }
 </style>

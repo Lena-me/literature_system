@@ -5,6 +5,7 @@ import { qaApi } from '@/api/qa'
 
 import type { ChatMessage, KnowledgeDomain, QAToolArtifact, SessionDetail, SessionPaper, SessionSummary, Source, StreamFlow, StreamStage } from '@/types/domain'
 import { inferStreamFlow } from '@/utils/streamStages'
+import { isParseTerminal } from '@/utils/parseStatus'
 import { featuresApi } from '@/api/features'
 
 async function recordLearningEvent(eventType: string, paperId?: number, eventData?: Record<string, unknown>) {
@@ -41,6 +42,8 @@ export const useNotebookStore = defineStore('notebook', () => {
   const isSwitchingSession = ref(false) // ★ loading 指示器
   const draftInput = ref('')
   const scrollTick = ref(0)
+  /** 下一次滚动是否强制跟随最新问答（发送提问 / 流式输出期间） */
+  const scrollForce = ref(false)
   const editingMessageId = ref<number | null>(null)
 
   // ========== 缓存 + 请求取消 ==========
@@ -95,7 +98,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     syncMessagesToCache(sessionId, messages)
     if (activeSessionId.value === sessionId) {
       activeMessages.value = messages
-      bumpScroll()
+      bumpScroll(isSessionStreaming(sessionId))
     }
   }
 
@@ -128,7 +131,8 @@ export const useNotebookStore = defineStore('notebook', () => {
     return fetched
   }
 
-  function bumpScroll() {
+  function bumpScroll(force = false) {
+    scrollForce.value = force
     scrollTick.value += 1
   }
 
@@ -181,7 +185,8 @@ export const useNotebookStore = defineStore('notebook', () => {
       activeSources.value = cachedDetail.papers || []
       activeMessages.value = attachArtifactsToMessages(cachedMsgs)
       isSwitchingSession.value = false
-      bumpScroll()
+      bumpScroll(true)
+      ensureSessionParseSync()
       return
     }
 
@@ -205,7 +210,8 @@ export const useNotebookStore = defineStore('notebook', () => {
 
       detailCache.set(sessionId, detail)
       messageCache.set(sessionId, attachArtifactsToMessages(msgs))
-      bumpScroll()
+      bumpScroll(true)
+      ensureSessionParseSync()
     } catch (e: any) {
       if (e?.name === 'AbortError' || e?.code === 'ERR_CANCELED' || signal.aborted) return
       // 请求出错且仍是当前活跃 session
@@ -242,6 +248,38 @@ export const useNotebookStore = defineStore('notebook', () => {
     await loadSessions()
   }
 
+  function syncSessionPapersInCache(sessionId: number, papers: SessionPaper[]) {
+    const cached = detailCache.get(sessionId)
+    if (cached) detailCache.set(sessionId, { ...cached, papers })
+  }
+
+  function applyPaperParseUpdate(update: { id: number; parse_status: string; title?: string }) {
+    if (!activeSources.value.some(p => p.id === update.id)) return
+
+    activeSources.value = activeSources.value.map(p =>
+      p.id === update.id
+        ? { ...p, parse_status: update.parse_status, title: update.title ?? p.title }
+        : p,
+    )
+
+    if (activeSessionDetail.value) {
+      activeSessionDetail.value = {
+        ...activeSessionDetail.value,
+        papers: activeSources.value,
+      }
+    }
+
+    const sid = activeSessionId.value
+    if (sid) syncSessionPapersInCache(sid, activeSources.value)
+  }
+
+  function ensureSessionParseSync() {
+    if (!activeSources.value.some(p => !isParseTerminal(p.parse_status))) return
+    void import('@/stores/papers').then(({ usePaperStore }) => {
+      usePaperStore().ensureParseSync()
+    }).catch(() => {})
+  }
+
   // ========== 文献管理 ==========
 
   async function addSources(paperIds: number[], forceSessionId?: number | null) {
@@ -255,6 +293,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     }
     detailCache.set(sid, detail) // ★ 同步更新缓存，避免切回时覆写
     await loadSessions()
+    ensureSessionParseSync()
     // 标题生成统一在 sendMessage 首条消息后触发，不在此处提前生成
   }
 
@@ -398,7 +437,7 @@ export const useNotebookStore = defineStore('notebook', () => {
 
     if (appendUserMessage) {
       activeMessages.value.push({ role: 'user', content: question })
-      bumpScroll()
+      bumpScroll(true)
     }
 
     markSessionStreaming(sessionId, true)
@@ -416,7 +455,7 @@ export const useNotebookStore = defineStore('notebook', () => {
       reasoningExpanded: true,
     })
     syncMessagesToCache(sessionId, [...activeMessages.value])
-    bumpScroll()
+    bumpScroll(true)
 
     const getStreamMessages = (): ChatMessage[] =>
       messageCache.get(sessionId) || (activeSessionId.value === sessionId ? activeMessages.value : [])
@@ -476,10 +515,8 @@ export const useNotebookStore = defineStore('notebook', () => {
               })
             } else {
               patchAssistant({
-                streamStage: undefined,
-                streamFlow: undefined,
                 content: (current?.content || '') + event.content,
-                reasoningExpanded: false,
+                reasoningExpanded: (current?.reasoning || '').trim() ? false : (current?.reasoningExpanded ?? false),
               })
             }
           }
@@ -574,7 +611,7 @@ export const useNotebookStore = defineStore('notebook', () => {
         syncMessagesToCache(sessionId, refreshedMsgs)
       }
 
-      bumpScroll()
+      bumpScroll(true)
       await loadSessions()
 
       if (isFirstMessage && sessionId && !aborted) {
@@ -709,6 +746,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     isSwitchingSession,
     draftInput,
     scrollTick,
+    scrollForce,
     editingMessageId,
     // 方法
     isColdStart,
@@ -717,6 +755,8 @@ export const useNotebookStore = defineStore('notebook', () => {
     switchSession,
     renameSession,
     deleteSession,
+    applyPaperParseUpdate,
+    ensureSessionParseSync,
     addSources,
     removeSource,
     sendMessage,

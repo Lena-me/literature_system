@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel as PydanticBaseModel
@@ -55,6 +56,24 @@ def _sse_data(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False, default=_default)}\n\n"
 
 
+async def _iter_sse_with_keepalive(
+    source: AsyncIterator[dict],
+    *,
+    interval: float = 20.0,
+) -> AsyncIterator[str]:
+    """长链路 QA 在检索/LLM 首 token 前可能长时间无事件，定期发送 SSE 注释避免代理超时断连。"""
+    iterator = source.__aiter__()
+    while True:
+        try:
+            event = await asyncio.wait_for(iterator.__anext__(), timeout=interval)
+        except asyncio.TimeoutError:
+            yield ': keepalive\n\n'
+            continue
+        except StopAsyncIteration:
+            break
+        yield _sse_data(event)
+
+
 @router.post('/ask')
 async def ask(data: QAAskIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     await QuotaService().check_daily_qa(user)
@@ -77,27 +96,33 @@ async def ask_stream(data: QAAskIn, user: User = Depends(get_current_user_brief)
         try:
             settings = get_settings()
             if settings.qa_use_langgraph:
-                async for event in get_qa_orchestrator().ask_stream(
+                event_source = get_qa_orchestrator().ask_stream(
                     user.id,
                     data.question,
                     data.paper_ids,
                     data.session_id,
                     data.top_k,
                     regenerate=bool(data.regenerate),
-                ):
-                    yield _sse_data(event)
+                )
             else:
-                async with AsyncSessionLocal() as db:
-                    async for event in get_rag_service().ask_stream(
-                        db,
-                        user.id,
-                        data.question,
-                        data.paper_ids,
-                        data.session_id,
-                        data.top_k,
-                        regenerate=bool(data.regenerate),
-                    ):
-                        yield _sse_data(event)
+
+                async def _rag_events():
+                    async with AsyncSessionLocal() as db:
+                        async for event in get_rag_service().ask_stream(
+                            db,
+                            user.id,
+                            data.question,
+                            data.paper_ids,
+                            data.session_id,
+                            data.top_k,
+                            regenerate=bool(data.regenerate),
+                        ):
+                            yield event
+
+                event_source = _rag_events()
+
+            async for chunk in _iter_sse_with_keepalive(event_source):
+                yield chunk
         except asyncio.CancelledError:
             # 客户端断开或 uvicorn 热重载/重启时正常取消，勿当作异常
             logger.debug('ask-stream cancelled (client disconnect or server shutdown)')
