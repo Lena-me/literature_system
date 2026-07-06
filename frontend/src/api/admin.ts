@@ -65,6 +65,8 @@ export const adminApi = {
   updateModel: (id: number, payload: Record<string, any>) =>
     http.put<any, { message: string }>(`/model-configs/${id}`, payload),
 
+  activeLlmRuntime: () => http.get<any, any>('/model-configs/active-llm'),
+
   // ===================== 任务调度模块 =====================
   /**
    * 获取任务列表

@@ -4,9 +4,15 @@ from typing import Any, Literal
 
 from typing_extensions import TypedDict
 
-StreamStage = Literal['embedding', 'searching', 'reranking', 'generating', 'classifying', 'comparing']
+StreamStage = Literal[
+    'embedding', 'searching', 'reranking', 'generating',
+    'classifying', 'comparing', 'reporting', 'graphing',
+]
 
-AgentIntent = Literal['literature_qa', 'compare', 'general', 'summarize_history']
+AgentIntent = Literal[
+    'literature_qa', 'compare', 'general', 'summarize_history',
+    'report', 'graph',
+]
 
 
 class ChatTurn(TypedDict):
@@ -28,6 +34,7 @@ class AgentState(TypedDict, total=False):
     retrieval_query: str
     intent: AgentIntent
     tool_results: dict[str, Any]
+    artifacts: list[dict[str, Any]]
 
     ranked_chunks: list[dict[str, Any]]
     context_text: str
@@ -39,3 +46,4 @@ class AgentState(TypedDict, total=False):
     message_id: int | None
 
     error: str | None
+    cancelled: bool

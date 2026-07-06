@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { adminApi } from '@/api/admin'
 
 const rows = ref<any[]>([])
+const activeRuntime = ref<any>(null)
 const visible = ref(false)
 const editingId = ref<number | null>(null)
 const form = reactive<any>({
@@ -17,6 +18,7 @@ const form = reactive<any>({
 
 async function load() {
   rows.value = await adminApi.models()
+  activeRuntime.value = await adminApi.activeLlmRuntime().catch(() => null)
 }
 
 onMounted(load)
@@ -92,6 +94,14 @@ function getRowClassName({ row }: { row: any }) {
           <el-button class="btn-secondary" @click="load">刷新</el-button>
         </div>
       </div>
+      <p v-if="activeRuntime" class="runtime-hint">
+        当前实际调用：
+        <strong>{{ activeRuntime.model_name }}</strong>
+        <span class="runtime-source">（来源：{{ activeRuntime.source === 'db' ? '后台配置' : '.env 默认值' }}）</span>
+        <span v-if="activeRuntime.source === 'env'" class="runtime-warn">
+          未找到启用的 LLM 后台配置，正在使用 LLM_MODEL={{ activeRuntime.env_fallback_model }}
+        </span>
+      </p>
       <el-table :data="rows" height="calc(100vh - 280px)" :row-class-name="getRowClassName">
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="model_type" label="类型" width="120">
@@ -222,6 +232,28 @@ function getRowClassName({ row }: { row: any }) {
 .panel-actions {
   display: flex;
   gap: 8px;
+}
+
+.runtime-hint {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.runtime-source {
+  color: #64748b;
+  margin-left: 6px;
+}
+
+.runtime-warn {
+  display: block;
+  margin-top: 4px;
+  color: #b45309;
+  font-size: 12px;
 }
 
 .btn-secondary {

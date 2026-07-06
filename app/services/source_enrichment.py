@@ -5,8 +5,9 @@ import re
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ContentItem, FiguresTable, TextChunk
+from app.models import ContentItem, FiguresTable, Paper, TextChunk
 from app.utils.chunk_quality import normalize_page_number, normalize_chunk_text
+from app.utils.paper_links import resolve_official_paper_url
 
 _FIG_REF_RE = re.compile(
     r'(?:如图|图\s*(?![像示])|[Ff]ig(?:ure)?\.?\s*)([0-9]+(?:\.[0-9]+)*)',
@@ -356,6 +357,13 @@ async def enrich_qa_sources(
             }
 
     paper_ids = {int(c['paper_id']) for c in sources if c.get('paper_id')}
+    papers_by_id: dict[int, Paper] = {}
+    if paper_ids:
+        paper_rows = (
+            await db.execute(select(Paper).where(Paper.id.in_(paper_ids)))
+        ).scalars().all()
+        papers_by_id = {int(p.id): p for p in paper_rows}
+
     abstract_anchors = await _load_abstract_anchors(db, paper_ids)
     visual_locators = await _load_visual_locators(db, paper_ids)
     visuals_by_paper: dict[int, list[FiguresTable]] = {}
@@ -430,6 +438,14 @@ async def enrich_qa_sources(
                     seen_ids.add(item['id'])
 
         out['related_figures'] = related[:6]
+
+        if paper_id is not None:
+            paper = papers_by_id.get(int(paper_id))
+            if paper:
+                out['paper_title'] = paper.title or paper.original_filename
+                out['doi'] = paper.doi
+                out['journal_conf'] = paper.journal_conf
+                out['official_url'] = resolve_official_paper_url(paper.doi)
 
         anchor = abstract_anchors.get(int(paper_id)) if paper_id is not None else None
         needs_anchor = bool(

@@ -29,15 +29,57 @@ export interface Paper {
   journal_conf?: string | null
 }
 export interface ContentItem { id: number; type: string; level?: number | null; content: string; bbox?: [number, number, number, number] | null; page_number?: number | null; order_index: number }
+
+export interface HighlightRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+export interface PaperNote {
+  id: number
+  paper_id: number
+  page_number: number
+  bbox: HighlightRect[]
+  selected_text: string
+  note_content?: string | null
+  highlight_color: string
+  created_at: string
+  updated_at: string
+}
 export type StreamStage =
   | 'classifying'
   | 'embedding'
   | 'searching'
   | 'reranking'
   | 'comparing'
+  | 'reporting'
+  | 'graphing'
   | 'generating'
 
-export type StreamFlow = 'rag' | 'compare' | 'general'
+export type StreamFlow = 'rag' | 'compare' | 'general' | 'report' | 'graph'
+
+export interface QAToolArtifact {
+  artifact_type: 'report' | 'graph' | 'comparison'
+  report_id?: number
+  graph_id?: number
+  comparison_id?: number
+  paper_id?: number
+  title?: string
+  name?: string
+  paper_ids?: number[]
+}
+
+export interface ExternalReference {
+  title: string
+  snippet?: string
+  doi?: string | null
+  official_url: string
+  source_type?: 'answer_text' | 'reference_bibliography' | 'library_recommendation' | 'scholar_search' | string
+  paper_id?: number | null
+  from_paper_id?: number | null
+}
 
 export interface ChatMessage {
   id?: number
@@ -49,6 +91,10 @@ export interface ChatMessage {
   reasoningExpanded?: boolean
   created_at?: string
   sources?: Source[]
+  /** LangGraph 工具产物（报告/图谱/对比） */
+  artifacts?: QAToolArtifact[]
+  /** 回答中提及的外部/拓展文献（非文库 [n] 引用） */
+  external_refs?: ExternalReference[]
   /** 流式问答当前阶段（仅 assistant 生成过程中） */
   streamStage?: StreamStage
   /** 流式进度条所属流程（由 stage 事件推断） */
@@ -86,6 +132,10 @@ export interface Source {
   locate_snippet?: string
   ref_index?: number
   ref_label?: string
+  paper_title?: string
+  doi?: string | null
+  journal_conf?: string | null
+  official_url?: string | null
 }
 export interface Report { id: number; paper_id: number; title: string; content: any; created_at: string }
 export interface GraphNode { 

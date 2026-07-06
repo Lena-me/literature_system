@@ -1,46 +1,108 @@
 from __future__ import annotations
+
+import json
+import logging
+
 import httpx
-from app.core.config import get_settings
-settings = get_settings()
+
+from app.integrations.llm.runtime_config import LLMRuntimeConfig, get_llm_runtime_config
+
+logger = logging.getLogger(__name__)
+
+# Windows 下 httpx 默认会读取系统代理，常导致 ConnectError；LLM 直连更稳定。
+_HTTPX_CLIENT_KW = {'timeout': 180, 'trust_env': False}
 
 
-def _headers() -> dict:
-    """构建请求头，api_key 为空时省略 Authorization"""
+def _headers(cfg: LLMRuntimeConfig) -> dict:
     h = {'Content-Type': 'application/json'}
-    key = (settings.llm_api_key or '').strip()
-    if key:
-        h['Authorization'] = f'Bearer {key}'
+    if cfg.api_key:
+        h['Authorization'] = f'Bearer {cfg.api_key}'
     return h
 
 
+def _build_payload(
+    cfg: LLMRuntimeConfig,
+    messages: list[dict],
+    *,
+    temperature: float | None,
+    max_tokens: int | None,
+    stream: bool = False,
+) -> dict:
+    payload = {
+        'model': cfg.model_name,
+        'messages': messages,
+        'temperature': cfg.temperature if temperature is None else temperature,
+        'max_tokens': cfg.max_tokens if max_tokens is None else max_tokens,
+    }
+    if stream:
+        payload['stream'] = True
+    return payload
+
+
+def validate_llm_runtime_config(cfg: LLMRuntimeConfig) -> None:
+    if not cfg.base_url:
+        raise RuntimeError('LLM 未配置调用地址：请在 .env 设置 LLM_BASE_URL，或在后台模型配置中填写 api_endpoint')
+    if not cfg.model_name:
+        raise RuntimeError('LLM 未配置模型名：请在 .env 设置 LLM_MODEL，或在后台模型配置中填写 model_name')
+    if not cfg.api_key:
+        raise RuntimeError('LLM 未配置 API Key：请在 .env 设置 LLM_API_KEY')
+
+
+async def _read_error_body(response: httpx.Response) -> str:
+    try:
+        text = (await response.aread()).decode('utf-8', errors='replace').strip()
+        return text[:800] if text else ''
+    except Exception:
+        return ''
+
+
+def _format_http_error(status_code: int, body: str, cfg: LLMRuntimeConfig) -> str:
+    hint = ''
+    if status_code == 401:
+        hint = '请检查 LLM_API_KEY 是否与当前 base_url 匹配（换代理/换平台后 Key 也要一起换）。'
+    elif status_code == 404:
+        hint = '请检查 LLM_BASE_URL 是否为 OpenAI 兼容根路径，例如 https://xiaoai.plus/v1（不要重复 /chat/completions）。'
+    detail = body or '(无响应体)'
+    return (
+        f'LLM API 返回 {status_code}：{detail} '
+        f'[model={cfg.model_name}, base_url={cfg.base_url}, source={cfg.source}]'
+        + (f' {hint}' if hint else '')
+    )
+
+
+def _format_request_error(exc: httpx.RequestError, cfg: LLMRuntimeConfig, url: str) -> str:
+    detail = str(exc).strip() or exc.__class__.__name__
+    return (
+        f'LLM API 网络请求失败：{detail} '
+        f'[url={url}, model={cfg.model_name}, base_url={cfg.base_url}, source={cfg.source}]。'
+        '若刚修改 .env，请重启后端；若后台启用了 LLM 配置，其 api_endpoint 会覆盖 .env 的 LLM_BASE_URL。'
+    )
+
+
 class OpenAICompatibleLLM:
-    # === 同步接口（Celery worker 使用）===
+    def _resolve(self) -> LLMRuntimeConfig:
+        cfg = get_llm_runtime_config()
+        validate_llm_runtime_config(cfg)
+        return cfg
 
     def chat(self, messages: list[dict], temperature: float | None = None, max_tokens: int | None = None) -> str:
-        url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
-        payload = {
-            'model': settings.llm_model,
-            'messages': messages,
-            'temperature': settings.llm_temperature if temperature is None else temperature,
-            'max_tokens': settings.llm_max_tokens if max_tokens is None else max_tokens,
-        }
-        headers = _headers()
-        with httpx.Client(timeout=180) as client:
-            response = client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
+        cfg = self._resolve()
+        url = f"{cfg.base_url.rstrip('/')}/chat/completions"
+        payload = _build_payload(cfg, messages, temperature=temperature, max_tokens=max_tokens)
+        logger.debug('LLM chat model=%s source=%s url=%s', cfg.model_name, cfg.source, cfg.base_url)
+        with httpx.Client(**_HTTPX_CLIENT_KW) as client:
+            response = client.post(url, headers=_headers(cfg), json=payload)
+            if response.status_code >= 400:
+                raise RuntimeError(_format_http_error(response.status_code, response.text[:800], cfg))
             data = response.json()
             return self._extract_content(data)
 
-    # === 异步接口（FastAPI 端使用）===
-
     def _extract_content(self, data: dict, *, content_only: bool = False) -> str:
-        """从 LLM 响应中提取文本内容，兼容推理模型（reasoning_content）"""
         msg = data.get('choices', [{}])[0].get('message', {})
         content = (msg.get('content') or '').strip()
         if content:
             return content
         if content_only:
-            # 标题等短文本任务：不回退到 reasoning，避免整段思维链被当成标题
             reasoning = (msg.get('reasoning_content') or '').strip()
             if not reasoning:
                 return ''
@@ -62,46 +124,31 @@ class OpenAICompatibleLLM:
         *,
         content_only: bool = False,
     ) -> str:
-        url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
-        payload = {
-            'model': settings.llm_model,
-            'messages': messages,
-            'temperature': settings.llm_temperature if temperature is None else temperature,
-            'max_tokens': settings.llm_max_tokens if max_tokens is None else max_tokens,
-        }
-        headers = _headers()
-        async with httpx.AsyncClient(timeout=180) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            return self._extract_content(data, content_only=content_only)
+        cfg = self._resolve()
+        url = f"{cfg.base_url.rstrip('/')}/chat/completions"
+        payload = _build_payload(cfg, messages, temperature=temperature, max_tokens=max_tokens)
+        logger.debug('LLM async_chat model=%s source=%s url=%s', cfg.model_name, cfg.source, cfg.base_url)
+        try:
+            async with httpx.AsyncClient(**_HTTPX_CLIENT_KW) as client:
+                response = await client.post(url, headers=_headers(cfg), json=payload)
+                if response.status_code >= 400:
+                    raise RuntimeError(_format_http_error(response.status_code, response.text[:800], cfg))
+                data = response.json()
+                return self._extract_content(data, content_only=content_only)
+        except httpx.RequestError as exc:
+            raise RuntimeError(_format_request_error(exc, cfg, url)) from exc
 
     async def stream_chat(self, messages: list[dict], temperature: float | None = None, max_tokens: int | None = None):
-        """流式输出；yield (channel, text)，channel 为 reasoning | content。"""
-        url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
-        payload = {
-            'model': settings.llm_model,
-            'messages': messages,
-            'temperature': settings.llm_temperature if temperature is None else temperature,
-            'max_tokens': settings.llm_max_tokens if max_tokens is None else max_tokens,
-            'stream': True,
-        }
-        headers = _headers()
-        async with httpx.AsyncClient(timeout=180) as client:
+        cfg = self._resolve()
+        url = f"{cfg.base_url.rstrip('/')}/chat/completions"
+        payload = _build_payload(cfg, messages, temperature=temperature, max_tokens=max_tokens, stream=True)
+        logger.debug('LLM stream_chat model=%s source=%s url=%s', cfg.model_name, cfg.source, cfg.base_url)
+        async with httpx.AsyncClient(**_HTTPX_CLIENT_KW) as client:
             try:
-                async with client.stream('POST', url, headers=headers, json=payload) as response:
-                    if response.status_code == 401:
-                        import logging
-                        logging.getLogger(__name__).error(
-                            'LLM 认证失败 (401)。请检查环境变量 LLM_API_KEY 是否正确。'
-                            '当前 base_url=%s, model=%s, api_key_set=%s',
-                            settings.llm_base_url, settings.llm_model,
-                            bool((settings.llm_api_key or '').strip()),
-                        )
-                        raise RuntimeError(
-                            'LLM API 认证失败 (401)。请检查 LLM_API_KEY 环境变量是否配置了有效的 API Key。'
-                        )
-                    response.raise_for_status()
+                async with client.stream('POST', url, headers=_headers(cfg), json=payload) as response:
+                    if response.status_code >= 400:
+                        body = await _read_error_body(response)
+                        raise RuntimeError(_format_http_error(response.status_code, body, cfg))
                     async for line in response.aiter_lines():
                         if not line or not line.startswith('data:'):
                             continue
@@ -109,7 +156,6 @@ class OpenAICompatibleLLM:
                         if data == '[DONE]':
                             break
                         try:
-                            import json
                             obj = json.loads(data)
                             delta = obj['choices'][0].get('delta') or {}
                             reasoning = delta.get('reasoning_content') or ''
@@ -120,7 +166,15 @@ class OpenAICompatibleLLM:
                                 yield ('content', content)
                         except Exception:
                             continue
-            except httpx.HTTPStatusError:
-                raise
-            except httpx.RequestError as e:
-                raise RuntimeError(f'LLM API 请求失败: {e}') from e
+            except httpx.HTTPStatusError as exc:
+                body = ''
+                if exc.response is not None:
+                    try:
+                        body = exc.response.text[:800]
+                    except Exception:
+                        pass
+                raise RuntimeError(
+                    _format_http_error(exc.response.status_code if exc.response else 0, body, cfg)
+                ) from exc
+            except httpx.RequestError as exc:
+                raise RuntimeError(_format_request_error(exc, cfg, url)) from exc

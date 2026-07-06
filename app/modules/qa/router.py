@@ -1,11 +1,13 @@
 from __future__ import annotations
+import asyncio
 import json
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel as PydanticBaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_user_brief
 from app.db.mysql import AsyncSessionLocal, get_db
 from app.models import Paper, QAMessage, QAMessageSource, QASession, QASessionPaper, TextChunk, User
 from app.schemas import QAAskIn, SessionCreateIn, SessionUpdateIn
@@ -14,38 +16,95 @@ from app.services.quota_service import QuotaService
 from app.services.rag_service import get_rag_service
 from app.agents.orchestrator import get_qa_orchestrator
 from app.services.source_enrichment import enrich_qa_sources
+from app.utils.paper_links import extract_answer_paper_titles, normalize_external_ref_item
 from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
 from app.utils.session_title import fallback_session_title, is_default_session_title, sanitize_session_title
 router = APIRouter(prefix='/qa', tags=['智能问答'])
+logger = logging.getLogger(__name__)
+
+
+def _sanitize_external_refs(raw_refs: list, answer_text: str | None) -> list[dict]:
+    """读取历史消息时清洗脏标题，并过滤与回答无关的参考文献拓展。"""
+    if not raw_refs or not answer_text:
+        return raw_refs if isinstance(raw_refs, list) else []
+    titles = extract_answer_paper_titles(answer_text)
+    cleaned: list[dict] = []
+    seen: set[str] = set()
+    for item in raw_refs:
+        if not isinstance(item, dict):
+            continue
+        normalized = normalize_external_ref_item(item, answer_text, titles)
+        if not normalized:
+            continue
+        url = normalized.get('official_url')
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        cleaned.append(normalized)
+    return cleaned
+
+
+def _sse_data(event: dict) -> str:
+    """SSE payload；兼容 numpy 标量等不可直接 JSON 序列化的检索分数字段。"""
+
+    def _default(obj: object):
+        if hasattr(obj, 'item'):
+            return obj.item()
+        raise TypeError(f'Object of type {type(obj)!r} is not JSON serializable')
+
+    return f"data: {json.dumps(event, ensure_ascii=False, default=_default)}\n\n"
+
 
 @router.post('/ask')
 async def ask(data: QAAskIn, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     await QuotaService().check_daily_qa(user)
+    settings = get_settings()
+    if settings.qa_use_langgraph:
+        return await get_qa_orchestrator().ask(
+            user.id,
+            data.question,
+            data.paper_ids,
+            data.session_id,
+            data.top_k,
+            regenerate=bool(data.regenerate),
+        )
     return await get_rag_service().ask(db, user.id, data.question, data.paper_ids, data.session_id, data.top_k)
 
 @router.post('/ask-stream')
-async def ask_stream(data: QAAskIn, user: User = Depends(get_current_user)):
+async def ask_stream(data: QAAskIn, user: User = Depends(get_current_user_brief)):
     await QuotaService().check_daily_qa(user)
     async def gen():
         try:
-            # 流式生成器内自行管理 db session，避免 FastAPI 依赖注入在
-            # StreamingResponse 返回后过早关闭 session。
-            async with AsyncSessionLocal() as db:
-                settings = get_settings()
-                stream_fn = (
-                    get_qa_orchestrator().ask_stream
-                    if settings.qa_use_langgraph
-                    else get_rag_service().ask_stream
-                )
-                async for event in stream_fn(
-                    db, user.id, data.question, data.paper_ids, data.session_id, data.top_k,
+            settings = get_settings()
+            if settings.qa_use_langgraph:
+                async for event in get_qa_orchestrator().ask_stream(
+                    user.id,
+                    data.question,
+                    data.paper_ids,
+                    data.session_id,
+                    data.top_k,
                     regenerate=bool(data.regenerate),
                 ):
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    yield _sse_data(event)
+            else:
+                async with AsyncSessionLocal() as db:
+                    async for event in get_rag_service().ask_stream(
+                        db,
+                        user.id,
+                        data.question,
+                        data.paper_ids,
+                        data.session_id,
+                        data.top_k,
+                        regenerate=bool(data.regenerate),
+                    ):
+                        yield _sse_data(event)
+        except asyncio.CancelledError:
+            # 客户端断开或 uvicorn 热重载/重启时正常取消，勿当作异常
+            logger.debug('ask-stream cancelled (client disconnect or server shutdown)')
+            return
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).error('ask-stream generator failed: %s', e, exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
+            logger.error('ask-stream generator failed: %s', e, exc_info=True)
+            yield _sse_data({'type': 'error', 'error': str(e)})
     return StreamingResponse(
         gen(),
         media_type='text/event-stream',
@@ -213,17 +272,36 @@ async def messages(
             answer_text = msg.content if msg and msg.role == 'assistant' else None
             sources_map[mid] = await enrich_qa_sources(db, sources_map[mid], answer_text=answer_text)
 
-    return [
-        {
+    payload = []
+    for x in rows:
+        if x.role == 'user':
+            payload.append({
+                'id': x.id,
+                'role': x.role,
+                'content': x.content,
+                'reasoning': x.reasoning_content or '',
+                'created_at': x.created_at,
+                'sources': sources_map.get(x.id, []),
+                'artifacts': x.tool_artifacts if isinstance(x.tool_artifacts, list) else [],
+                'external_refs': [],
+            })
+            continue
+
+        external_refs = _sanitize_external_refs(
+            x.external_refs if isinstance(x.external_refs, list) else [],
+            x.content,
+        )
+        payload.append({
             'id': x.id,
             'role': x.role,
             'content': x.content,
             'reasoning': x.reasoning_content or '',
             'created_at': x.created_at,
             'sources': sources_map.get(x.id, []),
-        }
-        for x in rows
-    ]
+            'artifacts': x.tool_artifacts if isinstance(x.tool_artifacts, list) else [],
+            'external_refs': external_refs,
+        })
+    return payload
 
 @router.delete('/sessions/{session_id}/messages/{message_id}/tail')
 async def delete_message_tail(
@@ -302,10 +380,19 @@ async def generate_title(session_id: int, data: GenerateTitleIn, db: AsyncSessio
 
 @router.get('/sessions/{session_id}/suggested-questions')
 async def suggested_questions(session_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    """根据会话挂载的文献生成推荐问题"""
+    """根据会话挂载的文献生成推荐问题（仅空会话）。"""
     session = await db.get(QASession, session_id)
     if not session or session.user_id != user.id:
         raise HTTPException(404, '会话不存在')
+
+    message_count = (
+        await db.execute(
+            select(func.count()).select_from(QAMessage).where(QAMessage.session_id == session_id)
+        )
+    ).scalar_one()
+    if message_count and int(message_count) > 0:
+        return {'questions': [], 'session_id': session_id}
+
     return await get_rag_service().suggest_questions(db, session_id)
 
 # ========== 内部辅助函数 ==========

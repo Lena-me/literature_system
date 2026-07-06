@@ -17,6 +17,12 @@ from app.models import (
     Report,
     ReproducibilityGuide,
 )
+from app.utils.paper_links import (
+    extract_doi_from_text,
+    extract_official_url_from_text,
+    resolve_official_paper_url,
+    scholar_search_url,
+)
 from app.utils.json_utils import dumps, loads
 
 
@@ -293,6 +299,9 @@ class GenerationService:
                 'page_number': row.page_number,
                 'reason': f"匹配关键词：{'、'.join(overlap)}",
                 'source_type': 'reference',
+                'doi': extract_doi_from_text(content),
+                'official_url': extract_official_url_from_text(content)
+                or resolve_official_paper_url(extract_doi_from_text(content)),
             })
             if len(results) >= limit:
                 break
@@ -311,6 +320,9 @@ class GenerationService:
                     'page_number': row.page_number,
                     'reason': '来自原文参考文献列表，可作为背景知识或研究脉络补充阅读候选。',
                     'source_type': 'reference',
+                    'doi': extract_doi_from_text(content),
+                    'official_url': extract_official_url_from_text(content)
+                    or resolve_official_paper_url(extract_doi_from_text(content)),
                 })
 
         return results
@@ -373,6 +385,8 @@ class GenerationService:
             candidates.append({
                 'paper_id': paper.id,
                 'title': title,
+                'doi': paper.doi,
+                'official_url': resolve_official_paper_url(paper.doi),
                 'score': round(score, 3),
                 'reason': '该文献与当前论文存在研究主题重合，但方法字段关键词重合度较低，适合作为替代技术路线对照阅读。',
                 'same_direction_evidence': '、'.join(same_terms[:6]) or '主题字段存在相似表达',
@@ -423,20 +437,35 @@ class GenerationService:
                 lines.append('### 原文参考文献溯源')
                 if refs:
                     for idx, ref in enumerate(refs, start=1):
-                        lines.append(f'{idx}. {ref["content"]}')
+                        content = ref.get('content') or ''
+                        url = ref.get('official_url') or extract_official_url_from_text(content)
+                        if url:
+                            lines.append(f'{idx}. [{content}]({url})')
+                        else:
+                            lines.append(f'{idx}. {content}')
                         lines.append(f'   - 溯源理由：{ref["reason"]}')
                 else:
                     lines.append('- 暂未从原文参考文献中筛选到可用条目。可能原因是 PDF 未成功抽取 References，或参考文献暂未入库。')
                 lines.append('')
                 lines.append('### 基础知识与拓展检索式')
                 for item in queries:
-                    lines.append(f'- **{item["name"]}**：`{item["query"]}`')
+                    q = item.get('query') or ''
+                    scholar = scholar_search_url(q) if q else None
+                    if scholar:
+                        lines.append(f'- **{item["name"]}**：[{q}]({scholar})')
+                    else:
+                        lines.append(f'- **{item["name"]}**：`{q}`')
                     lines.append(f'  - 用途：{item["purpose"]}')
             elif module == 'related_papers':
                 related = trace_data.get('related_papers') or []
                 if related:
                     for idx, item in enumerate(related, start=1):
-                        lines.append(f'{idx}. **{item["title"]}**')
+                        title = item.get('title') or '未命名文献'
+                        url = item.get('official_url') or resolve_official_paper_url(item.get('doi'))
+                        if url:
+                            lines.append(f'{idx}. **[{title}]({url})**')
+                        else:
+                            lines.append(f'{idx}. **{title}**')
                         lines.append(f'   - 推荐理由：{item["reason"]}')
                         lines.append(f'   - 相同研究方向依据：{item["same_direction_evidence"]}')
                         lines.append(f'   - 方法差异依据：{item["different_method_evidence"]}')

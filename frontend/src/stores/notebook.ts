@@ -2,9 +2,16 @@ import { defineStore } from 'pinia'
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { qaApi } from '@/api/qa'
-import type { ChatMessage, KnowledgeDomain, SessionDetail, SessionPaper, SessionSummary, Source, StreamFlow, StreamStage } from '@/types/domain'
+import type { ChatMessage, KnowledgeDomain, QAToolArtifact, SessionDetail, SessionPaper, SessionSummary, Source, StreamFlow, StreamStage } from '@/types/domain'
 import { inferStreamFlow } from '@/utils/streamStages'
-
+import { featuresApi } from '@/api/features'
+async function recordLearningEvent(eventType: string, paperId?: number, eventData?: Record<string, unknown>) {
+  try {
+    await featuresApi.record({ paper_id: paperId, event_type: eventType, event_data: eventData })
+  } catch {
+    // 学习记录失败不影响主流程
+  }
+}
 export const useNotebookStore = defineStore('notebook', () => {
   const router = useRouter()
 
@@ -35,6 +42,33 @@ export const useNotebookStore = defineStore('notebook', () => {
 
   // ========== 缓存 + 请求取消 ==========
   const messageCache = new Map<number, ChatMessage[]>()
+  /** 工具产物按 message_id 缓存（兼容迁移前或未持久化的消息） */
+  const messageArtifactsCache = new Map<number, QAToolArtifact[]>()
+
+  function artifactKey(item: QAToolArtifact): string {
+    return `${item.artifact_type}-${item.report_id ?? item.graph_id ?? item.comparison_id ?? ''}`
+  }
+
+  function mergeArtifacts(prev: QAToolArtifact[] | undefined, incoming: QAToolArtifact): QAToolArtifact[] {
+    const list = [...(prev || [])]
+    if (list.some(x => artifactKey(x) === artifactKey(incoming))) return list
+    return [...list, incoming]
+  }
+
+  function attachArtifactsToMessages(msgs: ChatMessage[]): ChatMessage[] {
+    return msgs.map(m => {
+      if (m.artifacts?.length) return m
+      if (!m.id || !messageArtifactsCache.has(m.id)) return m
+      const cached = messageArtifactsCache.get(m.id)!
+      if (!cached.length) return m
+      return { ...m, artifacts: cached }
+    })
+  }
+
+  function rememberMessageArtifacts(messageId: number | undefined, artifacts: QAToolArtifact[] | undefined) {
+    if (!messageId || !artifacts?.length) return
+    messageArtifactsCache.set(messageId, artifacts)
+  }
   const detailCache = new Map<number, SessionDetail>()
   let switchAbortController: AbortController | null = null
   const streamAbortControllers = new Map<number, AbortController>()
@@ -62,6 +96,35 @@ export const useNotebookStore = defineStore('notebook', () => {
     }
   }
 
+  function resolveSessionPaperIds(mentionedIds?: number[] | null): number[] | null {
+    if (mentionedIds && mentionedIds.length > 0) return mentionedIds
+
+    const fromSources = activeSources.value.map(p => p.id).filter(id => Number.isFinite(id))
+    if (fromSources.length > 0) return fromSources
+
+    const sid = activeSessionId.value
+    if (sid) {
+      const cached = detailCache.get(sid)
+      const fromCache = (cached?.papers || []).map(p => p.id).filter(id => Number.isFinite(id))
+      if (fromCache.length > 0) return fromCache
+    }
+
+    const fromDetail = (activeSessionDetail.value?.papers || []).map(p => p.id).filter(id => Number.isFinite(id))
+    return fromDetail.length > 0 ? fromDetail : null
+  }
+
+  function pickFresherSessionDetail(sessionId: number, fetched: SessionDetail): SessionDetail {
+    const cached = detailCache.get(sessionId)
+    if (!cached) return fetched
+    const fetchedCount = fetched.papers?.length ?? 0
+    const cachedCount = cached.papers?.length ?? 0
+    if (cachedCount > fetchedCount) return cached
+    if (cachedCount === fetchedCount && cached.updated_at && fetched.updated_at) {
+      return cached.updated_at >= fetched.updated_at ? cached : fetched
+    }
+    return fetched
+  }
+
   function bumpScroll() {
     scrollTick.value += 1
   }
@@ -84,6 +147,7 @@ export const useNotebookStore = defineStore('notebook', () => {
   }
 
   async function switchSession(sessionId: number) {
+    recordLearningEvent('session_switch', undefined, { session_id: sessionId })
     // 流式进行中切走：先把当前 UI 消息写入缓存，后台继续更新缓存
     const prevSessionId = activeSessionId.value
     if (prevSessionId && prevSessionId !== sessionId && isSessionStreaming(prevSessionId)) {
@@ -111,7 +175,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     if (cachedDetail && cachedMsgs) {
       activeSessionDetail.value = cachedDetail
       activeSources.value = cachedDetail.papers || []
-      activeMessages.value = cachedMsgs
+      activeMessages.value = attachArtifactsToMessages(cachedMsgs)
       isSwitchingSession.value = false
       bumpScroll()
       return
@@ -122,7 +186,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     // 注意：不清空 activeMessages（stale-while-revalidate）
 
     try {
-      const [detail, msgs] = await Promise.all([
+      const [fetchedDetail, msgs] = await Promise.all([
         qaApi.getSession(sessionId, signal),
         qaApi.messages(sessionId, 100, signal),
       ])
@@ -130,12 +194,13 @@ export const useNotebookStore = defineStore('notebook', () => {
       // 已被新请求取消，丢弃旧结果
       if (signal.aborted) return
 
+      const detail = pickFresherSessionDetail(sessionId, fetchedDetail)
       activeSessionDetail.value = detail
       activeSources.value = detail.papers || []
-      activeMessages.value = msgs
+      activeMessages.value = attachArtifactsToMessages(msgs)
 
       detailCache.set(sessionId, detail)
-      messageCache.set(sessionId, msgs)
+      messageCache.set(sessionId, attachArtifactsToMessages(msgs))
       bumpScroll()
     } catch (e: any) {
       if (e?.name === 'AbortError' || e?.code === 'ERR_CANCELED' || signal.aborted) return
@@ -205,11 +270,59 @@ export const useNotebookStore = defineStore('notebook', () => {
     if (sid) streamAbortControllers.get(sid)?.abort()
   }
 
+  function mergeStreamWithRemote(
+    local: ChatMessage[],
+    remote: ChatMessage[],
+    assistantIndex: number,
+  ): ChatMessage[] {
+    if (!remote.length) return local
+    const localAssistant = local[assistantIndex]
+    const lastRemote = remote[remote.length - 1]
+    const hasRemoteAssistant = lastRemote?.role === 'assistant'
+    const localText = `${localAssistant?.content || ''}\n${localAssistant?.reasoning || ''}`.trim()
+
+    if (!hasRemoteAssistant && localAssistant?.role === 'assistant' && localText) {
+      return [...remote, { ...localAssistant }]
+    }
+
+    if (hasRemoteAssistant && localAssistant?.role === 'assistant') {
+      const merged = [...remote]
+      const ri = merged.length - 1
+      const rm = merged[ri]
+      merged[ri] = {
+        ...rm,
+        content: rm.content || localAssistant.content || '',
+        reasoning: rm.reasoning || localAssistant.reasoning || '',
+        sources: rm.sources?.length ? rm.sources : localAssistant.sources,
+        artifacts: rm.artifacts?.length ? rm.artifacts : localAssistant.artifacts,
+        external_refs: rm.external_refs?.length ? rm.external_refs : localAssistant.external_refs,
+      }
+      return merged
+    }
+
+    return remote
+  }
+
+  async function syncMessagesFromApi(
+    targetSessionId: number,
+    localSnapshot: ChatMessage[],
+    assistantIndex: number,
+  ) {
+    try {
+      const remote = attachArtifactsToMessages(await qaApi.messages(targetSessionId, 100))
+      const merged = mergeStreamWithRemote(localSnapshot, remote, assistantIndex)
+      applyMessagesForSession(targetSessionId, merged)
+    } catch (e) {
+      console.warn('[notebook] sync messages failed, keep local stream', e)
+      applyMessagesForSession(targetSessionId, localSnapshot)
+    }
+  }
+
   async function reloadMessages() {
     const sessionId = activeSessionId.value
     if (!sessionId) return
     try {
-      const msgs = await qaApi.messages(sessionId, 100)
+      const msgs = attachArtifactsToMessages(await qaApi.messages(sessionId, 100))
       if (activeSessionId.value === sessionId) {
         activeMessages.value = msgs
         messageCache.set(sessionId, msgs)
@@ -313,13 +426,15 @@ export const useNotebookStore = defineStore('notebook', () => {
     }
 
     let aborted = false
+    let receivedDone = false
+    let streamInterrupted = false
+    let streamSessionId = sessionId
+    let pendingStreamArtifacts: QAToolArtifact[] = []
 
     try {
-      const paperIds = mentionedIds && mentionedIds.length > 0
-        ? mentionedIds
-        : (activeSources.value.length > 0 ? activeSources.value.map(p => p.id) : null)
+      const paperIds = resolveSessionPaperIds(mentionedIds)
 
-      await qaApi.askStream(
+      const streamResult = await qaApi.askStream(
         {
           question,
           paper_ids: paperIds as any,
@@ -327,7 +442,8 @@ export const useNotebookStore = defineStore('notebook', () => {
           regenerate,
         },
         async (event) => {
-          if (event.type === 'session' && event.session_id === sessionId) {
+          if (event.type === 'session' && event.session_id) {
+            streamSessionId = event.session_id
             if (activeSessionId.value === sessionId) {
               activeSessionId.value = event.session_id
             }
@@ -363,9 +479,24 @@ export const useNotebookStore = defineStore('notebook', () => {
               })
             }
           }
+          if (event.type === 'artifact') {
+            const artifact = { ...event } as QAToolArtifact & { type?: string }
+            delete artifact.type
+            pendingStreamArtifacts = mergeArtifacts(pendingStreamArtifacts, artifact)
+          }
           if (event.type === 'done') {
+            receivedDone = true
+            if (event.cancelled) {
+              patchAssistant({ streamStage: undefined, streamFlow: undefined, reasoningExpanded: false })
+              return
+            }
             const msgs = getStreamMessages()
             const current = msgs[assistantIndex]
+            const finalArtifacts = event.artifacts?.length
+              ? event.artifacts
+              : pendingStreamArtifacts.length
+                ? pendingStreamArtifacts
+                : current?.artifacts
             patchAssistant({
               streamStage: undefined,
               streamFlow: undefined,
@@ -374,7 +505,14 @@ export const useNotebookStore = defineStore('notebook', () => {
               content: event.answer || current?.content || '',
               reasoning: event.reasoning ?? current?.reasoning ?? '',
               sources: event.sources?.length ? event.sources : current?.sources,
+              artifacts: finalArtifacts,
+              external_refs: event.external_refs != null ? event.external_refs : current?.external_refs,
             })
+            rememberMessageArtifacts(event.message_id ?? current?.id, finalArtifacts)
+          }
+          if (event.type === 'stream_interrupted') {
+            streamInterrupted = true
+            patchAssistant({ streamStage: undefined, streamFlow: undefined, reasoningExpanded: false })
           }
           if (event.type === 'error') {
             patchAssistant({
@@ -388,6 +526,7 @@ export const useNotebookStore = defineStore('notebook', () => {
         },
         { signal: abortController.signal },
       )
+      receivedDone = receivedDone || streamResult.receivedDone
     } catch (e: any) {
       if (e?.name === 'AbortError') {
         aborted = true
@@ -399,6 +538,7 @@ export const useNotebookStore = defineStore('notebook', () => {
           streamFlow: undefined,
           reasoningExpanded: false,
           cancelled: true,
+          artifacts: pendingStreamArtifacts.length ? pendingStreamArtifacts : current?.artifacts,
           content: partial
             ? `${partial}\n\n（已停止生成）`
             : '（已停止生成）',
@@ -423,23 +563,9 @@ export const useNotebookStore = defineStore('notebook', () => {
       }
 
       const refreshedMsgs = getStreamMessages()
-      const refreshedFinal = refreshedMsgs[assistantIndex]
-      if (
-        !aborted
-        && refreshedFinal?.role === 'assistant'
-        && !(refreshedFinal.content || '').trim()
-        && !(refreshedFinal.reasoning || '').trim()
-      ) {
-        if (activeSessionId.value === sessionId) {
-          await reloadMessages()
-        } else {
-          try {
-            const msgs = await qaApi.messages(sessionId, 100)
-            syncMessagesToCache(sessionId, msgs)
-          } catch {
-            // ignore
-          }
-        }
+
+      if (!aborted) {
+        await syncMessagesFromApi(streamSessionId, refreshedMsgs, assistantIndex)
       } else {
         syncMessagesToCache(sessionId, refreshedMsgs)
       }

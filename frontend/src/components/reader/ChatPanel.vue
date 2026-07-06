@@ -36,7 +36,10 @@ async function ask(q?: string) {
       messages.value[assistantIndex] = { ...current, ...patch }
     }
 
-    await qaApi.askStream({ question: text, paper_ids: props.selectedIds, session_id: sessionId.value }, async (event) => {
+    let receivedDone = false
+    let streamInterrupted = false
+
+    const streamResult = await qaApi.askStream({ question: text, paper_ids: props.selectedIds, session_id: sessionId.value }, async (event) => {
       if (event.type === 'session') sessionId.value = event.session_id
       if (event.type === 'sources') patchAssistant({ sources: event.sources })
       if (event.type === 'status' && event.stage) {
@@ -63,14 +66,21 @@ async function ask(q?: string) {
         }
       }
       if (event.type === 'done') {
+        receivedDone = true
         const current = messages.value[assistantIndex]
         patchAssistant({
           streamStage: undefined,
           streamFlow: undefined,
           reasoningExpanded: false,
+          id: event.message_id ?? current?.id,
           content: event.answer || current?.content || '',
           reasoning: event.reasoning ?? current?.reasoning ?? '',
+          external_refs: event.external_refs?.length ? event.external_refs : current?.external_refs,
         })
+      }
+      if (event.type === 'stream_interrupted') {
+        streamInterrupted = true
+        patchAssistant({ streamStage: undefined, streamFlow: undefined, reasoningExpanded: false })
       }
       if (event.type === 'error') {
         patchAssistant({
@@ -80,6 +90,16 @@ async function ask(q?: string) {
       }
       await nextTick(); box.value?.scrollTo({ top: box.value.scrollHeight, behavior: 'smooth' })
     })
+    receivedDone = receivedDone || streamResult.receivedDone
+
+    if (!receivedDone && streamInterrupted && sessionId.value) {
+      try {
+        const msgs = await qaApi.messages(sessionId.value, 100)
+        if (msgs.length) messages.value = msgs
+      } catch {
+        // ignore
+      }
+    }
   } finally { loading.value = false }
 }
 defineExpose({ ask })
@@ -111,7 +131,11 @@ defineExpose({ ask })
             :expanded="m.reasoningExpanded ?? false"
             :streaming="loading && i === messages.length - 1 && !m.content"
           />
-          <MarkdownRenderer v-if="m.content" :content="m.content" />
+          <MarkdownRenderer
+            v-if="m.content"
+            :content="m.content"
+            :paper-links="m.external_refs"
+          />
         </div>
         <div v-if="m.sources?.length" class="sources">
           <el-tag v-for="(s,idx) in m.sources.slice(0,4)" :key="idx" round class="source-tag" @click="emit('sourceClick', s)">paper {{ s.paper_id }} · p.{{ s.page_number || '-' }}</el-tag>

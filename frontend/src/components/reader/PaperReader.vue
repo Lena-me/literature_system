@@ -1,10 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import 'katex/dist/katex.min.css'
 import { papersApi } from '@/api/papers'
-import type { ContentItem } from '@/types/domain'
+import { notesApi } from '@/api/notes'
+import type { ContentItem, PaperNote, RelatedVisual, Source } from '@/types/domain'
 import PdfReader from '@/components/reader/PdfReader.vue'
+import PaperNotesPanel from '@/components/reader/PaperNotesPanel.vue'
+import {
+  navigateSourceInPdf,
+  navigateVisualInPdf,
+} from '@/utils/sourceNavigation'
 import {
   isMixedFormulaBlock,
   looksLikeBareLatex,
@@ -18,15 +24,44 @@ import {
 const props = defineProps<{ paperId: number; paperTitle: string }>()
 const emit = defineEmits<{ close: [] }>()
 
+interface PaperReaderOpenOptions {
+  page?: number
+  highlight?: string
+  source?: Source
+  visual?: RelatedVisual
+  tab?: 'markdown' | 'notes'
+}
+
+interface HighlightRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+const HIGHLIGHT_HEX: Record<string, string> = {
+  yellow: '#FFD24D',
+  green: '#3CD278',
+  red: '#FF5050',
+  blue: '#5096FF',
+}
+
 // ── 状态 ──
 const visible = ref(false)
 const pdfUrl = ref('')
 const contentItems = ref<ContentItem[]>([])
+const paperNotes = ref<PaperNote[]>([])
+const notesLoading = ref(false)
 const loading = ref(false)
-const activeTab = ref<'markdown' | 'graph'>('markdown')
-const splitPercent = ref(50) // 左侧百分比
+const activeTab = ref<'markdown' | 'notes'>('markdown')
+const splitPercent = ref(50)
 const dragging = ref(false)
 const pdfReaderRef = ref<InstanceType<typeof PdfReader> | null>(null)
+const notesPanelRef = ref<InstanceType<typeof PaperNotesPanel> | null>(null)
+const initialPage = ref(1)
+const highlightText = ref('')
+const pendingNav = ref<PaperReaderOpenOptions | null>(null)
+const formulaModeActive = ref(false)
 
 // ── Markdown 渲染器（公式在 md.render 之后由 renderMathInMarkdownHtml 注入）──
 const md = new MarkdownIt({
@@ -150,10 +185,179 @@ function handleBlockClick(item: ContentItem) {
   }
 }
 
+function noteToHighlightRects(bbox: PaperNote['bbox']): HighlightRect[] {
+  if (!Array.isArray(bbox)) return []
+  return bbox
+    .map(item => ({
+      left: Number(item.left),
+      top: Number(item.top),
+      width: Number(item.width),
+      height: Number(item.height),
+    }))
+    .filter(item => [item.left, item.top, item.width, item.height].every(v => Number.isFinite(v)))
+}
+
+function applyNotesToPdfReader() {
+  const reader = pdfReaderRef.value as any
+  if (!reader?.setPersistedHighlights) return
+  reader.setPersistedHighlights(
+    paperNotes.value.map(note => ({
+      id: note.id,
+      pageNum: note.page_number,
+      text: note.selected_text,
+      rects: noteToHighlightRects(note.bbox),
+      color: reader.hexToRgba?.(note.highlight_color) || undefined,
+    })),
+  )
+}
+
+async function loadNotes() {
+  notesLoading.value = true
+  try {
+    paperNotes.value = await notesApi.list(props.paperId)
+  } catch {
+    paperNotes.value = []
+  } finally {
+    notesLoading.value = false
+    await nextTick()
+    applyNotesToPdfReader()
+  }
+}
+
+async function saveHighlight(payload: {
+  pageNum: number
+  text: string
+  rects: HighlightRect[]
+  colorKey: string
+  noteContent?: string
+}) {
+  const saved = await notesApi.create({
+    paper_id: props.paperId,
+    page_number: payload.pageNum,
+    bbox: payload.rects,
+    selected_text: payload.text,
+    note_content: payload.noteContent || null,
+    highlight_color: HIGHLIGHT_HEX[payload.colorKey] || HIGHLIGHT_HEX.yellow,
+  })
+  await loadNotes()
+  return {
+    id: saved.id,
+    color: (pdfReaderRef.value as any)?.hexToRgba?.(saved.highlight_color),
+  }
+}
+
+async function deleteHighlight(noteId: number | string) {
+  await notesApi.delete(Number(noteId))
+  await loadNotes()
+}
+
+async function applyPendingNavigation() {
+  const nav = pendingNav.value
+  if (!nav) return
+
+  if (nav.tab) activeTab.value = nav.tab
+  if (nav.page) initialPage.value = nav.page
+  if (nav.highlight) highlightText.value = nav.highlight
+
+  const reader = pdfReaderRef.value
+  if (!reader) return
+
+  if (typeof reader.whenReady === 'function') {
+    await reader.whenReady(12000)
+  }
+
+  if (nav.source) {
+    await navigateSourceInPdf(reader, nav.source, 300)
+    pendingNav.value = null
+    return
+  }
+
+  if (nav.visual) {
+    await navigateVisualInPdf(reader, nav.visual, props.paperId, 300)
+    pendingNav.value = null
+    return
+  }
+
+  if (nav.page) {
+    await reader.jumpTo?.(nav.page, nav.highlight || undefined)
+  }
+
+  pendingNav.value = null
+}
+
+async function onNoteSelect(note: PaperNote) {
+  const reader = pdfReaderRef.value
+  if (!reader) return
+  const rects = noteToHighlightRects(note.bbox)
+  if (rects.length === 1) {
+    const rect = rects[0]
+    await reader.highlightAndScrollTo?.(note.page_number, [
+      rect.left,
+      rect.top,
+      rect.left + rect.width,
+      rect.top + rect.height,
+    ])
+    return
+  }
+  if (rects.length > 1) {
+    const xs = rects.map(r => r.left)
+    const ys = rects.map(r => r.top)
+    const xe = rects.map(r => r.left + r.width)
+    const ye = rects.map(r => r.top + r.height)
+    await reader.highlightAndScrollTo?.(note.page_number, [
+      Math.min(...xs),
+      Math.min(...ys),
+      Math.max(...xe),
+      Math.max(...ye),
+    ])
+    return
+  }
+  await reader.jumpTo?.(note.page_number)
+}
+
+async function onHighlightNoteClick(noteId: number) {
+  activeTab.value = 'notes'
+  await nextTick()
+  const scrolled = notesPanelRef.value?.scrollToNote(noteId)
+  if (!scrolled) {
+    await loadNotes()
+    await nextTick()
+    notesPanelRef.value?.scrollToNote(noteId)
+  }
+}
+
+function toggleFormulaModeInReader() {
+  const reader = pdfReaderRef.value as { toggleFormulaMode?: () => void } | null
+  reader?.toggleFormulaMode?.()
+}
+
 // ── 加载 ──
-function open() {
+async function open(options?: PaperReaderOpenOptions) {
+  pendingNav.value = options || null
+  initialPage.value = options?.page || 1
+  highlightText.value = options?.highlight || ''
+  if (options?.tab) activeTab.value = options.tab
   visible.value = true
-  loadData()
+  await loadData()
+  await applyPendingNavigation()
+}
+
+async function navigateToSource(source: Source) {
+  pendingNav.value = { source, tab: 'markdown' }
+  if (!visible.value) {
+    await open({ source, tab: 'markdown' })
+    return
+  }
+  await applyPendingNavigation()
+}
+
+async function navigateToVisual(visual: RelatedVisual) {
+  pendingNav.value = { visual, tab: 'markdown' }
+  if (!visible.value) {
+    await open({ visual, tab: 'markdown' })
+    return
+  }
+  await applyPendingNavigation()
 }
 
 async function loadData() {
@@ -163,7 +367,7 @@ async function loadData() {
       papersApi.fileBlobUrl(props.paperId).catch(() => null),
       papersApi.content(props.paperId).catch(() => []),
     ])
-    // 清理旧 blob URL
+    await loadNotes()
     if (pdfUrl.value && pdfUrl.value.startsWith('blob:')) {
       URL.revokeObjectURL(pdfUrl.value)
     }
@@ -173,15 +377,21 @@ async function loadData() {
     // ignore
   } finally {
     loading.value = false
+    await nextTick()
+    applyNotesToPdfReader()
   }
 }
 
 function close() {
   visible.value = false
+  pendingNav.value = null
+  formulaModeActive.value = false
   if (pdfUrl.value && pdfUrl.value.startsWith('blob:')) {
     URL.revokeObjectURL(pdfUrl.value)
     pdfUrl.value = ''
   }
+  ;(pdfReaderRef.value as any)?.clearPersistedHighlights?.()
+  paperNotes.value = []
   emit('close')
 }
 
@@ -230,7 +440,7 @@ watch(visible, v => {
   else document.removeEventListener('keydown', onKeydown)
 })
 
-defineExpose({ open })
+defineExpose({ open, navigateToSource, navigateToVisual })
 </script>
 
 <template>
@@ -258,15 +468,32 @@ defineExpose({ open })
           <div v-else class="reader-panes">
             <!-- 左侧：PDF -->
             <section class="reader-pane reader-pane--pdf" :style="{ width: splitPercent + '%' }">
-              <div class="pane-header">
+              <div class="pane-header pane-header--pdf">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                 <span>PDF 原文</span>
+                <el-button
+                  v-if="pdfUrl"
+                  size="small"
+                  class="formula-header-btn"
+                  :type="formulaModeActive ? 'primary' : 'default'"
+                  @click="toggleFormulaModeInReader"
+                >
+                  {{ formulaModeActive ? '退出框选' : '框选公式' }}
+                </el-button>
+                <span v-if="formulaModeActive" class="formula-mode-tip">在 PDF 上拖拽框选公式区域</span>
               </div>
               <div class="pane-body">
                 <PdfReader
                   v-if="pdfUrl"
                   ref="pdfReaderRef"
                   :url="pdfUrl"
+                  :initial-page="initialPage"
+                  :highlight-text="highlightText"
+                  :save-highlight-handler="saveHighlight"
+                  :delete-highlight-handler="deleteHighlight"
+                  @highlight-saved="loadNotes"
+                  @highlight-click="onHighlightNoteClick"
+                  @formula-mode-change="formulaModeActive = $event"
                 />
                 <div v-else class="pane-empty">暂无 PDF 文件</div>
               </div>
@@ -296,9 +523,9 @@ defineExpose({ open })
                   >Markdown 视图</button>
                   <button
                     class="pane-tab"
-                    :class="{ active: activeTab === 'graph' }"
-                    @click="activeTab = 'graph'"
-                  >知识图谱预览</button>
+                    :class="{ active: activeTab === 'notes' }"
+                    @click="activeTab = 'notes'"
+                  >我的笔记</button>
                 </div>
               </div>
 
@@ -331,8 +558,16 @@ defineExpose({ open })
                   <div v-else class="pane-empty">暂无解析内容</div>
                 </div>
 
-                <!-- 知识图谱预览 -->
-                <div v-else class="pane-empty">知识图谱预览功能即将上线</div>
+                <!-- 笔记面板 -->
+                <PaperNotesPanel
+                  v-else
+                  ref="notesPanelRef"
+                  :paper-id="paperId"
+                  :notes="paperNotes"
+                  :loading="notesLoading"
+                  @select="onNoteSelect"
+                  @refresh="loadNotes"
+                />
               </div>
             </section>
           </div>
@@ -481,6 +716,23 @@ defineExpose({ open })
   color: #475569;
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+.pane-header--pdf {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.formula-header-btn {
+  margin-left: 4px;
+  font-weight: 600;
+}
+
+.formula-mode-tip {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: #2563EB;
 }
 
 .pane-tabs {

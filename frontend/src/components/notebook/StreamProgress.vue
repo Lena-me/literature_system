@@ -27,11 +27,15 @@ const progressWidth = computed(() =>
   streamProgressPercent(props.stage, resolvedFlow.value),
 )
 
-const isCompareFlow = computed(() => resolvedFlow.value === 'compare')
+const isToolFlow = computed(() =>
+  resolvedFlow.value === 'compare' ||
+  resolvedFlow.value === 'report' ||
+  resolvedFlow.value === 'graph',
+)
 </script>
 
 <template>
-  <div v-if="stage" class="stream-progress" :class="{ 'stream-progress--compare': isCompareFlow }">
+  <div v-if="stage" class="stream-progress" :class="{ 'stream-progress--tool': isToolFlow }">
     <p class="stream-progress-title">{{ streamStageLabel(stage) }}</p>
     <div
       class="stream-progress-track"
@@ -44,7 +48,7 @@ const isCompareFlow = computed(() => resolvedFlow.value === 'compare')
         :class="{
           done: isStreamStageDone(step.id, stage, resolvedFlow),
           active: isStreamStageActive(step.id, stage),
-          compare: step.id === 'comparing',
+          tool: ['comparing', 'reporting', 'graphing'].includes(step.id),
         }"
       >
         <div class="step-dot">
@@ -58,7 +62,7 @@ const isCompareFlow = computed(() => resolvedFlow.value === 'compare')
     <div class="stream-progress-bar">
       <div
         class="stream-progress-fill"
-        :class="{ 'stream-progress-fill--compare': isCompareFlow }"
+        :class="{ 'stream-progress-fill--tool': isToolFlow }"
         :style="{ width: `${progressWidth}%` }"
       />
     </div>
@@ -71,7 +75,7 @@ const isCompareFlow = computed(() => resolvedFlow.value === 'compare')
   padding: 4px 0;
 }
 
-.stream-progress--compare .stream-progress-title {
+.stream-progress--tool .stream-progress-title {
   color: #7c3aed;
 }
 
@@ -127,14 +131,14 @@ const isCompareFlow = computed(() => resolvedFlow.value === 'compare')
   background: var(--academic-primary);
 }
 
-.stream-step.compare.active .step-dot,
-.stream-step.compare.done .step-dot {
+.stream-step.tool.active .step-dot,
+.stream-step.tool.done .step-dot {
   border-color: #7c3aed;
   background: #7c3aed;
   color: #fff;
 }
 
-.stream-step.compare.done .step-dot {
+.stream-step.tool.done .step-dot {
   background: #ede9fe;
   color: #7c3aed;
 }
@@ -159,7 +163,7 @@ const isCompareFlow = computed(() => resolvedFlow.value === 'compare')
   font-weight: 600;
 }
 
-.stream-step.compare.active .step-label {
+.stream-step.tool.active .step-label {
   color: #7c3aed;
 }
 
@@ -177,7 +181,7 @@ const isCompareFlow = computed(() => resolvedFlow.value === 'compare')
   transition: width 0.35s ease;
 }
 
-.stream-progress-fill--compare {
+.stream-progress-fill--tool {
   background: linear-gradient(90deg, #7c3aed, #a78bfa);
 }
 

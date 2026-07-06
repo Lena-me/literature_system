@@ -1,9 +1,11 @@
 <script lang="ts">
 import StreamProgress from '@/components/notebook/StreamProgress.vue'
 import ThinkingBlock from '@/components/notebook/ThinkingBlock.vue'
+import ToolArtifacts from '@/components/notebook/ToolArtifacts.vue'
+import CitationMenu from '@/components/notebook/CitationMenu.vue'
 
 export default {
-  components: { StreamProgress, ThinkingBlock },
+  components: { StreamProgress, ThinkingBlock, ToolArtifacts, CitationMenu },
 }
 </script>
 
@@ -13,6 +15,7 @@ import { useNotebookStore } from '@/stores/notebook'
 import type { ChatMessage, RelatedVisual, Source } from '@/types/domain'
 import { visualLabel } from '@/utils/sourceNavigation'
 import MarkdownRenderer from '@/components/common/MarkdownRenderer.vue'
+import { officialLinkLabel, resolveOfficialPaperUrl } from '@/utils/paperOfficialUrl'
 
 const notebook = useNotebookStore()
 const emit = defineEmits<{
@@ -23,6 +26,7 @@ const emit = defineEmits<{
 const listRef = ref<HTMLElement | null>(null)
 const stickToBottom = ref(true)
 const bottomAnchor = ref<HTMLElement | null>(null)
+const citationMenu = ref<{ source: Source; anchor: { x: number; y: number } } | null>(null)
 
 interface GroupedChunk extends Source {
   ref_index: number
@@ -32,6 +36,7 @@ interface GroupedChunk extends Source {
 interface PaperGroup {
   paper_id: number
   paper_title: string
+  official_url: string | null
   chunk_count: number
   chunks: GroupedChunk[]
 }
@@ -54,7 +59,11 @@ function groupSourcesByPaper(sources: Source[]): PaperGroup[] {
 
   return Array.from(groups.entries()).map(([paper_id, chunks]) => ({
     paper_id,
-    paper_title: paperMap.get(paper_id) || `文献 ${paper_id}`,
+    paper_title: chunks[0]?.paper_title || paperMap.get(paper_id) || `文献 ${paper_id}`,
+    official_url: resolveOfficialPaperUrl({
+      doi: chunks[0]?.doi,
+      official_url: chunks[0]?.official_url,
+    }),
     chunk_count: chunks.length,
     chunks,
   }))
@@ -92,7 +101,10 @@ function onListScroll() {
 async function scrollToBottom(force = false) {
   if (!force && !stickToBottom.value) return
   await nextTick()
-  bottomAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  bottomAnchor.value?.scrollIntoView({
+    behavior: notebook.isStreaming ? 'auto' : 'smooth',
+    block: 'end',
+  })
 }
 
 function scrollToLatest(force = true) {
@@ -106,6 +118,13 @@ function isLastAssistant(index: number, m: ChatMessage) {
     if (notebook.activeMessages[i].role === 'assistant') return i === index
   }
   return false
+}
+
+/** 流式生成期间不展示工具卡片，避免插入 DOM 导致正文抖动 */
+function shouldShowArtifacts(m: ChatMessage, index: number) {
+  if (!m.artifacts?.length) return false
+  if (!notebook.isStreaming) return true
+  return !isLastAssistant(index, m)
 }
 
 function canEditUser(m: ChatMessage, index: number) {
@@ -131,6 +150,9 @@ function handleCitationClick(e: MouseEvent) {
   const el = (e.target as HTMLElement).closest('.citation-mark') as HTMLElement | null
   if (!el) return
 
+  e.preventDefault()
+  e.stopPropagation()
+
   const indexStr = el.getAttribute('data-source-index') || ''
   const index = parseInt(indexStr)
   if (isNaN(index)) return
@@ -142,9 +164,19 @@ function handleCitationClick(e: MouseEvent) {
   if (isNaN(msgIndex)) return
 
   const msg = notebook.activeMessages[msgIndex]
-  if (!msg?.sources?.[index]) return
+  const source = msg?.sources?.[index]
+  if (!source) return
 
-  emit('sourceClick', msg.sources[index])
+  const rect = el.getBoundingClientRect()
+  citationMenu.value = {
+    source,
+    anchor: { x: rect.left + rect.width / 2, y: rect.bottom },
+  }
+}
+
+function openOfficialUrl(url: string | null | undefined) {
+  if (!url) return
+  window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 function updateReasoningExpanded(index: number, expanded: boolean) {
@@ -210,8 +242,14 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
             :streaming="notebook.isStreaming && isLastAssistant(i, m) && !m.content"
             @update:expanded="updateReasoningExpanded(i, $event)"
           />
-          <MarkdownRenderer v-if="m.content" :content="m.content" />
+          <MarkdownRenderer
+            v-if="m.content"
+            :content="m.content"
+            :paper-links="m.external_refs"
+          />
         </div>
+
+        <ToolArtifacts v-if="shouldShowArtifacts(m, i)" :artifacts="m.artifacts!" />
 
         <div v-if="isLastAssistant(i, m) && !notebook.isStreaming" class="msg-actions">
           <button type="button" @click="notebook.regenerateLastResponse()">
@@ -234,7 +272,16 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
           >
             <div class="paper-group-header">
               <span class="paper-icon">📄</span>
-              <span class="paper-group-title">{{ group.paper_title }}</span>
+              <button
+                v-if="group.official_url"
+                type="button"
+                class="paper-group-title link"
+                :title="officialLinkLabel(group.official_url)"
+                @click.stop="openOfficialUrl(group.official_url)"
+              >
+                {{ group.paper_title }}
+              </button>
+              <span v-else class="paper-group-title">{{ group.paper_title }}</span>
             </div>
 
             <div v-if="collectPaperVisuals(group.chunks).length" class="paper-visuals" @click.stop>
@@ -262,6 +309,14 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
     </div>
 
     <div ref="bottomAnchor" class="scroll-anchor" />
+
+    <CitationMenu
+      v-if="citationMenu"
+      :source="citationMenu.source"
+      :anchor="citationMenu.anchor"
+      @close="citationMenu = null"
+      @open-library="emit('sourceClick', $event)"
+    />
   </div>
 </template>
 
@@ -393,6 +448,19 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+}
+
+.paper-group-title.link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: #7c3aed;
+}
+
+.paper-group-title.link:hover {
+  text-decoration: underline;
 }
 
 .paper-visuals {

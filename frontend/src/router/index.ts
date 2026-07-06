@@ -17,6 +17,7 @@ const userRoutes = [
       { path: '/notebook', component: () => import('@/views/research/NotebookView.vue') },
       { path: '/notebook/session/:id', component: () => import('@/views/research/NotebookView.vue') },
       { path: '/library', component: () => import('@/views/research/LibraryView.vue') },
+      { path: '/compare', component: () => import('@/views/research/CompareView.vue') },
       { path: '/reports', component: () => import('@/views/research/ReportsView.vue') },
       { path: '/legacy', component: () => import('@/views/research/WorkbenchView.vue') },
       { path: '/archive', component: () => import('@/views/research/LearningArchiveView.vue') },

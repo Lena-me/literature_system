@@ -36,8 +36,8 @@ class Settings(BaseSettings):
 
     # Web 请求连接池：小连接池，避免 NullPool 导致每个请求都重新建连。
     mysql_pool_pre_ping: bool = True
-    mysql_pool_size: int = 5
-    mysql_max_overflow: int = 10
+    mysql_pool_size: int = 10
+    mysql_max_overflow: int = 15
     mysql_pool_recycle_seconds: int = 1800
     mysql_pool_timeout_seconds: int = 30
     mysql_connect_timeout_seconds: int = 10
@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     mineru_keep_output: bool = True
     mineru_fallback_to_grobid: bool = True
 
+    # 公式 OCR（RapidLaTeXOCR）
+    formula_ocr_enabled: bool = True
+
     hf_endpoint: str = 'https://hf-mirror.com'
     hf_cache_dir: str = './runtime/hf_cache'
     bge_embedding_model: str = 'BAAI/bge-large-zh-v1.5'
@@ -113,8 +116,8 @@ class Settings(BaseSettings):
 
     # LLM
     llm_base_url: str
-    llm_api_key: str = 'sk-24745623d5bb4b21bd9d85374627bbe6'
-    llm_model: str = 'deepseek-v4-pro'
+    llm_api_key: str = 'sk-SGPOwrqL3jy6WvB6Y8SSI8N2Go8xBhmdRTGpTAXoEkUTEZ4p'
+    llm_model: str = 'gpt-4o-mini'
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
     enable_llm_extract: bool = False
@@ -122,6 +125,9 @@ class Settings(BaseSettings):
     # QA Agent（LangGraph）
     qa_use_langgraph: bool = True
     qa_history_limit: int = 20
+    qa_use_llm_rewrite: bool = False
+    qa_use_llm_intent: bool = False
+    qa_tool_fallback_rag: bool = True
 
     # Neo4j
     neo4j_uri: str = 'bolt://127.0.0.1:7687'

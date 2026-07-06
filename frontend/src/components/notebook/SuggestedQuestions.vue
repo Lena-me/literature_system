@@ -7,11 +7,15 @@ const notebook = useNotebookStore()
 const questions = ref<string[]>([])
 const loading = ref(false)
 
-// 当会话切换或文献变化时，重新获取推荐问题
+// 仅在新会话（无任何消息）时获取推荐问题
 watch(
-  () => [notebook.activeSessionId, notebook.activeSources.map(p => p.id).join(',')] as const,
-  async ([sessionId, sourceKey]) => {
-    if (!sessionId || !sourceKey) {
+  () => [
+    notebook.activeSessionId,
+    notebook.activeSources.map(p => p.id).join(','),
+    notebook.activeMessages.length,
+  ] as const,
+  async ([sessionId, sourceKey, messageCount]) => {
+    if (!sessionId || !sourceKey || messageCount > 0) {
       questions.value = []
       return
     }
@@ -50,7 +54,6 @@ function askQuestion(q: string) {
 <template>
   <div v-if="shouldShow" class="suggested-questions">
     <div class="sq-header">
-      <span class="sq-spark">💡</span>
       <span>基于挂载文献，推荐以下探索性问题：</span>
     </div>
     <div class="sq-list">
@@ -123,3 +126,4 @@ function askQuestion(q: string) {
   font-size: 13px;
 }
 </style>
+

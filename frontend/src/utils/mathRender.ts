@@ -142,6 +142,53 @@ export function convertLatexDelimitersToDollar(text: string): string {
   return out
 }
 
+/** OCR / RapidLaTeXOCR 常见粘连：\\simD → \\sim D，否则 KaTeX 报红 */
+const OCR_GLUE_COMMANDS =
+  'sim|simeq|cong|approx|equiv|propto|in|notin|ni|subset|supset|subseteq|supseteq|to|mapsto|gets|leftrightarrow|Leftrightarrow|rightarrow|leftarrow|Rightarrow|Leftarrow|cdot|times|circ|bullet|pm|mp|cap|cup|vee|wedge|leq|geq|neq|le|ge|lt|gt|mid|parallel|perp|models|vdash|dashv'
+
+export function fixOcrLatexGlue(latex: string): string {
+  let text = latex
+  // 分布符号 ~ 在数学模式里应写作 \sim，裸 ~ 会被 KaTeX 当成空白
+  text = text.replace(/([)\}_\w])\s*~\s*(?=\\|[A-Za-z{])/g, '$1 \\sim ')
+  text = text.replace(new RegExp(`\\\\(?:${OCR_GLUE_COMMANDS})(?=[A-Za-z\\\\])`, 'g'), (match) => `${match} `)
+  return text
+}
+
+/** OCR 公式：仅做粘连/笔误修复，不做 MinerU 式空格压缩（会破坏嵌套下标） */
+export function normalizeOcrLatex(latex: string): string {
+  return fixOcrLatexGlue(
+    fixLlmLatexSyntax(restoreMathPipePlaceholders(stripLatexDelimiters(latex.trim()))),
+  )
+}
+
+function compactScriptBody(body: string): string {
+  return fixOcrLatexGlue(body.replace(/\s+/g, ''))
+}
+
+/** 按花括号深度匹配 _{…} / ^{…}，避免 D_{gen} 内的 } 截断外层下标 */
+function compactBalancedScripts(text: string, marker: '_' | '^'): string {
+  let result = ''
+  let i = 0
+  while (i < text.length) {
+    if (text[i] === marker && text[i + 1] === '{') {
+      let depth = 1
+      let j = i + 2
+      while (j < text.length && depth > 0) {
+        if (text[j] === '{') depth += 1
+        else if (text[j] === '}') depth -= 1
+        j += 1
+      }
+      const body = text.slice(i + 2, j - 1)
+      result += `${marker}{${compactScriptBody(body)}}`
+      i = j
+      continue
+    }
+    result += text[i]
+    i += 1
+  }
+  return result
+}
+
 /** LLM 输出的常见 LaTeX 笔误 */
 export function fixLlmLatexSyntax(latex: string): string {
   let text = latex.trim()
@@ -158,7 +205,7 @@ export function fixLlmLatexSyntax(latex: string): string {
 
 /** 将 MinerU / LLM 松散 LaTeX 收紧为 KaTeX 可正确排版的形式 */
 export function normalizeLatexForKatex(latex: string): string {
-  let text = fixLlmLatexSyntax(restoreMathPipePlaceholders(stripLatexDelimiters(latex.trim())))
+  let text = fixOcrLatexGlue(fixLlmLatexSyntax(restoreMathPipePlaceholders(stripLatexDelimiters(latex.trim()))))
   if (!text) return text
 
   text = text.replace(/\\tag\s*\{([^}]*)\}/g, '\\quad\\text{($1)}')
@@ -197,8 +244,8 @@ export function normalizeLatexForKatex(latex: string): string {
       `\\frac{${compactFracPart(num)}}{${compactFracPart(den)}}`,
   )
 
-  text = text.replace(/_\s*\{\s*([^}]+?)\s*\}/g, (_m, body: string) => `_{${body.replace(/\s+/g, '')}}`)
-  text = text.replace(/\^\s*\{\s*([^}]+?)\s*\}/g, (_m, body: string) => `^{${body.replace(/\s+/g, '')}}`)
+  text = compactBalancedScripts(text, '_')
+  text = compactBalancedScripts(text, '^')
 
   // \mathcal { R } _ { i j } → \mathcal{R}_{ij}
   text = text.replace(/\\([a-zA-Z]+)\s*\{\s*([^}]+?)\s*\}/g, (_m, cmd: string, body: string) => {
@@ -239,8 +286,13 @@ export function isMixedFormulaBlock(text: string): boolean {
   return /\$[^$]+\$/.test(inner) || /[\u4e00-\u9fff]/.test(inner)
 }
 
-export function renderKatexHtml(content: string, displayMode: boolean): string {
-  const normalized = normalizeLatexForKatex(content)
+export function renderKatexHtml(
+  content: string,
+  displayMode: boolean,
+  opts?: { source?: 'ocr' | 'default' },
+): string {
+  const normalized =
+    opts?.source === 'ocr' ? normalizeOcrLatex(content) : normalizeLatexForKatex(content)
   try {
     return katex.renderToString(normalized, {
       displayMode,
@@ -250,6 +302,10 @@ export function renderKatexHtml(content: string, displayMode: boolean): string {
   } catch {
     return normalized
   }
+}
+
+export function katexRenderedCleanly(html: string): boolean {
+  return html.includes('class="katex"') && !html.includes('katex-error')
 }
 
 /** 仅将简单括号内容转为行内公式，避免拆散 \left(...\right) 等复杂表达式 */

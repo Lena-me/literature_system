@@ -13,6 +13,16 @@ export const FLOW_STAGES: Record<StreamFlow, { id: StreamStage; label: string }[
     { id: 'comparing', label: '对比文献' },
     { id: 'generating', label: '生成回答' },
   ],
+  report: [
+    { id: 'classifying', label: '识别意图' },
+    { id: 'reporting', label: '生成报告' },
+    { id: 'generating', label: '生成回答' },
+  ],
+  graph: [
+    { id: 'classifying', label: '识别意图' },
+    { id: 'graphing', label: '构建图谱' },
+    { id: 'generating', label: '生成回答' },
+  ],
   general: [
     { id: 'classifying', label: '识别意图' },
     { id: 'generating', label: '生成回答' },
@@ -28,11 +38,15 @@ const STAGE_LABELS: Record<StreamStage, string> = {
   searching: '正在检索文献…',
   reranking: '正在重排序…',
   comparing: '正在对比文献…',
+  reporting: '正在生成研读报告…',
+  graphing: '正在构建知识图谱…',
   generating: '正在生成回答…',
 }
 
 export function inferStreamFlow(stage: StreamStage, currentFlow?: StreamFlow): StreamFlow | undefined {
   if (stage === 'comparing') return 'compare'
+  if (stage === 'reporting') return 'report'
+  if (stage === 'graphing') return 'graph'
   if (stage === 'embedding' || stage === 'searching' || stage === 'reranking') return 'rag'
   if (stage === 'generating') return currentFlow ?? 'general'
   return currentFlow

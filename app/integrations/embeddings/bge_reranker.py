@@ -63,17 +63,32 @@ def _load_model() -> CrossEncoder | None:
         return None
 
     model_name = settings.bge_reranker_model
-    local_path = _resolve_local_path(model_name)
-
     try:
+        local_path = _resolve_local_path(model_name)
         _model = CrossEncoder(local_path, device=settings.reranker_device)
         dev = getattr(getattr(_model, 'model', None), 'device', settings.reranker_device)
         logger.info('BGE reranker model loaded: %s (device=%s)', local_path, dev)
         return _model
     except Exception as e:
         _model_load_failed = True
-        logger.error('Failed to load BGE reranker model from %s: %s', local_path, e)
-        raise
+        logger.error(
+            'Failed to load BGE reranker model (%s): %s — will fall back to vector scores',
+            model_name,
+            e,
+        )
+        return None
+
+
+def _fallback_by_vector_score(candidates: list[dict], top_n: int) -> list[dict]:
+    """Reranker 不可用时，按 Milvus 向量相似度分排序。"""
+    ranked: list[dict] = []
+    for item in candidates:
+        copied = dict(item)
+        score = float(copied.get('rerank_score', copied.get('score', 0)) or 0)
+        copied['rerank_score'] = score
+        ranked.append(copied)
+    ranked.sort(key=lambda x: x['rerank_score'], reverse=True)
+    return ranked[:top_n]
 
 
 class BGEReranker:
@@ -82,7 +97,8 @@ class BGEReranker:
             return []
         model = _load_model()
         if model is None:
-            raise RuntimeError('BGE reranker model not available')
+            logger.warning('BGE reranker unavailable, using vector score fallback')
+            return _fallback_by_vector_score(candidates, top_n)
         max_chars = settings.rag_rerank_text_max_chars
         pairs = [
             (

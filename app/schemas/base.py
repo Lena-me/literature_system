@@ -278,6 +278,31 @@ class TaskBatchRetryIn(BaseModel):
 class VectorRestoreIn(BaseModel):
     backup_id: int
 
+class HighlightRectIn(BaseModel):
+    left: float = Field(ge=0, le=1)
+    top: float = Field(ge=0, le=1)
+    width: float = Field(ge=0, le=1)
+    height: float = Field(ge=0, le=1)
+
+
+class PaperNoteCreateIn(BaseModel):
+    paper_id: int
+    page_number: int = Field(ge=1)
+    bbox: list[HighlightRectIn] = Field(min_length=1)
+    selected_text: str = Field(min_length=1, max_length=8000)
+    note_content: str | None = Field(default=None, max_length=8000)
+    highlight_color: str = Field(default='#FFEB3B', max_length=20)
+
+
+class PaperNoteUpdateIn(BaseModel):
+    note_content: str | None = Field(default=None, max_length=8000)
+    highlight_color: str | None = Field(default=None, max_length=20)
+
+
+class FormulaExtractIn(BaseModel):
+    image_base64: str = Field(min_length=32, max_length=8_000_000)
+
+
 class UserCreateIn(BaseModel):
     username: str = Field(min_length=3, max_length=50)
     password: str = Field(min_length=6, max_length=128)

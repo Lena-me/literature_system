@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, nextTick } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useNotebookStore } from '@/stores/notebook'
 import { papersApi } from '@/api/papers'
@@ -8,19 +8,18 @@ import type { RelatedVisual, Source } from '@/types/domain'
 import SourceBar from '@/components/notebook/SourceBar.vue'
 import MessageList from '@/components/notebook/MessageList.vue'
 import ChatInput from '@/components/notebook/ChatInput.vue'
-import PdfReader from '@/components/reader/PdfReader.vue'
-import { navigateSourceInPdf, extractHighlightText, navigateVisualInPdf } from '@/utils/sourceNavigation'
+import PaperReader from '@/components/reader/PaperReader.vue'
+import { extractHighlightText } from '@/utils/sourceNavigation'
 import SuggestedQuestions from '@/components/notebook/SuggestedQuestions.vue'
-import MultiPaperComparePanel from '@/components/notebook/MultiPaperComparePanel.vue'
 
 const route = useRoute()
 const notebook = useNotebookStore()
 
-// SourceBar ref — expose openPicker
 const sourceBarRef = ref<InstanceType<typeof SourceBar> | null>(null)
-const showComparePanel = ref(false)
+const readerRef = ref<InstanceType<typeof PaperReader> | null>(null)
+const readerPaper = ref<{ id: number; title: string } | null>(null)
+const pendingReaderNav = ref<{ source?: Source; visual?: RelatedVisual } | null>(null)
 
-// ——— Drag & Drop ———
 const isDragOver = ref(false)
 let dragEnterCount = 0
 
@@ -72,30 +71,76 @@ async function onDrop(e: DragEvent) {
   }
 }
 
-// ——— ChatInput events ———
 function onChatInputOpenLibraryPicker() {
   sourceBarRef.value?.openPicker()
 }
 
-function onChatInputFilesUploaded(ids: number[]) {
+function onChatInputFilesUploaded(_ids: number[]) {
   // Files already added to session inside ChatInput
 }
 
-function openComparePanel() {
-  if (notebook.activeSources.length < 2) {
-    ElMessage.warning('请先在当前会话中挂载至少 2 篇文献')
-    return
-  }
-  showComparePanel.value = true
+function resolvePaperTitle(paperId: number) {
+  return notebook.activeSources.find(p => p.id === paperId)?.title || '文献阅读'
 }
 
-// ——— ReadingDrawer ———
-const pdfUrl = ref('')
-const pdfError = ref('')
-const pdfPage = ref(1)
-const pdfHighlight = ref('')
-const drawerTab = ref<'pdf' | 'outline'>('pdf')
-const pdfReaderRef = ref<InstanceType<typeof PdfReader> | null>(null)
+async function openReader(
+  paperId: number,
+  options?: {
+    page?: number
+    highlight?: string
+    source?: Source
+    visual?: RelatedVisual
+  },
+) {
+  readerPaper.value = { id: paperId, title: resolvePaperTitle(paperId) }
+  await nextTick()
+  await readerRef.value?.open(options)
+}
+
+function handleReaderClose() {
+  readerPaper.value = null
+  pendingReaderNav.value = null
+  notebook.closeReadingDrawer()
+}
+
+watch(
+  () => [
+    notebook.isReadingDrawerOpen,
+    notebook.currentReadingPaperId,
+    notebook.currentReadingPage,
+    notebook.currentReadingHighlight,
+  ] as const,
+  async ([open, paperId, page, highlight]) => {
+    if (!open || !paperId) return
+    const nav = pendingReaderNav.value
+    pendingReaderNav.value = null
+    await openReader(paperId, {
+      page: page || 1,
+      highlight: highlight || undefined,
+      source: nav?.source,
+      visual: nav?.visual,
+    })
+  },
+)
+
+async function onSourceClick(source: Source) {
+  pendingReaderNav.value = { source }
+  notebook.openReadingDrawer(
+    source.paper_id,
+    source.page_number,
+    extractHighlightText(source),
+  )
+}
+
+async function onVisualClick(source: Source, visual: RelatedVisual) {
+  pendingReaderNav.value = { visual }
+  notebook.openReadingDrawer(source.paper_id, visual.page_number ?? undefined, '')
+}
+
+async function onChipClick(paperId: number) {
+  pendingReaderNav.value = null
+  notebook.openReadingDrawer(paperId)
+}
 
 onMounted(async () => {
   const sessionId = route.params.id ? Number(route.params.id) : null
@@ -103,61 +148,6 @@ onMounted(async () => {
     await notebook.switchSession(sessionId)
   }
 })
-
-async function onSourceClick(source: Source) {
-  notebook.openReadingDrawer(
-    source.paper_id,
-    source.page_number,
-    extractHighlightText(source)
-  )
-  pdfPage.value = source.page_number || 1
-  pdfHighlight.value = extractHighlightText(source)
-  drawerTab.value = 'pdf'
-  await loadPdf(source.paper_id)
-  await nextTick()
-  await navigateSourceInPdf(pdfReaderRef.value, source, 400)
-}
-
-async function onVisualClick(source: Source, visual: RelatedVisual) {
-  notebook.openReadingDrawer(source.paper_id, visual.page_number ?? undefined, '')
-  pdfPage.value = visual.page_number || 1
-  pdfHighlight.value = ''
-  drawerTab.value = 'pdf'
-  await loadPdf(source.paper_id)
-  await nextTick()
-  await navigateVisualInPdf(pdfReaderRef.value, visual, source.paper_id, 400)
-}
-
-async function loadPdf(paperId: number) {
-  pdfUrl.value = ''
-  pdfError.value = ''
-  try {
-    pdfUrl.value = await papersApi.fileBlobUrl(paperId)
-  } catch (e: any) {
-    pdfError.value = e?.response?.data?.detail || e?.message || 'PDF无法加载'
-    console.error('PDF load error:', e)
-  }
-}
-
-async function onChipClick(paperId: number) {
-  notebook.openReadingDrawer(paperId)
-  pdfPage.value = 1
-  pdfHighlight.value = ''
-  drawerTab.value = 'pdf'
-  await loadPdf(paperId)
-}
-
-function closeDrawer() {
-  notebook.closeReadingDrawer()
-  onOldUrlCleanup(pdfUrl.value)
-  pdfUrl.value = ''
-}
-
-function onOldUrlCleanup(url: string) {
-  if (url?.startsWith('blob:')) {
-    try { URL.revokeObjectURL(url) } catch {}
-  }
-}
 </script>
 
 <template>
@@ -168,7 +158,6 @@ function onOldUrlCleanup(url: string) {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <!-- ★ Drag & Drop 遮罩 -->
     <Transition name="dnd-fade">
       <div v-if="isDragOver" class="dnd-overlay">
         <div class="dnd-content">
@@ -183,28 +172,17 @@ function onOldUrlCleanup(url: string) {
       </div>
     </Transition>
 
-    <!-- 欢迎页 -->
     <div v-if="!notebook.activeSessionId" class="welcome-screen">
       <div class="welcome-spark">✦</div>
       <h2>欢迎使用 AI 研读工作台</h2>
       <p>在左侧选择一个会话开始探索，或者上传文献获得智能分析。</p>
     </div>
 
-    <!-- 主画布 -->
     <template v-else>
       <div class="top-bar">
         <SourceBar ref="sourceBarRef" @chip-click="onChipClick" />
-        <button
-          class="compare-entry"
-          :disabled="notebook.activeSources.length < 2"
-          @click="openComparePanel"
-        >
-          <span>多文献对比</span>
-          <b>{{ notebook.activeSources.length }}</b>
-        </button>
       </div>
       <div class="chat-body">
-        <!-- ★ 会话切换 loading -->
         <div v-if="notebook.isSwitchingSession" class="switch-loading">
           <span class="loading-pulse"></span>
           <span>加载对话中...</span>
@@ -221,46 +199,12 @@ function onOldUrlCleanup(url: string) {
       />
     </template>
 
-    <!-- ReadingDrawer -->
-    <Transition name="drawer-slide">
-      <div v-if="notebook.isReadingDrawerOpen" class="reading-drawer">
-        <div class="drawer-head">
-          <span class="drawer-title">
-            {{ notebook.activeSources.find(p => p.id === notebook.currentReadingPaperId)?.title || '文献阅读' }}
-          </span>
-          <div class="drawer-tabs">
-            <button :class="{ active: drawerTab === 'pdf' }" @click="drawerTab = 'pdf'">PDF</button>
-            <button :class="{ active: drawerTab === 'outline' }" @click="drawerTab = 'outline'">大纲</button>
-          </div>
-          <button class="drawer-close" @click="closeDrawer">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-        <div class="drawer-body">
-          <div v-show="drawerTab === 'pdf'" class="pdf-container">
-            <div v-if="pdfError" class="pdf-error">{{ pdfError }}</div>
-            <PdfReader
-              v-else-if="pdfUrl"
-              ref="pdfReaderRef"
-              :url="pdfUrl"
-              :initial-page="pdfPage"
-              :highlight-text="pdfHighlight"
-              @old-url-cleanup="onOldUrlCleanup"
-            />
-            <div v-else class="pdf-loading">加载中...</div>
-          </div>
-          <div v-show="drawerTab === 'outline'" class="outline-container">
-            <div class="outline-placeholder">大纲功能开发中...</div>
-          </div>
-        </div>
-      </div>
-    </Transition>
-
-    <MultiPaperComparePanel
-      :visible="showComparePanel"
-      :papers="notebook.activeSources"
-      @close="showComparePanel = false"
-      @source-click="onSourceClick"
+    <PaperReader
+      v-if="readerPaper"
+      ref="readerRef"
+      :paper-id="readerPaper.id"
+      :paper-title="readerPaper.title"
+      @close="handleReaderClose"
     />
   </div>
 </template>
@@ -275,7 +219,6 @@ function onOldUrlCleanup(url: string) {
   background: var(--academic-canvas);
 }
 
-/* ===== Drag & Drop 遮罩 ===== */
 .dnd-overlay {
   position: absolute;
   inset: 0;
@@ -314,7 +257,6 @@ function onOldUrlCleanup(url: string) {
 .dnd-fade-enter-from,
 .dnd-fade-leave-to { opacity: 0; }
 
-/* ===== 侧边栏展开按钮 ===== */
 .top-bar {
   display: flex;
   align-items: center;
@@ -327,42 +269,6 @@ function onOldUrlCleanup(url: string) {
   border-bottom: none;
 }
 
-.compare-entry {
-  margin-right: 16px;
-  padding: 8px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--academic-border);
-  background: var(--academic-primary);
-  color: #fff;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  box-shadow: var(--shadow-soft);
-  white-space: nowrap;
-}
-
-.compare-entry b {
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.2);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-}
-
-.compare-entry:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-/* ===== 欢迎页 ===== */
 .welcome-screen {
   flex: 1;
   display: flex;
@@ -404,7 +310,6 @@ function onOldUrlCleanup(url: string) {
 
 .chat-input-fixed { flex-shrink: 0; }
 
-/* ★ 会话切换 loading */
 .switch-loading {
   flex: 1;
   display: flex;
@@ -426,82 +331,4 @@ function onOldUrlCleanup(url: string) {
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
-
-/* ===== ReadingDrawer ===== */
-.reading-drawer {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 48%;
-  min-width: 400px;
-  background: var(--academic-panel);
-  border-left: 1px solid var(--academic-border);
-  display: flex;
-  flex-direction: column;
-  z-index: 30;
-  box-shadow: var(--shadow-float);
-}
-
-.drawer-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--academic-border);
-  background: var(--academic-canvas);
-}
-
-.drawer-title {
-  flex: 1;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--academic-text-main);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.drawer-tabs { display: flex; gap: 2px; }
-
-.drawer-tabs button {
-  padding: 6px 14px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: var(--academic-text-muted);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.drawer-tabs button:hover { color: var(--academic-text-main); background: rgba(0,0,0,0.04); }
-
-.drawer-tabs button.active {
-  background: var(--academic-primary-light);
-  color: var(--academic-primary);
-  font-weight: 600;
-}
-
-.drawer-close {
-  width: 32px; height: 32px;
-  border-radius: 8px; border: none;
-  background: transparent;
-  color: var(--academic-text-muted);
-  cursor: pointer;
-  display: grid; place-items: center;
-  transition: all 0.15s;
-}
-
-.drawer-close:hover { background: rgba(0,0,0,0.05); color: var(--academic-text-main); }
-
-.drawer-body { flex: 1; overflow: hidden; background: var(--academic-panel); }
-.pdf-container { height: 100%; overflow: auto; }
-.pdf-error { padding: 40px; text-align: center; color: var(--danger); }
-.pdf-loading { display: grid; place-items: center; height: 100%; color: var(--academic-text-muted); }
-
-.drawer-slide-enter-active { transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
-.drawer-slide-leave-active { transition: transform 0.25s cubic-bezier(0.5, 0, 0.75, 0); }
-.drawer-slide-enter-from,
-.drawer-slide-leave-to { transform: translateX(100%); }
 </style>

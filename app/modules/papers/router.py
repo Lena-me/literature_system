@@ -15,8 +15,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.dependencies import get_current_user
-from app.db.mysql import get_db
+from app.core.dependencies import get_current_user, get_current_user_brief
+from app.db.mysql import AsyncSessionLocal, get_db
 from app.db.redis import redis_client
 from app.integrations.object_storage.minio_storage import MinioStorage
 from app.models import Category, ContentItem, FiguresTable, Paper, ParseTask, User
@@ -275,19 +275,19 @@ async def list_papers(
 
 @router.get('/parse-events')
 async def parse_events_stream(
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_brief),
 ):
     """SSE：后端推送文献解析状态（Redis Pub/Sub）。"""
-    pending_rows = (
-        await db.execute(
-            select(Paper.id, Paper.parse_status, Paper.title, Paper.original_filename).where(
-                Paper.user_id == user.id,
-                Paper.is_deleted == False,
-                Paper.parse_status.notin_(list(TERMINAL_PARSE_STATUSES)),
+    async with AsyncSessionLocal() as db:
+        pending_rows = (
+            await db.execute(
+                select(Paper.id, Paper.parse_status, Paper.title, Paper.original_filename).where(
+                    Paper.user_id == user.id,
+                    Paper.is_deleted == False,
+                    Paper.parse_status.notin_(list(TERMINAL_PARSE_STATUSES)),
+                )
             )
-        )
-    ).all()
+        ).all()
     initial_events = [
         {
             'type': 'parse_status',
@@ -317,6 +317,8 @@ async def parse_events_stream(
                 data = message.get('data')
                 if data:
                     yield f'data: {data}\n\n'
+        except asyncio.CancelledError:
+            return
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.aclose()

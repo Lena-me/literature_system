@@ -18,6 +18,21 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='用户不存在或已被禁用')
     return user
 
+
+async def get_current_user_brief(token: str = Depends(oauth2_scheme)) -> User:
+    """SSE/WebSocket 等长连接专用：鉴权后立即释放 DB 连接。"""
+    from app.db.mysql import AsyncSessionLocal
+
+    payload = decode_access_token(token)
+    user_id = int(payload.get('sub'))
+    async with AsyncSessionLocal() as db:
+        user = await db.get(User, user_id)
+        if not user or user.status != 'active':
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='用户不存在或已被禁用')
+        await db.refresh(user)
+        db.expunge(user)
+        return user
+
 async def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != 'admin':
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='需要管理员权限')

@@ -3,13 +3,22 @@ import MarkdownIt from 'markdown-it'
 import { computed } from 'vue'
 import 'katex/dist/katex.min.css'
 import { renderChatMarkdownHtml } from '@/utils/mathRender'
+import { linkifyScholarlyReferences, injectPaperTitleLinks, ensureExternalLinksOpenInNewTab } from '@/utils/paperOfficialUrl'
+import type { ExternalReference } from '@/types/domain'
 
-const props = defineProps<{ content: string }>()
+const props = defineProps<{
+  content: string
+  linkifyReferences?: boolean
+  paperLinks?: ExternalReference[]
+}>()
 
 const md = new MarkdownIt({ html: true, linkify: true, breaks: true })
 
 const html = computed(() => {
   let raw = props.content || ''
+  if (props.paperLinks?.length) {
+    raw = injectPaperTitleLinks(raw, props.paperLinks)
+  }
 
   // 引用角标 [1] / [来源1] — 在公式规范化之前处理，避免与 [ formula ] 冲突
   raw = raw.replace(
@@ -27,7 +36,12 @@ const html = computed(() => {
     },
   )
 
-  return renderChatMarkdownHtml(raw, s => md.render(s))
+  let rendered = renderChatMarkdownHtml(raw, s => md.render(s))
+  if (props.linkifyReferences !== false) {
+    rendered = linkifyScholarlyReferences(rendered)
+  }
+  rendered = ensureExternalLinksOpenInNewTab(rendered)
+  return rendered
 })
 </script>
 <template><article class="markdown-body" v-html="html" /></template>
@@ -42,6 +56,20 @@ const html = computed(() => {
 .markdown-body :deep(td), .markdown-body :deep(th) { border: 1px solid var(--academic-border); padding: 10px 12px; font-size: 13px; }
 .markdown-body :deep(th) { background: var(--academic-canvas); color: var(--academic-text-main); font-weight: 600; }
 .markdown-body :deep(a) { color: var(--academic-primary); }
+.markdown-body :deep(a.scholarly-link),
+.markdown-body :deep(a.scholarly-link strong),
+.markdown-body :deep(a:has(> strong)) {
+  color: #2563eb;
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(37, 99, 235, 0.35);
+}
+.markdown-body :deep(a.scholarly-link:hover),
+.markdown-body :deep(a.scholarly-link:hover strong),
+.markdown-body :deep(a:has(> strong):hover) {
+  color: #1d4ed8;
+  border-bottom-color: rgba(29, 78, 216, 0.55);
+}
 .markdown-body :deep(ul), .markdown-body :deep(ol) { padding-left: 24px; }
 .markdown-body :deep(li) { margin: 4px 0; }
 .markdown-body :deep(p) { margin: 8px 0; }
@@ -105,5 +133,16 @@ const html = computed(() => {
   color: var(--academic-primary);
   transform: translateY(-1px);
   box-shadow: 0 2px 6px rgba(37, 99, 235, 0.12);
+}
+
+.markdown-body :deep(.scholarly-link) {
+  color: #2563eb;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(37, 99, 235, 0.35);
+}
+
+.markdown-body :deep(.scholarly-link:hover) {
+  color: #1d4ed8;
+  border-bottom-color: rgba(29, 78, 216, 0.55);
 }
 </style>

@@ -2,6 +2,10 @@
 import { nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import {ZoomIn, ZoomOut } from '@element-plus/icons-vue'
+import { mergeSelectionRects } from '@/utils/mergeRects'
+import { normalizeOcrLatex } from '@/utils/mathRender'
+import { formulaApi } from '@/api/formula'
+import { ElMessage } from 'element-plus'
 import 'pdfjs-dist/web/pdf_viewer.css'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -13,8 +17,25 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 // Props / Emits / Expose（保持与 WorkbenchView 兼容）
 // ============================================================================
 
-const props = defineProps<{ url?: string; initialPage?: number; highlightText?: string }>()
-const emit = defineEmits<{ (e: 'oldUrlCleanup', url: string): void }>()
+const props = defineProps<{
+  url?: string
+  initialPage?: number
+  highlightText?: string
+  saveHighlightHandler?: (payload: {
+    pageNum: number
+    text: string
+    rects: HighlightRect[]
+    colorKey: string
+    noteContent?: string
+  }) => Promise<{ id: number; color?: string } | null>
+  deleteHighlightHandler?: (id: number | string) => Promise<void>
+}>()
+const emit = defineEmits<{
+  (e: 'oldUrlCleanup', url: string): void
+  (e: 'highlightSaved'): void
+  (e: 'highlightClick', noteId: number): void
+  (e: 'formulaModeChange', active: boolean): void
+}>()
 
 // ============================================================================
 // 响应式状态
@@ -74,6 +95,21 @@ let linkHighlightTimer: ReturnType<typeof setTimeout> | null = null
 const showHighlightMenu = ref(false)
 const menuPosition = ref({ x: 0, y: 0 })
 const pendingHighlight = ref<{ pageNum: number; text: string; rects: HighlightRect[] } | null>(null)
+const pendingNoteContent = ref('')
+const selectedColorKey = ref('yellow')
+const savingHighlight = ref(false)
+
+// ── 公式框选 OCR ──
+const formulaMode = ref(false)
+const formulaDragPage = ref<number | null>(null)
+const formulaDragStart = ref<{ x: number; y: number } | null>(null)
+const formulaCropRect = ref<HighlightRect | null>(null)
+const showFormulaDialog = ref(false)
+const formulaLatex = ref('')
+const formulaExtracting = ref(false)
+const formulaSaving = ref(false)
+const pendingFormulaNote = ref<{ pageNum: number; rect: HighlightRect } | null>(null)
+const formulaPreviewUrl = ref('')
 
 // 全局 mousedown 监听 → 点击菜单外部关闭菜单
 function onGlobalMouseDown(e: MouseEvent) {
@@ -120,6 +156,7 @@ watch(() => props.highlightText, async () => {
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onGlobalMouseDown)
   clearLinkHighlight()
+  cancelFormulaCrop()
   destroyObserver()
   cancelAllTasks()
   try { doc?.destroy?.() } catch {}
@@ -438,16 +475,20 @@ async function renderAnnotationLayer(pageNum: number) {
 
   const pageHighlights = highlights.value.filter(h => h.pageNum === pageNum)
   for (const hl of pageHighlights) {
+    const isPersistedNote = /^\d+$/.test(hl.id)
     for (const rect of hl.rects) {
       const box = document.createElement('div')
-      box.className = 'highlight-box'
+      box.className = isPersistedNote ? 'highlight-box highlight-box--linked' : 'highlight-box'
       box.style.left = `${rect.left * 100}%`
       box.style.top = `${rect.top * 100}%`
       box.style.width = `${rect.width * 100}%`
       box.style.height = `${rect.height * 100}%`
       box.style.backgroundColor = hl.color || 'rgba(255, 210, 77, 0.45)'
-      box.title = hl.text.slice(0, 100)
+      box.title = isPersistedNote ? '点击查看笔记' : hl.text.slice(0, 100)
       box.dataset.highlightId = hl.id
+      if (isPersistedNote) {
+        box.dataset.noteId = hl.id
+      }
 
       // 删除按钮（hover 时显示）
       const delBtn = document.createElement('button')
@@ -484,11 +525,192 @@ async function refreshAnnotationLayers() {
   }
 }
 
+function findPageInnerFromEvent(target: EventTarget | null): { pageNum: number; pageInner: HTMLElement } | null {
+  let pageEl = target as HTMLElement | null
+  while (pageEl && !pageEl.dataset.page) {
+    pageEl = pageEl.parentElement
+  }
+  if (!pageEl?.dataset.page) return null
+  const pageInner = pageEl.querySelector('.page-inner') as HTMLElement | null
+  if (!pageInner) return null
+  return { pageNum: Number(pageEl.dataset.page), pageInner }
+}
+
+function pointerToNormalized(pageInner: HTMLElement, clientX: number, clientY: number): HighlightRect | null {
+  const containerRect = pageInner.getBoundingClientRect()
+  if (containerRect.width <= 0 || containerRect.height <= 0) return null
+  const x = (clientX - containerRect.left) / containerRect.width
+  const y = (clientY - containerRect.top) / containerRect.height
+  return {
+    left: Math.max(0, Math.min(1, x)),
+    top: Math.max(0, Math.min(1, y)),
+    width: 0,
+    height: 0,
+  }
+}
+
+function normalizeDragRect(start: HighlightRect, end: HighlightRect): HighlightRect | null {
+  const left = Math.min(start.left, end.left)
+  const top = Math.min(start.top, end.top)
+  const right = Math.max(start.left, end.left)
+  const bottom = Math.max(start.top, end.top)
+  const width = right - left
+  const height = bottom - top
+  if (width <= 0.005 || height <= 0.005) return null
+  return {
+    left: Math.max(0, Math.min(1, left)),
+    top: Math.max(0, Math.min(1, top)),
+    width: Math.max(0, Math.min(1 - left, width)),
+    height: Math.max(0, Math.min(1 - top, height)),
+  }
+}
+
+function toggleFormulaMode() {
+  formulaMode.value = !formulaMode.value
+  if (!formulaMode.value) cancelFormulaCrop()
+  dismissMenu()
+  window.getSelection()?.removeAllRanges()
+  emit('formulaModeChange', formulaMode.value)
+}
+
+function cancelFormulaCrop() {
+  formulaDragPage.value = null
+  formulaDragStart.value = null
+  formulaCropRect.value = null
+  showFormulaDialog.value = false
+  formulaLatex.value = ''
+  pendingFormulaNote.value = null
+  if (formulaPreviewUrl.value.startsWith('blob:')) {
+    URL.revokeObjectURL(formulaPreviewUrl.value)
+  }
+  formulaPreviewUrl.value = ''
+}
+
+function onFormulaMouseDown(e: MouseEvent) {
+  if (!formulaMode.value || e.button !== 0) return
+  const found = findPageInnerFromEvent(e.target)
+  if (!found) return
+  e.preventDefault()
+  e.stopPropagation()
+  const start = pointerToNormalized(found.pageInner, e.clientX, e.clientY)
+  if (!start) return
+  formulaDragPage.value = found.pageNum
+  formulaDragStart.value = { x: start.left, y: start.top }
+  formulaCropRect.value = { left: start.left, top: start.top, width: 0, height: 0 }
+}
+
+function onFormulaMouseMove(e: MouseEvent) {
+  if (!formulaMode.value || !formulaDragStart.value || formulaDragPage.value == null) return
+  const pageInner = containerRef.value?.querySelector<HTMLElement>(
+    `[data-page="${formulaDragPage.value}"] .page-inner`,
+  )
+  if (!pageInner) return
+  const end = pointerToNormalized(pageInner, e.clientX, e.clientY)
+  if (!end) return
+  const startRect: HighlightRect = {
+    left: formulaDragStart.value.x,
+    top: formulaDragStart.value.y,
+    width: 0,
+    height: 0,
+  }
+  formulaCropRect.value = normalizeDragRect(startRect, end) || formulaCropRect.value
+}
+
+async function onFormulaMouseUp(e: MouseEvent) {
+  if (!formulaMode.value || !formulaDragStart.value || formulaDragPage.value == null) return
+  const pageNum = formulaDragPage.value
+  const rect = formulaCropRect.value
+  formulaDragStart.value = null
+  if (!rect || rect.width <= 0.01 || rect.height <= 0.01) {
+    formulaCropRect.value = null
+    return
+  }
+  e.preventDefault()
+  pendingFormulaNote.value = { pageNum, rect }
+  await openFormulaDialog(pageNum, rect)
+}
+
+function cropCanvasToBase64(pageNum: number, rect: HighlightRect): string | null {
+  const canvas = canvasMap.get(pageNum)
+  if (!canvas || canvas.width <= 0 || canvas.height <= 0) return null
+  const sx = Math.max(0, Math.floor(rect.left * canvas.width))
+  const sy = Math.max(0, Math.floor(rect.top * canvas.height))
+  const sw = Math.max(1, Math.floor(rect.width * canvas.width))
+  const sh = Math.max(1, Math.floor(rect.height * canvas.height))
+  const off = document.createElement('canvas')
+  off.width = sw
+  off.height = sh
+  const ctx = off.getContext('2d')
+  if (!ctx) return null
+  ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh)
+  return off.toDataURL('image/png', 1.0)
+}
+
+async function openFormulaDialog(pageNum: number, rect: HighlightRect) {
+  showFormulaDialog.value = true
+  formulaLatex.value = ''
+  formulaExtracting.value = true
+  if (formulaPreviewUrl.value.startsWith('blob:')) {
+    URL.revokeObjectURL(formulaPreviewUrl.value)
+  }
+  formulaPreviewUrl.value = cropCanvasToBase64(pageNum, rect) || ''
+  try {
+    if (!formulaPreviewUrl.value) {
+      throw new Error('当前页尚未渲染完成，请稍后再试')
+    }
+    const result = await formulaApi.extract(formulaPreviewUrl.value)
+    formulaLatex.value = normalizeOcrLatex(result.latex || '')
+  } catch (err: any) {
+    const detail = err?.response?.data?.detail || err?.message || '公式识别失败'
+    ElMessage.error(typeof detail === 'string' ? detail : '公式识别失败')
+  } finally {
+    formulaExtracting.value = false
+  }
+}
+
+async function retryFormulaExtract() {
+  const pending = pendingFormulaNote.value
+  if (!pending) return
+  await openFormulaDialog(pending.pageNum, pending.rect)
+}
+
+async function saveFormulaNote() {
+  const pending = pendingFormulaNote.value
+  const latex = formulaLatex.value.trim()
+  if (!pending || !latex) {
+    ElMessage.warning('请先识别或填写 LaTeX 内容')
+    return
+  }
+  if (!props.saveHighlightHandler) {
+    ElMessage.warning('当前阅读器未启用笔记保存')
+    return
+  }
+  formulaSaving.value = true
+  try {
+    const noteContent = latex.startsWith('$$') ? latex : `$$\n${latex}\n$$`
+    await props.saveHighlightHandler({
+      pageNum: pending.pageNum,
+      text: '[公式]',
+      rects: [pending.rect],
+      colorKey: 'blue',
+      noteContent,
+    })
+    emit('highlightSaved')
+    ElMessage.success('公式笔记已保存')
+    cancelFormulaCrop()
+    formulaMode.value = false
+    emit('formulaModeChange', false)
+  } finally {
+    formulaSaving.value = false
+  }
+}
+
 // ============================================================================
 // 文本划词选择 → 提取百分比坐标 → 暂存 pending → 弹出菜单
 // ============================================================================
 
 function handleTextSelection(evt: MouseEvent) {
+  if (formulaMode.value) return
   const selection = window.getSelection()
   if (!selection || selection.isCollapsed) {
     // 普通点击（无选中文字）→ 不关闭菜单（让全局 mousedown 处理）
@@ -511,18 +733,14 @@ function handleTextSelection(evt: MouseEvent) {
   if (containerRect.width === 0 || containerRect.height === 0) return
 
   const range = selection.getRangeAt(0)
-  const clientRects = Array.from(range.getClientRects())
+  const clientRects = range.getClientRects()
   if (clientRects.length === 0) return
 
   const text = selection.toString().trim()
 
-  // 转换为百分比坐标（0~1），缩放无关
-  const rects: HighlightRect[] = clientRects.map(r => ({
-    left: (r.left - containerRect.left) / containerRect.width,
-    top: (r.top - containerRect.top) / containerRect.height,
-    width: r.width / containerRect.width,
-    height: r.height / containerRect.height,
-  }))
+  // 合并碎片化 DOMRect，再转为百分比坐标（缩放无关）
+  const rects: HighlightRect[] = mergeSelectionRects(clientRects, containerRect)
+  if (rects.length === 0) return
 
   // 去重：已有完全相同文字+页码的高亮则跳过
   const existing = highlights.value.find(
@@ -538,7 +756,25 @@ function handleTextSelection(evt: MouseEvent) {
   }
 
   pendingHighlight.value = { pageNum, text, rects }
+  pendingNoteContent.value = ''
+  selectedColorKey.value = 'yellow'
   showHighlightMenu.value = true
+}
+
+function onHighlightLayerClick(e: MouseEvent) {
+  if (formulaMode.value) return
+  const target = e.target as HTMLElement
+  if (target.closest('.highlight-delete-btn')) return
+
+  const box = target.closest('.highlight-box') as HTMLElement | null
+  if (!box) return
+
+  const noteId = box.dataset.noteId
+  if (!noteId || !/^\d+$/.test(noteId)) return
+
+  e.preventDefault()
+  e.stopPropagation()
+  emit('highlightClick', Number(noteId))
 }
 
 // ============================================================================
@@ -552,39 +788,75 @@ const HIGHLIGHT_COLORS: Record<string, string> = {
   blue:   'rgba(80, 150, 255, 0.40)',
 }
 
-function confirmHighlight(color: string) {
-  if (!pendingHighlight.value) return
+const HIGHLIGHT_HEX: Record<string, string> = {
+  yellow: '#FFD24D',
+  green: '#3CD278',
+  red: '#FF5050',
+  blue: '#5096FF',
+}
+
+function hexToRgba(hex: string, alpha = 0.45): string {
+  const normalized = hex.replace('#', '')
+  if (normalized.length !== 6) return HIGHLIGHT_COLORS.yellow
+  const r = parseInt(normalized.slice(0, 2), 16)
+  const g = parseInt(normalized.slice(2, 4), 16)
+  const b = parseInt(normalized.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+async function confirmHighlight(color?: string) {
+  if (!pendingHighlight.value || savingHighlight.value) return
+
+  const colorKey = color || selectedColorKey.value || 'yellow'
+  selectedColorKey.value = colorKey
+  const displayColor = HIGHLIGHT_COLORS[colorKey] || HIGHLIGHT_COLORS.yellow
+
+  if (props.saveHighlightHandler) {
+    savingHighlight.value = true
+    try {
+      const saved = await props.saveHighlightHandler({
+        pageNum: pendingHighlight.value.pageNum,
+        text: pendingHighlight.value.text,
+        rects: pendingHighlight.value.rects,
+        colorKey,
+        noteContent: pendingNoteContent.value.trim() || undefined,
+      })
+      if (saved) {
+        const newHighlight: PageHighlight = {
+          id: String(saved.id),
+          pageNum: pendingHighlight.value.pageNum,
+          text: pendingHighlight.value.text,
+          rects: pendingHighlight.value.rects,
+          color: saved.color || displayColor,
+        }
+        highlights.value = [...highlights.value, newHighlight]
+        await renderAnnotationLayer(newHighlight.pageNum)
+        emit('highlightSaved')
+      }
+    } finally {
+      savingHighlight.value = false
+    }
+    dismissMenu()
+    return
+  }
 
   const newHighlight: PageHighlight = {
     id: `hl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     pageNum: pendingHighlight.value.pageNum,
     text: pendingHighlight.value.text,
     rects: pendingHighlight.value.rects,
-    color: HIGHLIGHT_COLORS[color] || HIGHLIGHT_COLORS.yellow,
+    color: displayColor,
   }
 
   highlights.value = [...highlights.value, newHighlight]
-  renderAnnotationLayer(newHighlight.pageNum)
-
-  // 控制台输出（供调试/对接 API）
-  console.log('📝 高亮已确认（百分比坐标，缩放无关）：', {
-    page: newHighlight.pageNum,
-    color,
-    text: newHighlight.text.slice(0, 80),
-    rects: newHighlight.rects.map(r => ({
-      left: r.left.toFixed(4),
-      top: r.top.toFixed(4),
-      width: r.width.toFixed(4),
-      height: r.height.toFixed(4),
-    })),
-  })
-
+  await renderAnnotationLayer(newHighlight.pageNum)
   dismissMenu()
 }
 
 function dismissMenu() {
   showHighlightMenu.value = false
   pendingHighlight.value = null
+  pendingNoteContent.value = ''
   window.getSelection()?.removeAllRanges()
 }
 
@@ -602,11 +874,41 @@ function copyHighlightText() {
   dismissMenu()
 }
 
-function deleteHighlight(id: string) {
+async function deleteHighlight(id: string) {
   const item = highlights.value.find(h => h.id === id)
   if (!item) return
+  if (props.deleteHighlightHandler && /^\d+$/.test(id)) {
+    try {
+      await props.deleteHighlightHandler(Number(id))
+      emit('highlightSaved')
+    } catch {
+      return
+    }
+  }
   highlights.value = highlights.value.filter(h => h.id !== id)
-  renderAnnotationLayer(item.pageNum)
+  await renderAnnotationLayer(item.pageNum)
+}
+
+function setPersistedHighlights(items: Array<{
+  id: number
+  pageNum: number
+  text: string
+  rects: HighlightRect[]
+  color?: string
+}>) {
+  highlights.value = items.map(item => ({
+    id: String(item.id),
+    pageNum: item.pageNum,
+    text: item.text,
+    rects: item.rects,
+    color: item.color || HIGHLIGHT_COLORS.yellow,
+  }))
+  refreshAnnotationLayers()
+}
+
+function clearPersistedHighlights() {
+  highlights.value = []
+  refreshAnnotationLayers()
 }
 
 // ============================================================================
@@ -778,7 +1080,7 @@ async function whenReady(timeoutMs = 15000): Promise<boolean> {
   return !!doc
 }
 
-defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
+defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, clearPersistedHighlights, hexToRgba, toggleFormulaMode, formulaMode })
 </script>
 
 <template>
@@ -801,6 +1103,15 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
         <span>/ {{ totalPages || '-' }}</span>
       </div>
       <div>
+        <el-button
+          v-if="saveHighlightHandler"
+          size="small"
+          class="formula-toolbar-btn"
+          :type="formulaMode ? 'primary' : 'default'"
+          @click="toggleFormulaMode"
+        >
+          {{ formulaMode ? '退出框选' : '框选公式' }}
+        </el-button>
         <span class="scale-badge">{{ Math.round(scale * 100) }}%</span>
       </div>
     </div>
@@ -826,8 +1137,12 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
       v-else
       ref="containerRef"
       class="scroll-container slim-scroll"
+      :class="{ 'formula-mode': formulaMode }"
       v-loading="pdfLoading"
-      @mouseup="handleTextSelection"
+      @mouseup="(e) => { onFormulaMouseUp(e); handleTextSelection(e) }"
+      @mousedown="onFormulaMouseDown"
+      @mousemove="onFormulaMouseMove"
+      @click="onHighlightLayerClick"
     >
       <div
         v-for="p in totalPages"
@@ -848,6 +1163,16 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
           <div
             :ref="(el: any) => setAnnotationLayerRef(p, el)"
             class="annotationLayer"
+          />
+          <div
+            v-if="formulaMode && formulaDragPage === p && formulaCropRect"
+            class="formula-crop-box"
+            :style="{
+              left: `${formulaCropRect.left * 100}%`,
+              top: `${formulaCropRect.top * 100}%`,
+              width: `${formulaCropRect.width * 100}%`,
+              height: `${formulaCropRect.height * 100}%`,
+            }"
           />
           <!-- 未渲染时的骨架 loading -->
           <div
@@ -872,22 +1197,66 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
       :style="{
         left: `${menuPosition.x}px`,
         top: `${menuPosition.y}px`,
-        transform: 'translate(-50%, -100%)',
+        transform: 'translate(-50%, calc(-100% - 8px))',
       }"
       @mousedown.stop
     >
+      <div class="menu-row">
+        <button
+          v-for="(_, color) in HIGHLIGHT_COLORS"
+          :key="color"
+          class="color-btn"
+          :class="[color, { active: selectedColorKey === color }]"
+          :title="color"
+          @click.stop="selectedColorKey = color"
+        ></button>
+        <div class="menu-divider" />
+        <button class="action-btn" @click.stop="copyHighlightText" title="复制到剪贴板">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+      </div>
+      <textarea
+        v-model="pendingNoteContent"
+        class="menu-note-input"
+        rows="2"
+        placeholder="添加批注（可选）"
+        @mousedown.stop
+      />
       <button
-        v-for="(_, color) in HIGHLIGHT_COLORS"
-        :key="color"
-        class="color-btn"
-        :class="color"
-        :title="color"
-        @click.stop="confirmHighlight(color)"
-      ></button>
-      <div class="menu-divider" />
-      <button class="action-btn" @click.stop="copyHighlightText" title="复制到剪贴板">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        class="menu-save-btn"
+        :disabled="savingHighlight"
+        @click.stop="confirmHighlight(selectedColorKey)"
+      >
+        {{ savingHighlight ? '保存中...' : '保存高亮' }}
       </button>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div v-if="showFormulaDialog" class="formula-dialog-overlay" @click.self="cancelFormulaCrop">
+      <div class="formula-dialog" @click.stop>
+        <header class="formula-dialog-head">
+          <h3>公式识别结果</h3>
+          <button type="button" class="formula-dialog-close" @click="cancelFormulaCrop">×</button>
+        </header>
+        <div class="formula-dialog-body">
+          <div v-if="formulaPreviewUrl" class="formula-preview">
+            <img :src="formulaPreviewUrl" alt="框选区域预览" />
+          </div>
+          <p v-if="formulaExtracting" class="formula-status">正在识别公式…</p>
+          <textarea
+            v-model="formulaLatex"
+            class="formula-latex-input"
+            rows="6"
+            placeholder="LaTeX 源码将显示在这里，可手动修正"
+          />
+        </div>
+        <footer class="formula-dialog-actions">
+          <el-button @click="cancelFormulaCrop">取消</el-button>
+          <el-button :loading="formulaExtracting" @click="retryFormulaExtract">重新识别</el-button>
+          <el-button type="primary" :loading="formulaSaving" @click="saveFormulaNote">保存为笔记</el-button>
+        </footer>
+      </div>
     </div>
   </Teleport>
 </template>
@@ -928,6 +1297,11 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
   font-variant-numeric: tabular-nums;
 }
 
+.formula-toolbar-btn {
+  margin-right: 8px;
+  font-weight: 600;
+}
+
 /* ===================================================================
    滚动容器
    =================================================================== */
@@ -937,6 +1311,23 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
   border-radius: 18px;
   background: rgba(0, 0, 0, .26);
   padding: 16px 24px;
+}
+
+.scroll-container.formula-mode {
+  cursor: crosshair;
+}
+
+.scroll-container.formula-mode :deep(.textLayer) {
+  pointer-events: none;
+}
+
+.formula-crop-box {
+  position: absolute;
+  border: 2px dashed #3B82F6;
+  background: rgba(59, 130, 246, 0.18);
+  pointer-events: none;
+  z-index: 6;
+  box-sizing: border-box;
 }
 
 /* ===================================================================
@@ -984,13 +1375,22 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
 .annotationLayer :deep(.highlight-box) {
   position: absolute;
   border-radius: 2px;
-  pointer-events: auto;     /* 单个高亮框可以交互（hover tooltip 等） */
-  transition: background-color .15s ease;
+  pointer-events: auto;
+  transition: background-color .15s ease, filter .15s ease;
   overflow: visible;
+}
+
+.annotationLayer :deep(.highlight-box--linked) {
+  cursor: pointer;
 }
 
 .annotationLayer :deep(.highlight-box:hover) {
   filter: brightness(1.2);
+}
+
+.annotationLayer :deep(.highlight-box--linked:hover) {
+  filter: brightness(1.25);
+  outline: 1px solid rgba(255, 255, 255, .35);
 }
 
 /* 高亮删除按钮（hover 时显示） */
@@ -1102,9 +1502,10 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
   position: fixed;
   z-index: 99999;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  min-width: 220px;
   background: rgba(24, 28, 36, .96);
   border: 1px solid rgba(255, 255, 255, .12);
   border-radius: 12px;
@@ -1112,6 +1513,12 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
   backdrop-filter: blur(12px);
   user-select: none;
   animation: menuIn .18s ease-out;
+}
+
+.pdf-highlight-menu .menu-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 @keyframes menuIn {
@@ -1135,9 +1542,44 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
 .pdf-highlight-menu .color-btn.red    { background: #ff5050; }
 .pdf-highlight-menu .color-btn.blue   { background: #5096ff; }
 
-.pdf-highlight-menu .color-btn:hover {
+.pdf-highlight-menu .color-btn:hover,
+.pdf-highlight-menu .color-btn.active {
   border-color: #fff;
   transform: scale(1.18);
+}
+
+.pdf-highlight-menu .menu-note-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .06);
+  color: rgba(255, 255, 255, .92);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  resize: vertical;
+  outline: none;
+}
+
+.pdf-highlight-menu .menu-note-input::placeholder {
+  color: rgba(255, 255, 255, .45);
+}
+
+.pdf-highlight-menu .menu-save-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: rgba(80, 150, 255, .92);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pdf-highlight-menu .menu-save-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .pdf-highlight-menu .menu-divider {
@@ -1165,5 +1607,92 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady })
 .pdf-highlight-menu .action-btn:hover {
   background: rgba(255, 255, 255, .18);
   color: #fff;
+}
+
+.formula-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  background: rgba(15, 23, 42, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.formula-dialog {
+  width: min(560px, 92vw);
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
+  overflow: hidden;
+}
+
+.formula-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #E2E8F0;
+}
+
+.formula-dialog-head h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #0F172A;
+}
+
+.formula-dialog-close {
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  color: #64748B;
+}
+
+.formula-dialog-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.formula-preview {
+  border: 1px solid #E2E8F0;
+  border-radius: 10px;
+  padding: 10px;
+  background: #F8FAFC;
+  text-align: center;
+}
+
+.formula-preview img {
+  max-width: 100%;
+  max-height: 160px;
+}
+
+.formula-status {
+  margin: 0;
+  font-size: 13px;
+  color: #64748B;
+}
+
+.formula-latex-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #CBD5E1;
+  border-radius: 10px;
+  padding: 12px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.formula-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid #E2E8F0;
 }
 </style>

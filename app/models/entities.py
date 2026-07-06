@@ -235,6 +235,8 @@ class QAMessage(Base):
     role: Mapped[str] = mapped_column(String(20), index=True)
     content: Mapped[str] = mapped_column(Text)
     reasoning_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tool_artifacts: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    external_refs: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, index=True, default=utcnow)
 
 class QAMessageSource(Base):
@@ -362,6 +364,20 @@ class VectorDBSnapshot(Base):
     recall_rate: Mapped[float | None] = mapped_column(Float, default=1)
     health_score: Mapped[float | None] = mapped_column(Integer, default=100)
     created_at: Mapped[datetime] = mapped_column('recorded_at', DateTime, default=utcnow)
+
+
+class UserPaperNote(Base):
+    __tablename__ = 'user_paper_notes'
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    paper_id: Mapped[int] = mapped_column(ForeignKey('papers.id'), index=True)
+    page_number: Mapped[int] = mapped_column(Integer)
+    bbox: Mapped[list | dict] = mapped_column(JSON)
+    selected_text: Mapped[str] = mapped_column(Text)
+    note_content: Mapped[str | None] = mapped_column(Text)
+    highlight_color: Mapped[str] = mapped_column(String(20), default='#FFEB3B')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class ExplorationTask(Base):

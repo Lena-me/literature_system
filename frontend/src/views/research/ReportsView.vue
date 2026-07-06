@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { papersApi } from '@/api/papers'
 import { reportsApi } from '@/api/reports'
 import MarkdownRenderer from '@/components/common/MarkdownRenderer.vue'
 import type { Paper, Report } from '@/types/domain'
+import { officialLinkLabel, resolveOfficialPaperUrl } from '@/utils/paperOfficialUrl'
 
+const route = useRoute()
 const list = ref<Report[]>([])
 const current = ref<Report | null>(null)
 const papers = ref<Paper[]>([])
@@ -15,8 +18,17 @@ const creating = ref(false)
 
 async function loadReports() {
   list.value = await reportsApi.list()
-  current.value = list.value[0] || null
+  const queryId = Number(route.query.id)
+  if (queryId && list.value.some(item => item.id === queryId)) {
+    current.value = list.value.find(item => item.id === queryId) || list.value[0] || null
+  } else {
+    current.value = list.value[0] || null
+  }
 }
+
+watch(() => route.query.id, () => {
+  void loadReports()
+})
 
 onMounted(async () => {
   await Promise.all([
@@ -30,6 +42,20 @@ onMounted(async () => {
 
 function markdown(r: Report | null) {
   return r?.content?.markdown || JSON.stringify(r?.content || {}, null, 2)
+}
+
+const currentPaper = computed(() =>
+  papers.value.find(p => p.id === current.value?.paper_id) || null,
+)
+
+const currentOfficialUrl = computed(() =>
+  resolveOfficialPaperUrl({ doi: currentPaper.value?.doi }),
+)
+
+function openOfficialPaper() {
+  if (currentOfficialUrl.value) {
+    window.open(currentOfficialUrl.value, '_blank', 'noopener,noreferrer')
+  }
 }
 
 async function createReport() {
@@ -135,6 +161,14 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
       <div class="reader-head">
         <h2>{{ current?.title || '暂无报告' }}</h2>
         <div class="reader-actions">
+          <button
+            v-if="currentOfficialUrl"
+            type="button"
+            class="official-btn"
+            @click="openOfficialPaper"
+          >
+            {{ officialLinkLabel(currentOfficialUrl) }} ↗
+          </button>
           <button :disabled="!current" @click="downloadReport('md')">导出 MD</button>
           <button :disabled="!current" @click="downloadReport('docx')">导出 Word</button>
           <button :disabled="!current" class="primary" @click="downloadReport('pdf')">导出 PDF</button>
@@ -367,6 +401,12 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 
 .reader-actions button.primary:hover:not(:disabled) {
   background: var(--academic-primary-hover);
+}
+
+.reader-actions button.official-btn {
+  color: #7c3aed;
+  border-color: rgba(124, 58, 237, 0.35);
+  background: rgba(124, 58, 237, 0.08);
 }
 
 .reader-actions button:disabled {

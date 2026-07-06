@@ -22,7 +22,7 @@ settings = get_settings()
 def _web_engine_options() -> dict:
     return {
         'echo': False,
-        'pool_pre_ping': False,
+        'pool_pre_ping': settings.mysql_pool_pre_ping,
         'pool_size': settings.mysql_pool_size,
         'max_overflow': settings.mysql_max_overflow,
         'pool_recycle': settings.mysql_pool_recycle_seconds,

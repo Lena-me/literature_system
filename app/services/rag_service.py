@@ -14,6 +14,7 @@ from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
 from app.integrations.milvus.client import get_milvus_store
 from app.models import Paper, PaperExtractedInfo, QAMessage, QAMessageSource, QASession, QASessionPaper, TextChunk
 from app.services.source_enrichment import enrich_qa_sources
+from app.services.external_reference_service import build_external_refs
 from app.utils.chunk_quality import (
     is_compare_question,
     is_low_quality_chunk,
@@ -295,7 +296,11 @@ class RAGService:
 
         if settings.rag_enable_reranker and candidates:
             yield 'reranking'
-            ranked = await asyncio.to_thread(self.reranker.rerank, question, candidates, rerank_pool)
+            try:
+                ranked = await asyncio.to_thread(self.reranker.rerank, question, candidates, rerank_pool)
+            except Exception as exc:
+                logger.warning('Reranker failed, falling back to vector scores: %s', exc)
+                ranked = sorted(candidates, key=lambda x: x.get('score', 0), reverse=True)[:rerank_pool]
         else:
             ranked = sorted(candidates, key=lambda x: x.get('score', 0), reverse=True)[:rerank_pool]
 
@@ -326,6 +331,34 @@ class RAGService:
             ranked = summaries[:limit]
         ranked = await enrich_qa_sources(db, ranked[:limit])
         yield ranked[:limit]
+
+    # ---------- 公开 API（供 QA Agent / 适配器调用，避免直接访问 _ 前缀方法） ----------
+
+    async def retrieve_ranked_stream(
+        self,
+        db: AsyncSession,
+        question: str,
+        paper_ids: list[int] | None,
+        top_k: int | None,
+    ):
+        async for item in self._retrieve_ranked_stream(db, question, paper_ids, top_k):
+            yield item
+
+    def build_retrieval_context(self, ranked: list[dict]) -> tuple[str, list[dict]]:
+        return self._build_context(ranked)
+
+    def extract_cited_sources(self, answer: str, ranked: list[dict]) -> list[dict]:
+        return self._sources_cited_in_answer(answer, ranked)
+
+    async def attach_message_sources(
+        self, db: AsyncSession, message_id: int, ranked: list[dict],
+    ) -> None:
+        await self._add_message_sources(db, message_id, ranked)
+
+    async def delete_messages_after(
+        self, db: AsyncSession, session_id: int, after_created_at,
+    ) -> None:
+        await self._delete_messages_after(db, session_id, after_created_at)
 
     @staticmethod
     def _extract_citation_indices(answer: str, max_index: int) -> list[int]:
@@ -507,6 +540,8 @@ class RAGService:
                     yield {'type': 'delta', 'channel': 'content', 'content': piece}
             answer = ''.join(answer_parts)
             reasoning = ''.join(reasoning_parts)
+            if not answer.strip() and reasoning.strip():
+                answer = reasoning
             cited_sources = self._sources_cited_in_answer(answer, citable_ranked)
             if cited_sources:
                 cited_sources = await enrich_qa_sources(db, cited_sources, answer_text=answer)
@@ -516,20 +551,31 @@ class RAGService:
             assistant_msg = QAMessage(
                 session_id=session.id,
                 role='assistant',
-                content=answer,
+                content=answer.strip() or reasoning.strip(),
                 reasoning_content=reasoning or None,
             )
             db.add(assistant_msg)
             await db.flush()
             await self._add_message_sources(db, assistant_msg.id, cited_sources)
+            external_refs: list[dict] = []
+            try:
+                external_refs = await build_external_refs(
+                    db,
+                    answer,
+                    paper_ids=paper_ids,
+                    session_id=session.id,
+                    user_id=user_id,
+                    user_question=question,
+                )
+            except Exception as exc:
+                logger.warning('build_external_refs failed in ask_stream: %s', exc, exc_info=True)
+            assistant_msg.external_refs = external_refs or None
             await db.commit()
             yield {
                 'type': 'done',
                 'session_id': session.id,
-                'answer': answer,
-                'reasoning': reasoning,
                 'message_id': assistant_msg.id,
-                'sources': cited_sources,
+                'external_refs': external_refs,
             }
         except Exception as exc:
             logger.error('ask_stream failed: %s', exc, exc_info=True)

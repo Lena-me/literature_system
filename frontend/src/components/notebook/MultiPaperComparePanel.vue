@@ -1,16 +1,15 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { featuresApi } from '@/api/features'
-import type { SessionPaper, Source } from '@/types/domain'
+import { usePaperStore } from '@/stores/papers'
+import type { Paper, Source } from '@/types/domain'
 
-const props = defineProps<{
-  visible: boolean
-  papers: SessionPaper[]
-}>()
+const paperStore = usePaperStore()
+const route = useRoute()
 
 const emit = defineEmits<{
-  close: []
   sourceClick: [source: Source]
 }>()
 
@@ -30,7 +29,8 @@ const dimensionOptions = [
 const defaultDimensionValues = ['research_question', 'method', 'experiment_data', 'main_results', 'innovations']
 const allDimensionValues = dimensionOptions.map(x => x.value)
 
-const activeTab = ref<'setup' | 'result' | 'evidence' | 'history'>('setup')
+const activeTab = ref<'setup' | 'result' | 'evidence'>('setup')
+const activeHistoryId = ref<number | null>(null)
 const selectedIds = ref<number[]>([])
 const selectedDimensions = ref<string[]>([...defaultDimensionValues])
 const compareName = ref('')
@@ -45,8 +45,10 @@ const evidenceResult = ref<any>(null)
 const history = ref<any[]>([])
 
 const completedPapers = computed(() =>
-  props.papers.filter(p => completedStatuses.has(String(p.parse_status || '').toLowerCase()))
+  paperStore.list.filter(p => completedStatuses.has(String(p.parse_status || '').toLowerCase()))
 )
+
+const libraryPapers = computed(() => paperStore.list)
 
 const selectedPapers = computed(() =>
   completedPapers.value.filter(p => selectedIds.value.includes(p.id))
@@ -88,7 +90,7 @@ const evidenceDimensions = computed(() => {
   return Array.isArray(evidenceResult.value?.dimensions) ? evidenceResult.value.dimensions : []
 })
 
-function paperTitle(paper: SessionPaper) {
+function paperTitle(paper: Paper) {
   return paper.title || paper.original_filename || `Paper ${paper.id}`
 }
 
@@ -167,23 +169,14 @@ function resetPanel() {
   void generateCompareName()
 }
 
-watch(
-  () => props.visible,
-  visible => {
-    if (!visible) return
-    resetPanel()
-    loadHistory()
-  }
-)
-
-watch(selectedDimensions, () => {
-  void generateCompareName()
-})
-
 watch(selectedIds, () => {
   if (!nameTouched.value) {
     compareName.value = fallbackCompareName()
   }
+  void generateCompareName()
+})
+
+watch(selectedDimensions, () => {
   void generateCompareName()
 })
 
@@ -212,6 +205,7 @@ async function runCompare() {
       name: compareName.value || undefined,
     })
     await loadHistory()
+    activeHistoryId.value = compareResult.value?.id ?? null
     activeTab.value = 'result'
     ElMessage.success('多文献对比已生成')
   } catch (e: any) {
@@ -250,13 +244,68 @@ async function openHistoryItem(item: any) {
     compareResult.value = item
   }
   selectedIds.value = Array.isArray(compareResult.value?.paper_ids) ? compareResult.value.paper_ids : selectedIds.value
+  activeHistoryId.value = item.id
   activeTab.value = 'result'
 }
+
+function startNewCompare() {
+  activeHistoryId.value = null
+  resetPanel()
+}
+
+async function openFromQuery() {
+  const id = Number(route.query.id)
+  if (!id) return
+  const cached = history.value.find(item => item.id === id)
+  if (cached) {
+    await openHistoryItem(cached)
+    return
+  }
+  try {
+    compareResult.value = await featuresApi.compareDetail(id)
+    selectedIds.value = Array.isArray(compareResult.value?.paper_ids)
+      ? compareResult.value.paper_ids
+      : selectedIds.value
+    activeHistoryId.value = id
+    activeTab.value = 'result'
+  } catch {
+    // ignore invalid query
+  }
+}
+
+async function bootstrap() {
+  if (!paperStore.list.length) {
+    try {
+      await paperStore.load()
+    } catch {
+      // ignore
+    }
+  }
+  resetPanel()
+  await loadHistory()
+  await openFromQuery()
+}
+
+onMounted(() => {
+  void bootstrap()
+})
+
+watch(
+  () => route.query.id,
+  () => {
+    void openFromQuery()
+  },
+)
 
 async function deleteHistoryItem(item: any) {
   try {
     await ElMessageBox.confirm('确定删除这条对比历史吗？', '删除历史记录', { type: 'warning' })
     await featuresApi.deleteCompare(item.id)
+    if (activeHistoryId.value === item.id) {
+      activeHistoryId.value = null
+      compareResult.value = null
+      activeTab.value = 'setup'
+    }
     await loadHistory()
     ElMessage.success('已删除对比历史')
   } catch (e: any) {
@@ -277,21 +326,44 @@ function openEvidenceSource(evidence: any) {
 </script>
 
 <template>
-  <Transition name="compare-panel-slide">
-    <aside v-if="visible" class="compare-panel">
+  <div class="compare-page">
+    <aside class="history-panel">
+      <div class="sidebar-head">
+        <h3>多文献对比</h3>
+        <span class="count">{{ history.length }} 条</span>
+      </div>
+      <button class="new-compare-btn" @click="startNewCompare">新建对比</button>
+      <div class="history-list slim-scroll">
+        <div v-if="historyLoading" class="empty-note">加载中...</div>
+        <div v-else-if="!history.length" class="empty-note">暂无历史记录</div>
+        <div
+          v-for="item in history"
+          :key="item.id"
+          class="history-card"
+          :class="{ active: activeHistoryId === item.id }"
+        >
+          <button class="history-card-main" @click="openHistoryItem(item)">
+            <strong>{{ item.name || '未命名对比' }}</strong>
+            <em>{{ (item.paper_ids || []).length }} 篇文献 · {{ item.created_at }}</em>
+          </button>
+          <button class="delete-action" title="删除" @click="deleteHistoryItem(item)">删除</button>
+        </div>
+      </div>
+      <button class="ghost-action refresh-btn" :disabled="historyLoading" @click="loadHistory">刷新历史</button>
+    </aside>
+
+    <section class="main-panel">
       <header class="panel-head">
         <div>
           <h2>多文献对比</h2>
-          <p>基于当前 Notebook 挂载文献生成横向分析</p>
+          <p>从文献库选择已解析文献，生成横向对比分析</p>
         </div>
-        <button class="icon-button" title="关闭" @click="emit('close')">×</button>
       </header>
 
       <div class="panel-tabs">
         <button :class="{ active: activeTab === 'setup' }" @click="activeTab = 'setup'">设置</button>
         <button :class="{ active: activeTab === 'result' }" @click="activeTab = 'result'" :disabled="!compareResult">对比结果</button>
         <button :class="{ active: activeTab === 'evidence' }" @click="activeTab = 'evidence'" :disabled="!evidenceResult">证据矩阵</button>
-        <button :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'">历史</button>
       </div>
 
       <section v-if="activeTab === 'setup'" class="panel-body slim-scroll">
@@ -338,10 +410,10 @@ function openEvidenceSource(evidence: any) {
             <b>{{ selectedIds.length }}/{{ completedPapers.length }}</b>
           </div>
           <div v-if="completedPapers.length < 2" class="empty-note">
-            当前会话至少需要 2 篇 completed 或 indexed 文献。
+            文献库中至少需要 2 篇已完成解析（completed / indexed）的文献。
           </div>
           <label
-            v-for="paper in props.papers"
+            v-for="paper in libraryPapers"
             :key="paper.id"
             class="paper-option"
             :class="{ disabled: !completedStatuses.has(String(paper.parse_status || '').toLowerCase()) }"
@@ -493,39 +565,106 @@ function openEvidenceSource(evidence: any) {
           </div>
         </template>
       </section>
-
-      <section v-else class="panel-body slim-scroll">
-        <div class="section-title">
-          <span>最近对比历史</span>
-          <button class="ghost-action" :disabled="historyLoading" @click="loadHistory">刷新</button>
-        </div>
-        <div v-if="!history.length" class="empty-note">暂无历史记录</div>
-        <div v-for="item in history" :key="item.id" class="history-row">
-          <button @click="openHistoryItem(item)">
-            <strong>{{ item.name || '未命名对比' }}</strong>
-            <em>{{ (item.paper_ids || []).length }} 篇文献 · {{ item.created_at }}</em>
-          </button>
-          <button class="delete-action" @click="deleteHistoryItem(item)">删除</button>
-        </div>
-      </section>
-    </aside>
-  </Transition>
+    </section>
+  </div>
 </template>
 
 <style scoped>
-.compare-panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(680px, 58vw);
-  min-width: 460px;
-  z-index: 35;
+.compare-page {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 16px;
+  height: 100%;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.history-panel {
+  border-radius: 20px;
+  background: var(--academic-panel);
+  border: 1px solid var(--academic-border);
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 18px 12px;
+  border-bottom: 1px solid var(--academic-border);
+}
+
+.sidebar-head h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--academic-text-main);
+}
+
+.count {
+  font-size: 12px;
+  color: var(--academic-text-muted);
+}
+
+.new-compare-btn {
+  margin: 12px 14px 0;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.history-list {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+.history-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  margin-bottom: 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.history-card.active {
+  border-color: rgba(124, 58, 237, 0.35);
+  background: rgba(124, 58, 237, 0.08);
+}
+
+.history-card-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.refresh-btn {
+  margin: 8px 14px 14px;
+}
+
+.main-panel {
+  border-radius: 20px;
   background: var(--academic-panel);
-  border-left: 1px solid var(--academic-border);
-  box-shadow: var(--shadow-float);
+  border: 1px solid var(--academic-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .panel-head {
@@ -947,20 +1086,14 @@ function openEvidenceSource(evidence: any) {
   font-size: 13px;
 }
 
-.compare-panel-slide-enter-active,
-.compare-panel-slide-leave-active {
-  transition: transform 0.25s ease;
-}
+@media (max-width: 960px) {
+  .compare-page {
+    grid-template-columns: 1fr;
+    padding: 12px;
+  }
 
-.compare-panel-slide-enter-from,
-.compare-panel-slide-leave-to {
-  transform: translateX(100%);
-}
-
-@media (max-width: 820px) {
-  .compare-panel {
-    width: 100%;
-    min-width: 0;
+  .history-panel {
+    max-height: 240px;
   }
 }
 </style>
