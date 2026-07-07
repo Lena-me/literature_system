@@ -24,7 +24,7 @@ class Settings(BaseSettings):
         extra='ignore',
     )
 
-    app_name: str = '科研文献智能解析与知识服务系统后端'
+    app_name: str = '睿识'
     app_env: str = 'development'
     api_v1_prefix: str = '/api/v1'
     secret_key: str = Field(default='replace-me')

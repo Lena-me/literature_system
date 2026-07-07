@@ -4,7 +4,6 @@ defineProps<{
   subtitle: string
   size?: 'hero' | 'featured' | 'medium' | 'compact'
   tone?: 'blue' | 'violet' | 'indigo' | 'emerald' | 'amber' | 'slate'
-  badge?: string
 }>()
 
 defineEmits<{ click: [] }>()
@@ -20,23 +19,12 @@ defineEmits<{ click: [] }>()
     <div v-if="size === 'hero' || size === 'featured'" class="bento-mesh" aria-hidden="true" />
     <div class="bento-content">
       <template v-if="size === 'hero' || size === 'featured'">
-        <span v-if="badge" class="bento-badge">{{ badge }}</span>
-        <div class="bento-stack">
-          <div class="bento-icon" aria-hidden="true">
-            <slot name="icon" />
-          </div>
-          <div class="bento-body">
-            <div class="bento-text">
-              <strong class="bento-title">{{ title }}</strong>
-              <span class="bento-subtitle">{{ subtitle }}</span>
-            </div>
-            <span class="bento-cta">
-              立即开始
-              <svg class="bento-cta-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M5 12h14M13 6l6 6-6 6" />
-              </svg>
-            </span>
-          </div>
+        <div class="bento-icon" aria-hidden="true">
+          <slot name="icon" />
+        </div>
+        <div class="bento-text">
+          <strong class="bento-title">{{ title }}</strong>
+          <span class="bento-subtitle">{{ subtitle }}</span>
         </div>
       </template>
 
@@ -143,9 +131,12 @@ defineEmits<{ click: [] }>()
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  justify-content: flex-start;
   gap: 12px;
-  padding: 22px 24px;
-  max-width: 58%;
+  padding: 22px 28px 20px;
+  max-width: 62%;
+  height: 100%;
+  overflow: visible;
 }
 
 .is-compact .bento-content,
@@ -166,70 +157,24 @@ defineEmits<{ click: [] }>()
   max-width: 68%;
 }
 
-.bento-stack {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-  width: 100%;
-  flex: 1;
-  min-height: 0;
-}
-
-.bento-body {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 0;
-  align-self: stretch;
-  width: 100%;
-}
-
 .is-compact .bento-text,
 .is-medium .bento-text {
   gap: 3px;
 }
 
-.is-hero .bento-stack,
-.is-featured .bento-stack {
-  flex: 0 1 auto;
-}
-
-.is-hero .bento-body,
-.is-featured .bento-body {
-  justify-content: flex-start;
-  gap: 10px;
-  min-height: 0;
+.is-hero .bento-text,
+.is-featured .bento-text {
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .is-hero .bento-subtitle,
 .is-featured .bento-subtitle {
-  min-height: 1.55em;
-}
-
-.bento-badge {
-  padding: 3px 9px;
-  border-radius: 6px;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.tone-blue .bento-badge {
-  background: rgba(37, 99, 235, 0.1);
-  color: #1d4ed8;
-}
-
-.tone-violet .bento-badge {
-  background: rgba(99, 102, 241, 0.1);
-  color: #4f46e5;
-}
-
-.tone-emerald .bento-badge {
-  background: rgba(16, 185, 129, 0.1);
-  color: #047857;
+  display: block;
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.6;
+  word-break: break-word;
 }
 
 .bento-icon {
@@ -277,7 +222,7 @@ defineEmits<{ click: [] }>()
   font-size: 15px;
   font-weight: 700;
   color: #0f172a;
-  line-height: 1.25;
+  line-height: 1.3;
   letter-spacing: -0.01em;
 }
 
@@ -285,6 +230,7 @@ defineEmits<{ click: [] }>()
   font-size: 20px;
   font-weight: 800;
   letter-spacing: -0.03em;
+  line-height: 1.35;
 }
 
 .is-featured .bento-title {
@@ -309,21 +255,11 @@ defineEmits<{ click: [] }>()
   font-size: 12px;
 }
 
-.bento-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 600;
-}
+.tone-blue .bento-icon { color: #2563eb; }
 
-.bento-cta-arrow {
-  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
-}
+.tone-violet .bento-icon { color: #6366f1; }
 
-.bento-card:hover .bento-cta-arrow {
-  transform: translateX(4px);
-}
+.tone-emerald .bento-icon { color: #059669; }
 
 .bento-decor {
   position: absolute;
@@ -331,15 +267,6 @@ defineEmits<{ click: [] }>()
   z-index: 0;
   pointer-events: none;
 }
-
-.tone-blue .bento-icon { color: #2563eb; }
-.tone-blue .bento-cta { color: #2563eb; }
-
-.tone-violet .bento-icon { color: #6366f1; }
-.tone-violet .bento-cta { color: #6366f1; }
-
-.tone-emerald .bento-icon { color: #059669; }
-.tone-emerald .bento-cta { color: #059669; }
 
 .tone-indigo .bento-icon {
   background: rgba(99, 102, 241, 0.08);

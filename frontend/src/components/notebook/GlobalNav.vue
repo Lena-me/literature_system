@@ -77,7 +77,7 @@ function logout() {
           <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
           <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
         </svg>
-        <span class="brand-text">文献智能解析</span>
+        <span class="brand-text">睿识</span>
       </div>
     </div>
 

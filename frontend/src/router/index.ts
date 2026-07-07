@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 const appMode = import.meta.env.VITE_APP_MODE || 'user'
 
 const userRoutes = [
-  { path: '/', redirect: '/login' },
+  { path: '/', redirect: '/dashboard' },
   { path: '/login', component: () => import('@/views/auth/LoginView.vue') },
   { path: '/find-pwd-1', component: () => import('@/views/auth/FindPwd1View.vue') },
   { path: '/find-pwd-2', component: () => import('@/views/auth/FindPwd2View.vue') },
@@ -52,9 +52,6 @@ router.beforeEach(async (to) => {
     ? ['/admin/login'] 
     : ['/login', '/find-pwd-1', '/find-pwd-2']
 
-  if (!publicPaths.includes(to.path) && !auth.isAuthed) {
-    return appMode === 'admin' ? '/admin/login' : '/login'
-  }
   if (auth.isAuthed && !auth.user) {
     try {
       await auth.loadMe()
@@ -63,6 +60,11 @@ router.beforeEach(async (to) => {
       return appMode === 'admin' ? '/admin/login' : '/login'
     }
   }
+
+  if (!publicPaths.includes(to.path) && !auth.isAuthed) {
+    return appMode === 'admin' ? '/admin/login' : '/login'
+  }
+
   if (appMode === 'admin' && auth.isAuthed && auth.user?.role !== 'admin') {
     auth.logout()
     return '/admin/login'

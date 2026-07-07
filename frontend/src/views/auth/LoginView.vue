@@ -3,13 +3,14 @@
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import BrandMark from '@/components/common/BrandMark.vue'
+import AuthHeroPanel from '@/components/auth/AuthHeroPanel.vue'
 import { useAuthStore } from '@/stores/auth'
 import { authApi } from '@/api/auth'
+import { codeSentMessage } from '@/utils/authMessages'
 
-const router = useRouter();
+const router = useRouter()
 
-const auth = useAuthStore();
+const auth = useAuthStore()
 const mode = ref<'login'|'register'>('login')
 const form = reactive({
   phone: '',
@@ -20,160 +21,294 @@ const form = reactive({
   email: '',
   code: ''
 })
-// 根据 mode 切换标题
-const title = computed(() => {
-  if(mode.value === 'login'){
-    return '登录科研知识平台'
-  }
-  else{
-    return '创建科研账户'
-  }
-})
 
-// 验证码机制，根据手机号获取验证码
-const phoneNum = computed(() => {return form.phone})
+const title = computed(() => mode.value === 'login' ? '登录' : '注册')
+const subtitle = computed(() => mode.value === 'login'
+  ? '使用手机号和密码登录'
+  : '填写信息完成账号注册')
 
-// 获取验证码
+const phoneNum = computed(() => form.phone)
+
 async function getCode() {
   if (!phoneNum.value) {
     return ElMessage.warning('请输入手机号')
   }
-  
-  // 调用发送短信接口
+  if (!/^1[3-9]\d{9}$/.test(phoneNum.value)) {
+    return ElMessage.warning('请输入正确的手机号')
+  }
+
   const res = await authApi.sendCode(phoneNum.value, 'register')
   if (res.dev_code) {
     form.code = res.dev_code
   }
-  ElMessage.success(res.dev_code ? `验证码已生成：${res.dev_code}` : res.message)
+  ElMessage.success(codeSentMessage(res.dev_code))
 }
 
-
 async function submit() {
-  // 登录功能
   if (mode.value === 'login') {
-    const user = await auth.login(form.phone, form.password)
-    if (user.role !== 'researcher') {
-      auth.logout()
-      return ElMessage.error('该账号请使用管理员登录入口')
+    if (!form.phone) return ElMessage.warning('请输入手机号')
+    if (!form.password) return ElMessage.warning('请输入密码')
+
+    try {
+      const user = await auth.login(form.phone, form.password)
+      if (user.role !== 'researcher') {
+        auth.logout()
+        return ElMessage.warning('该账号请使用管理员入口登录')
+      }
+      await router.replace('/dashboard')
+    } catch {
+      // 错误提示由请求拦截器统一处理
     }
-    router.push('/dashboard')
+    return
   }
 
-  // 注册功能
-  else {
-    if (form.password !== form.confirm_password) return ElMessage.warning('两次密码不一致')
-    if (!form.code) return ElMessage.warning('请输入验证码')
-    try {
-      auth.logout()
-      localStorage.removeItem('access_token')
-      sessionStorage.removeItem('access_token')
-      await authApi.register({
-        username: form.username,
-        password: form.password,
-        confirm_password: form.confirm_password,
-        email: form.email,
-        phone: form.phone,
-        code: form.code
-      })
-      ElMessage.success('注册成功，即将跳转到登录页面')
-      setTimeout(() => {
-        window.location.replace('/login')
-      }, 2000)
-    } catch (error: any) {
-      console.error('注册失败:', error)
-      ElMessage.error('注册失败: ' + (error?.response?.data?.detail || error?.message || '未知错误'))
-    }
+  if (!form.username.trim()) return ElMessage.warning('请输入用户名')
+  if (!form.phone) return ElMessage.warning('请输入手机号')
+  if (!/^1[3-9]\d{9}$/.test(form.phone)) return ElMessage.warning('请输入正确的手机号')
+  if (!form.password) return ElMessage.warning('请输入密码')
+  if (form.password.length < 6 || form.password.length > 18) {
+    return ElMessage.warning('密码长度为 6-18 位')
+  }
+  if (!/(?=.*[a-zA-Z])(?=.*\d)/.test(form.password)) {
+    return ElMessage.warning('密码需包含字母和数字')
+  }
+  if (form.password !== form.confirm_password) return ElMessage.warning('两次密码不一致')
+  if (!form.code) return ElMessage.warning('请输入验证码')
+
+  try {
+    auth.logout()
+    localStorage.removeItem('access_token')
+    sessionStorage.removeItem('access_token')
+    await authApi.register({
+      username: form.username,
+      password: form.password,
+      confirm_password: form.confirm_password,
+      email: form.email,
+      phone: form.phone,
+      code: form.code
+    })
+    ElMessage.success('注册成功，请登录')
+    setTimeout(() => {
+      window.location.replace('/login')
+    }, 1500)
+  } catch {
+    // 错误提示由请求拦截器统一处理
   }
 }
 </script>
 <template>
-  <main class="login-page page-shell">
-    <!-- 背景 -->
+  <main class="login-page page-shell" :class="{ 'is-register': mode === 'register' }">
     <div class="aurora a1" />
     <div class="aurora a2" />
     <div class="grid" />
 
-    <!-- 左侧区域 -->
-    <section class="hero fade-slide">
-      <BrandMark />
-      <h1 class="gradient-title">把论文变成可问、可比、可复现的知识系统</h1>
-      <p>文献上传、结构化解析、RAG溯源问答、研读报告、多文献对比、知识图谱与复现实验建议的一体化科研工作台。</p >
-      <div class="hero-cards">
-        <div>
-          <b>RAG</b>
-          <span>检索增强生成</span>
-        </div>
-        <div>
-          <b>Graph</b>
-          <span>主题实体网络</span>
-        </div>
-        <div>
-          <b>Agent</b>
-          <span>报告与复现推导</span>
-        </div>
-      </div>
-    </section>
+    <AuthHeroPanel />
 
-    <!-- 右侧表单 -->
-    <section class="login-card glass fade-slide">
+    <section class="login-card glass fade-slide" :class="{ 'is-register': mode === 'register' }">
       <h2>{{ title }}</h2>
-      <p class="title-gap"></p>
+      <p class="subtitle">{{ subtitle }}</p>
 
       <el-form label-position="top" @submit.prevent>
-        <!-- 登录显示手机号 -->
         <el-form-item v-if="mode === 'login'" label="手机号">
-          <el-input v-model="form.phone" size="large"/>
+          <el-input v-model="form.phone" size="large" placeholder="请输入手机号" />
         </el-form-item>
 
-        <!-- 注册表单 -->
         <template v-if="mode === 'register'">
           <el-form-item label="用户名">
-            <el-input v-model="form.username" size="large"/>
+            <el-input v-model="form.username" placeholder="请输入用户名" />
           </el-form-item>
 
           <el-form-item label="邮箱">
-            <el-input v-model="form.email" size="large"/>
+            <el-input v-model="form.email" placeholder="请输入邮箱（选填）" />
           </el-form-item>
 
           <el-form-item label="手机号">
-            <el-input v-model="form.phone" size="large"/>
+            <el-input v-model="form.phone" placeholder="请输入手机号" />
           </el-form-item>
         </template>
 
         <el-form-item label="密码">
-          <el-input v-model="form.password" size="large" show-password/>
+          <el-input
+            v-model="form.password"
+            :size="mode === 'login' ? 'large' : 'default'"
+            show-password
+            :placeholder="mode === 'login' ? '请输入密码' : '6-18 位，包含字母和数字'"
+          />
         </el-form-item>
 
         <el-form-item v-if="mode !== 'login'" label="确认密码">
-          <el-input v-model="form.confirm_password" size="large" show-password/>
+          <el-input v-model="form.confirm_password" show-password placeholder="请再次输入密码" />
         </el-form-item>
 
         <el-form-item v-if="mode !== 'login'" label="验证码">
-          <el-input v-model="form.code" size="large">
+          <el-input v-model="form.code" placeholder="请输入验证码">
             <template #append>
               <el-button @click="getCode">获取验证码</el-button>
             </template>
           </el-input>
         </el-form-item>
 
-        <el-button class="submit is-glow" size="large" :loading="auth.loading" @click="submit">
-          {{ mode === 'login' ? '登录' : '注册'}}
+        <el-button
+          class="submit is-glow"
+          :size="mode === 'login' ? 'large' : 'default'"
+          :loading="auth.loading"
+          @click="submit"
+        >
+          {{ mode === 'login' ? '登录' : '注册' }}
         </el-button>
       </el-form>
 
-      <!-- 底部按钮 -->
       <div class="switches">
         <button v-if="mode !== 'login'" @click="mode='login'">返回登录</button>
-        <button v-if="mode !== 'register'" @click="mode='register'">注册</button>
+        <button v-if="mode !== 'register'" @click="mode='register'">没有账号？注册</button>
         <button v-if="mode === 'login'" @click="router.push('/find-pwd-1')">忘记密码</button>
       </div>
     </section>
   </main>
 </template>
-
 <style scoped>
-.login-page { position:relative; overflow:hidden; display:grid; grid-template-columns: 1.1fr 460px; gap: 48px; align-items:center; padding: 70px 8vw; }
-.title-gap {margin: 0 0 24px 0;}
-.grid { position:absolute; inset:0; background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 48px 48px; mask-image: radial-gradient(circle at center, #000, transparent 72%); }
-.aurora { position:absolute; width:360px; height:360px; border-radius:50%; filter: blur(50px); opacity:.45; animation: floatY 8s infinite; }.a1{background:#66e7ff; left:8%; top:4%}.a2{background:#8a7cff; right:8%; bottom:8%; animation-delay:1s}.hero,.login-card{position:relative;z-index:1}.hero h1{font-size:62px;line-height:1.05;max-width:860px;margin:34px 0 18px;letter-spacing:-2px}.hero p{color:rgba(238,246,255,.72);font-size:18px;max-width:720px;line-height:1.9}.hero-cards{display:flex;gap:16px;margin-top:34px}.hero-cards div{padding:18px 22px;border-radius:20px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)}.hero-cards b{font-size:24px;display:block}.hero-cards span{color:var(--muted);font-size:13px}.login-card{border-radius:30px;padding:34px}h2{margin:0;font-size:28px}.subtitle{color:var(--muted);margin-bottom:24px}.submit{width:100%;margin-top:8px}.switches{display:flex;justify-content:center;gap:18px;margin-top:18px}.switches button{background:transparent;border:0;color:var(--brand);cursor:pointer}@media (max-width: 960px){.login-page{grid-template-columns:1fr;padding:40px 22px}.hero h1{font-size:42px}.login-card{max-width:520px}}
+.login-page {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 1.1fr 460px;
+  gap: 48px;
+  align-items: center;
+  padding: 70px 8vw;
+}
+
+.login-page.is-register {
+  grid-template-columns: 1.1fr 380px;
+  gap: 56px;
+  padding: 72px 8vw;
+}
+
+.grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(circle at center, #000, transparent 72%);
+}
+
+.aurora {
+  position: absolute;
+  width: 360px;
+  height: 360px;
+  border-radius: 50%;
+  filter: blur(50px);
+  opacity: 0.45;
+  animation: floatY 8s infinite;
+}
+
+.a1 { background: #66e7ff; left: 8%; top: 4%; }
+.a2 { background: #8a7cff; right: 8%; bottom: 8%; animation-delay: 1s; }
+
+.hero,
+.login-card {
+  position: relative;
+  z-index: 1;
+}
+
+.login-card {
+  border-radius: 30px;
+  padding: 34px;
+}
+
+.login-card.is-register {
+  border-radius: 24px;
+  padding: 28px 30px 24px;
+  align-self: center;
+}
+
+h2 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.login-card.is-register h2 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+}
+
+.subtitle {
+  color: var(--muted);
+  margin: 0 0 24px;
+  line-height: 1.6;
+}
+
+.login-card.is-register .subtitle {
+  margin: 0 0 18px;
+  line-height: 1.5;
+  font-size: 13px;
+}
+
+.login-card.is-register :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+
+.login-card.is-register :deep(.el-form-item__label) {
+  margin-bottom: 4px;
+  padding-bottom: 0;
+  font-weight: 500;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.submit {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.login-card.is-register .submit {
+  margin-top: 4px;
+  height: 38px;
+}
+
+.switches {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.login-card.is-register .switches {
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.switches button {
+  background: transparent;
+  border: 0;
+  color: var(--brand);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.login-card.is-register .switches button {
+  padding: 4px 0;
+}
+
+@media (max-width: 960px) {
+  .login-page,
+  .login-page.is-register {
+    grid-template-columns: 1fr;
+    gap: 40px;
+    padding: 40px 22px;
+  }
+
+  .login-card,
+  .login-card.is-register {
+    max-width: 520px;
+  }
+
+  .login-card.is-register {
+    max-width: 400px;
+    padding: 26px 24px 22px;
+  }
+}
 </style>
+

@@ -99,7 +99,7 @@ const navItems = [
           <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
         </svg>
       </button>
-      <span class="brand-text">文献智能解析</span>
+      <span class="brand-text">睿识</span>
     </div>
 
     <!-- ========== CTA 主按钮 ========== -->

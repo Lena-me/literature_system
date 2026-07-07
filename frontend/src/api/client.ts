@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
+import { isAuthRoute, toAuthUserMessage } from '@/utils/authMessages'
 
 export const API_PREFIX = '/api/v1'
 
@@ -38,17 +39,21 @@ http.interceptors.response.use(
   response => response.data,
   error => {
     const status = error?.response?.status
-    const detail = error?.response?.data?.detail || error?.message || '请求失败'
+    const rawDetail = error?.response?.data?.detail || error?.message
+    const onAuthPage = isAuthRoute()
+    const detail = onAuthPage
+      ? toAuthUserMessage(rawDetail)
+      : (rawDetail || '请求失败')
 
     if (status === 401) {
       localStorage.removeItem('access_token')
       if (!location.pathname.includes('/login')) location.href = '/login'
     } else if (status === 403) {
-      ElMessage.error(typeof detail === 'string' ? detail : 'No permission to access this resource')
+      ElMessage.error(typeof detail === 'string' ? detail : '暂无访问权限')
       return Promise.reject(error)
     }
 
-    ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    ElMessage.error(typeof detail === 'string' ? detail : toAuthUserMessage(detail))
     return Promise.reject(error)
   }
 )

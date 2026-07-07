@@ -166,7 +166,6 @@ function quickActions(action: string) {
         class="bento-parse"
         size="hero"
         tone="blue"
-        badge="核心能力"
         title="智能文档解析"
         subtitle="AI 抽取结构、语义与关键信息"
         @click="quickActions('upload')"
@@ -193,7 +192,6 @@ function quickActions(action: string) {
         class="bento-graph"
         size="hero"
         tone="violet"
-        badge="撒手锏"
         title="文献知识图谱"
         subtitle="可视化论文关联，发现方法与主题脉络"
         @click="quickActions('graph')"
@@ -229,7 +227,6 @@ function quickActions(action: string) {
         class="bento-compare"
         size="hero"
         tone="emerald"
-        badge="特色能力"
         title="多文献智能对比"
         subtitle="跨维度横向分析，快速定位差异与共识"
         @click="quickActions('compare')"
@@ -623,7 +620,7 @@ function quickActions(action: string) {
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(12, 1fr);
-  grid-template-rows: 1fr 1fr;
+  grid-template-rows: minmax(180px, 1fr) minmax(180px, 1fr);
   gap: 12px;
   margin-bottom: 0;
 }
@@ -664,13 +661,13 @@ function quickActions(action: string) {
 .decor-compare {
   position: absolute;
   top: 50%;
-  right: 6%;
+  right: 4%;
   transform: translateY(-50%);
   display: flex;
   align-items: center;
   gap: 10px;
-  width: min(42%, 280px);
-  height: min(72%, 132px);
+  width: min(38%, 260px);
+  height: min(68%, 128px);
 }
 
 .compare-panel {
@@ -817,10 +814,10 @@ function quickActions(action: string) {
 .decor-docs {
   position: absolute;
   top: 50%;
-  right: 6%;
+  right: 4%;
   transform: translateY(-50%);
-  width: min(42%, 168px);
-  height: min(72%, 148px);
+  width: min(38%, 160px);
+  height: min(68%, 140px);
 }
 
 .doc-sheet {
@@ -878,10 +875,10 @@ function quickActions(action: string) {
 .decor-graph {
   position: absolute;
   top: 50%;
-  right: 2%;
+  right: 3%;
   transform: translateY(-50%);
-  width: min(44%, 172px);
-  height: min(78%, 172px);
+  width: min(40%, 168px);
+  height: min(72%, 168px);
   opacity: 0.72;
   filter: drop-shadow(0 4px 16px rgba(99, 102, 241, 0.12));
 }
