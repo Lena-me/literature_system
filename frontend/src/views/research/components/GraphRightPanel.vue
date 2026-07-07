@@ -16,18 +16,29 @@ interface GraphStats {
   paperCount: number
   relationCount: number
   strongCount: number
+  mediumCount: number
   weakCount: number
   topicCount: number
 }
 
+type RightPanelMode = 'overview' | 'node' | 'edge' | 'empty'
+type EmptyReason = 'insufficient' | 'no_edges' | 'threshold' | 'filter' | 'weak_only' | 'filtered_empty'
 type GraphDisplayState = 'empty' | 'low' | 'normal' | 'weak'
 interface GraphDisplayMessage { title: string; description: string; suggestion?: string }
 
 const props = defineProps<{
   graph: LiteratureGraph | null
+  panelMode: RightPanelMode
   selectedPanel: SelectedPanel
   graphStats: GraphStats
   filteredEdges: LiteratureGraphEdge[]
+  totalEdges: number
+  emptyReason: EmptyReason
+  relationFilter: string
+  minScore: number
+  hiddenByTypeCount: number
+  hiddenByThresholdCount: number
+  hasOnlyWeakEdges: boolean
   displayState: GraphDisplayState
   displayMessage: GraphDisplayMessage
   singlePaper: LiteratureGraphNode | null
@@ -44,11 +55,14 @@ const emit = defineEmits<{
   (event: 'selectCorePaper', paperId: number): void
   (event: 'selectEdge', edge: LiteratureGraphEdge): void
   (event: 'selectNodeById', id: string | number): void
+  (event: 'openPaper', node: LiteratureGraphNode): void
+  (event: 'createReport', node: LiteratureGraphNode): void
+  (event: 'compareGraph'): void
 }>()
 
 const selectedNode = computed(() => props.selectedPanel.kind === 'node' ? props.selectedPanel.node : null)
 const selectedEdge = computed(() => props.selectedPanel.kind === 'edge' ? props.selectedPanel.edge : null)
-const isOverview = computed(() => props.selectedPanel.kind === 'summary')
+const isOverview = computed(() => props.panelMode === 'overview')
 
 const bestEdge = computed(() => [...props.filteredEdges].sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null)
 const bestPairLabel = computed(() => {
@@ -86,11 +100,116 @@ const overviewSummaryText = computed(() => {
   const coreText = coreNames.length ? `${coreNames.join(' 与 ')} 为核心节点` : '核心节点已按本地中心性识别'
   return `基于 ${paperCount} 篇本地论文构建的 ${graphName} 研究脉络。${coreText}，关联强度以论文相似为主。`
 })
+
+const emptyTitle = computed(() => {
+  if (props.totalEdges > 0 && props.filteredEdges.length === 0) return '当前筛选下暂无可见连接'
+  return '当前论文之间关系较弱'
+})
+
+const emptyDescription = computed(() => {
+  if (props.totalEdges > 0 && props.filteredEdges.length === 0) {
+    if (props.emptyReason === 'threshold') {
+      return `当前图谱共有 ${props.totalEdges} 条关系，但关系阈值过滤后未显示。`
+    }
+    return `当前图谱共有 ${props.totalEdges} 条关系，但当前筛选条件下未显示。`
+  }
+  return '系统暂未找到稳定的论文关系链路。'
+})
+
+const coreNodes = computed(() => {
+  const degreeMap = new Map<string, number>()
+  for (const edge of props.graph?.edges || []) {
+    degreeMap.set(String(edge.source), (degreeMap.get(String(edge.source)) || 0) + 1)
+    degreeMap.set(String(edge.target), (degreeMap.get(String(edge.target)) || 0) + 1)
+  }
+  return [...(props.graph?.nodes || [])]
+    .sort((a, b) => ((b.centrality || 0) - (a.centrality || 0)) || ((degreeMap.get(String(b.id)) || 0) - (degreeMap.get(String(a.id)) || 0)))
+    .slice(0, 3)
+})
+
+const weakNodes = computed(() => {
+  const weakIds = new Set<string>()
+  const strongIds = new Set<string>()
+  for (const edge of props.graph?.edges || []) {
+    const target = edge.strength === 'weak' ? weakIds : strongIds
+    target.add(String(edge.source))
+    target.add(String(edge.target))
+  }
+  return (props.graph?.nodes || []).filter(node => weakIds.has(String(node.id)) && !strongIds.has(String(node.id))).slice(0, 3)
+})
+
+function shortTitle(node?: LiteratureGraphNode) {
+  const title = node?.label || node?.title || node?.name || '论文节点'
+  return title.length > 34 ? `${title.slice(0, 32)}…` : title
+}
+
+const relationFilterLabel = computed(() => {
+  const labels: Record<string, string> = {
+    all: '全部关系',
+    strong: '强关联',
+    weak: '弱关联',
+    semantic: '语义相似',
+    keyword: '关键词重合',
+    method: '方法相近',
+  }
+  return labels[props.relationFilter] || '当前筛选'
+})
+
+function edgeEvidence(edge: LiteratureGraphEdge) {
+  const propsValue = edge.properties || {}
+  const raw = propsValue.evidence || propsValue.evidences || propsValue.source_snippets || propsValue.snippets || []
+  return Array.isArray(raw) ? raw.map(String).filter(Boolean).slice(0, 3) : String(raw || '').trim() ? [String(raw)] : []
+}
 </script>
 
 <template>
   <aside class="detail-panel">
-    <template v-if="isOverview">
+    <template v-if="props.panelMode === 'empty'">
+      <div class="panel-section hero-summary state-card">
+        <p class="eyebrow">当前状态</p>
+        <h2>{{ emptyTitle }}</h2>
+        <p>{{ emptyDescription }}</p>
+      </div>
+
+      <div v-if="props.totalEdges > 0" class="panel-section">
+        <h3>为什么看不到边</h3>
+        <ul class="reason-list compact-list">
+          <li v-if="props.relationFilter !== 'all'">关系类型筛选为“{{ relationFilterLabel }}”。</li>
+          <li v-if="props.hiddenByThresholdCount">有 {{ props.hiddenByThresholdCount }} 条关系低于当前阈值 {{ props.minScore.toFixed(2) }}。</li>
+          <li v-if="props.hasOnlyWeakEdges">当前关系主要是弱关联，建议保留浅色虚线作为线索。</li>
+          <li v-if="!props.hiddenByThresholdCount && props.relationFilter === 'all'">当前可见关系被筛选条件清空。</li>
+        </ul>
+      </div>
+
+      <div v-else class="panel-section">
+        <h3>可能原因</h3>
+        <ul class="reason-list compact-list">
+          <li>论文主题跨度较大。</li>
+          <li>方法路线或任务设置不同。</li>
+          <li>关键词重合较低。</li>
+          <li>论文数量较少，关系证据不足。</li>
+        </ul>
+      </div>
+
+      <div class="panel-section">
+        <h3>下一步</h3>
+        <ol class="advice-list">
+          <li v-if="props.relationFilter !== 'all'">切换为“全部关系”。</li>
+          <li>降低关系阈值或保留弱关联。</li>
+          <li>继续添加同主题论文。</li>
+          <li>按研究任务或方法路线重新分组。</li>
+        </ol>
+      </div>
+
+      <div v-if="overviewKeywords.length" class="panel-section">
+        <h3>仍可参考的主题线索</h3>
+        <div class="tag-list compact">
+          <span v-for="kw in overviewKeywords.slice(0, 8)" :key="kw">{{ kw }}</span>
+        </div>
+      </div>
+    </template>
+
+    <template v-else-if="isOverview">
       <template v-if="props.displayState === 'empty'">
         <div class="panel-section hero-summary state-card">
           <p class="eyebrow">当前状态</p>
@@ -126,8 +245,19 @@ const overviewSummaryText = computed(() => {
 
       <template v-else-if="props.displayState === 'low'">
         <div class="panel-section state-summary low-summary">
-          <h3>关系概览</h3>
-          <p>当前文献较少，图谱以主要关系和共同线索为重点展示。</p>
+          <h3>{{ props.graphStats.paperCount === 2 ? '二元关系分析' : '小规模图谱概览' }}</h3>
+          <p v-if="props.graphStats.paperCount === 2">当前为 2 篇论文，重点查看两者是否共享任务、方法或关键词线索。</p>
+          <p v-else>当前为 3-5 篇论文，适合观察小组内的共同主题和局部差异。</p>
+        </div>
+
+        <div class="panel-section">
+          <h3>关系分布</h3>
+          <div class="summary-grid compact-stats">
+            <div><b>{{ props.totalEdges }}</b><span>全部</span></div>
+            <div><b>{{ props.graphStats.strongCount }}</b><span>强</span></div>
+            <div><b>{{ props.graphStats.mediumCount }}</b><span>中</span></div>
+            <div><b>{{ props.graphStats.weakCount }}</b><span>弱</span></div>
+          </div>
         </div>
 
         <div class="panel-section emphasis-section">
@@ -157,9 +287,9 @@ const overviewSummaryText = computed(() => {
 
       <template v-else-if="props.displayState === 'weak'">
         <div class="panel-section state-summary weak-card">
-          <h3>关系较弱</h3>
-          <p>当前论文之间尚未形成明确的方法承接或任务链路。</p>
-          <p class="muted">可按研究任务、方法路线或应用场景重新组织为更聚焦的图谱。</p>
+          <h3>弱关联图谱</h3>
+          <p>当前论文之间主要是浅层或弱关系，画布以虚线和浅色保留这些线索。</p>
+          <p class="muted">这不代表没有价值，而是需要按任务或方法重新聚焦。</p>
         </div>
 
         <div class="panel-section compact-panel">
@@ -195,6 +325,16 @@ const overviewSummaryText = computed(() => {
           <p>{{ overviewSummaryText }}</p>
         </div>
 
+        <div class="panel-section">
+          <h3>关系分布</h3>
+          <div class="summary-grid compact-stats">
+            <div><b>{{ props.graphStats.paperCount }}</b><span>论文</span></div>
+            <div><b>{{ props.graphStats.strongCount }}</b><span>强</span></div>
+            <div><b>{{ props.graphStats.mediumCount }}</b><span>中</span></div>
+            <div><b>{{ props.graphStats.weakCount }}</b><span>弱</span></div>
+          </div>
+          <p class="muted">共识别 {{ props.totalEdges }} 条论文关系，依据相似度、关键词重合和方法/任务线索判断。</p>
+        </div>
 
         <div class="panel-section">
           <h3>主题线索</h3>
@@ -207,15 +347,28 @@ const overviewSummaryText = computed(() => {
         <div class="panel-section">
           <h3>核心论文</h3>
           <button
-            v-for="paper in (props.graph?.summary?.core_papers || []).slice(0, 3)"
-            :key="paper.paper_id"
+            v-for="paper in coreNodes"
+            :key="paper.id"
             class="related-paper"
-            @click="emit('selectCorePaper', paper.paper_id)"
+            @click="emit('selectNodeById', paper.id)"
           >
-            <strong>{{ paper.title }}</strong>
-            <span>{{ paper.label || '论文节点' }}</span>
+            <strong>{{ shortTitle(paper) }}</strong>
+            <span>{{ props.formatAuthors(paper.authors) }} · {{ paper.year || '年份未解析' }}</span>
           </button>
-          <p v-if="!props.graph?.summary?.core_papers?.length" class="muted">暂无核心论文。</p>
+          <p v-if="!coreNodes.length" class="muted">暂无核心论文。</p>
+        </div>
+
+        <div v-if="weakNodes.length" class="panel-section">
+          <h3>关联较弱论文</h3>
+          <button
+            v-for="paper in weakNodes"
+            :key="paper.id"
+            class="related-paper"
+            @click="emit('selectNodeById', paper.id)"
+          >
+            <strong>{{ shortTitle(paper) }}</strong>
+            <span>当前只形成弱关联线索</span>
+          </button>
         </div>
 
         <div class="panel-section">
@@ -239,7 +392,7 @@ const overviewSummaryText = computed(() => {
         <h2 class="paper-title">{{ selectedNode.title }}</h2>
         <p>{{ props.formatAuthors(selectedNode.authors) }}</p>
         <div class="paper-meta-line">
-          <span>{{ selectedNode.year || '年份未知' }}</span>
+          <span>{{ selectedNode.year || '年份未解析' }}</span>
           <span>{{ selectedNode.journal_conf || '来源未知' }}</span>
           <span>{{ props.parseStatusText(selectedNode.parse_status) }}</span>
         </div>
@@ -275,6 +428,16 @@ const overviewSummaryText = computed(() => {
           <strong>{{ props.otherNodeTitle(edge, selectedNode) }}</strong>
           <span>{{ props.edgeLabel(edge) }} · {{ props.strengthText(edge.strength) }}</span>
         </button>
+        <p v-if="!props.relatedEdgesForNode(selectedNode).length" class="muted">当前筛选下暂无关联论文，可切换为全部关系查看弱关联线索。</p>
+      </div>
+
+      <div class="panel-section">
+        <h3>操作</h3>
+        <div class="action-row">
+          <button @click="emit('openPaper', selectedNode)">打开论文</button>
+          <button @click="emit('createReport', selectedNode)">生成研读报告</button>
+          <button @click="emit('compareGraph')">加入多文献对比</button>
+        </div>
       </div>
     </template>
 
@@ -318,6 +481,19 @@ const overviewSummaryText = computed(() => {
       <div class="panel-section">
         <h3>差异提示</h3>
         <p class="long-text">{{ selectedEdge.difference || '建议结合原文进一步比较两篇论文的研究问题、方法与实验设置。' }}</p>
+      </div>
+
+      <div v-if="edgeEvidence(selectedEdge).length" class="panel-section">
+        <h3>证据片段</h3>
+        <p v-for="snippet in edgeEvidence(selectedEdge)" :key="snippet" class="long-text evidence-snippet">{{ snippet }}</p>
+      </div>
+
+      <div class="panel-section">
+        <h3>操作</h3>
+        <div class="action-row">
+          <button @click="emit('selectEdge', selectedEdge)">查看证据</button>
+          <button @click="emit('compareGraph')">加入对比</button>
+        </div>
       </div>
     </template>
   </aside>
@@ -618,6 +794,36 @@ const overviewSummaryText = computed(() => {
   gap: 10px;
   align-items: center;
   margin-bottom: 14px;
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.action-row button {
+  border: 1px solid #dbe7f3;
+  border-radius: 10px;
+  background: #fff;
+  color: #2563eb;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.action-row button:hover {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.evidence-snippet {
+  padding: 9px 10px;
+  margin-top: 8px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #edf3f8;
 }
 
 .edge-papers button {

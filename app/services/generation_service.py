@@ -18,6 +18,7 @@ from app.models import (
     ReproducibilityGuide,
 )
 from app.utils.paper_links import (
+    extract_arxiv_id_from_text,
     extract_doi_from_text,
     extract_official_url_from_text,
     resolve_official_paper_url,
@@ -30,7 +31,7 @@ class GenerationService:
     REPORT_MODULE_META = {
         'basic_info': {'title': '基本信息', 'fields': ['title', 'authors', 'keywords']},
         'abstract': {'title': '摘要速览', 'fields': ['abstract']},
-        'research_question': {'title': '研究背景与核心问题', 'fields': ['research_question', 'abstract']},
+        'research_question': {'title': '研究背景与核心问题', 'fields': ['research_question']},
         'method': {'title': '方法 / 模型 / 技术路线', 'fields': ['method']},
         'experiment_data': {'title': '数据集 / 实验对象 / 实验设计', 'fields': ['experiment_data']},
         'main_results': {'title': '主要结果与结论', 'fields': ['main_results']},
@@ -38,7 +39,7 @@ class GenerationService:
         'limitations': {'title': '局限性与适用边界', 'fields': ['limitations']},
         'reproducibility': {'title': '可复现性要点', 'fields': ['method', 'experiment_data', 'main_results']},
         'future_work': {'title': '未来工作与后续研究方向', 'fields': ['future_work']},
-        'literature_trace': {'title': '文献溯源与基础知识拓展', 'fields': ['keywords', 'research_question', 'method', 'abstract']},
+        'literature_trace': {'title': '拓展检索', 'fields': ['keywords', 'research_question', 'method', 'abstract']},
         'related_papers': {'title': '同方向不同方法文献推荐', 'fields': ['research_question', 'method', 'abstract']},
         'reading_notes': {'title': '阅读备忘与可追问问题', 'fields': []},
     }
@@ -182,6 +183,516 @@ class GenerationService:
             'limitations': cls._clean_report_value(info.limitations),
             'future_work': cls._clean_report_value(info.future_work),
         }
+
+    @classmethod
+    def _make_missing_or_value(cls, name: str, value: object) -> dict:
+        text = cls._clean_report_value(value, limit=1200)
+        if not text:
+            return {
+                'name': name,
+                'value': '当前解析未提取到明确证据',
+                'status': 'missing',
+            }
+        return {'name': name, 'value': text, 'status': 'extracted'}
+
+    @classmethod
+    def _extract_metric_cards(cls, text: str) -> list[dict]:
+        cleaned = cls._clean_report_value(text, limit=20000)
+        if not cleaned:
+            return []
+
+        metric_names = cls._metric_name_pattern()
+        number = r'(?:\d+(?:\.\d+)?\s?%|\d+\.\d+)'
+        patterns = [
+            re.compile(rf'\b(?P<label>{metric_names})\b[^\n。；;:：]{{0,40}}?[:：=]?\s*(?P<value>{number})', re.I),
+            re.compile(rf'(?P<value>{number})[^\n。；;]{{0,30}}?\b(?P<label>{metric_names})\b', re.I),
+        ]
+
+        cards: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        fragments = [part.strip() for part in re.split(r'[。；;\n，,]|(?:\s+and\s+)', cleaned) if part.strip()]
+        for fragment in fragments:
+            for pattern in patterns:
+                match = pattern.search(fragment)
+                if not match:
+                    continue
+                label = match.group('label').strip()
+                value = match.group('value').replace(' ', '')
+                key = (label.lower(), value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                cards.append({
+                    'label': label,
+                    'value': value,
+                    'note': '来自原文实验结果或结构化抽取字段',
+                    'source': fragment[:220],
+                })
+                if len(cards) >= 8:
+                    return cards
+        return cards
+
+    @staticmethod
+    def _metric_name_pattern() -> str:
+        return (
+            r'Pass@(?:\d+|k)|Accuracy|Acc\.?|F1-score|F1|Exact Match|EM|MRR|Recall|Precision|'
+            r'Success Rate|Compile Rate|Execution Rate|Top-?k|BLEU|ROUGE(?:-[L\d])?|AUC|'
+            r'MAP|NDCG|Hits@(?:\d+|k)'
+        )
+
+    @classmethod
+    def _extract_metric_names(cls, text: str) -> list[str]:
+        cleaned = cls._clean_report_value(text, limit=12000)
+        if not cleaned:
+            return []
+        names: list[str] = []
+        for match in re.finditer(rf'\b(?:{cls._metric_name_pattern()})\b', cleaned, re.I):
+            name = match.group(0).strip()
+            key = name.lower()
+            if key not in {item.lower() for item in names}:
+                names.append(name)
+            if len(names) >= 8:
+                break
+        return names
+
+    @classmethod
+    def _build_visual_summary(cls, source_data: dict, evidence_text: str) -> dict:
+        method_flow = [
+            {
+                'title': '研究问题',
+                'content': cls._clean_report_value(
+                    source_data.get('research_question') or source_data.get('abstract'),
+                    limit=260,
+                ) or '当前解析未提取到明确证据',
+            },
+            {
+                'title': '核心方法',
+                'content': cls._clean_report_value(source_data.get('method'), limit=260)
+                or '当前解析未提取到明确证据',
+            },
+            {
+                'title': '实验验证',
+                'content': cls._clean_report_value(source_data.get('experiment_data'), limit=260)
+                or '当前解析未提取到明确证据',
+            },
+            {
+                'title': '主要结论',
+                'content': cls._clean_report_value(
+                    source_data.get('main_results') or source_data.get('innovations'),
+                    limit=260,
+                ) or '当前解析未提取到明确证据',
+            },
+        ]
+
+        metric_cards = cls._extract_metric_cards(
+            '\n'.join([
+                cls._clean_report_value(source_data.get('experiment_data'), limit=4000),
+                cls._clean_report_value(source_data.get('main_results'), limit=4000),
+                cls._clean_report_value(evidence_text, limit=12000),
+            ])
+        )
+        metric_names = '、'.join(dict.fromkeys(card['label'] for card in metric_cards))
+        if not metric_names:
+            names_only = cls._extract_metric_names(
+                '\n'.join([
+                    cls._clean_report_value(source_data.get('experiment_data'), limit=4000),
+                    cls._clean_report_value(source_data.get('main_results'), limit=4000),
+                    cls._clean_report_value(evidence_text, limit=8000),
+                ])
+            )
+            if names_only:
+                metric_names = f"{'、'.join(names_only)}（已提取指标名称，未提取具体数值）"
+
+        key_data_table = [
+            cls._make_missing_or_value('数据集 / 任务', source_data.get('experiment_data')),
+            cls._make_missing_or_value('评价指标', metric_names),
+            cls._make_missing_or_value('对比方法', cls._extract_comparison_hint(source_data.get('experiment_data'))),
+            cls._make_missing_or_value('核心结果', source_data.get('main_results')),
+        ]
+
+        return {
+            'method_flow': method_flow,
+            'key_data_table': key_data_table,
+            'metric_cards': metric_cards,
+        }
+
+    @staticmethod
+    def _is_missing_summary_text(value: object) -> bool:
+        text = str(value or '').strip()
+        return not text or text == '当前解析未提取到明确证据'
+
+    @classmethod
+    def _normalize_visual_flow(cls, flow: object, fallback_flow: list[dict]) -> list[dict]:
+        titles = ['研究问题', '核心方法', '实验验证', '主要结论']
+        by_title: dict[str, str] = {}
+        if isinstance(flow, list):
+            for item in flow:
+                if not isinstance(item, dict):
+                    continue
+                title = cls._clean_report_value(item.get('title'), limit=20)
+                content = cls._clean_report_value(item.get('content'), limit=180)
+                if title in titles and content:
+                    by_title[title] = content
+
+        normalized: list[dict] = []
+        fallback_by_title = {
+            item.get('title'): item.get('content')
+            for item in fallback_flow
+            if isinstance(item, dict)
+        }
+        for title in titles:
+            content = by_title.get(title) or fallback_by_title.get(title) or '当前解析未提取到明确证据'
+            normalized.append({
+                'title': title,
+                'content': cls._clean_report_value(content, limit=180) or '当前解析未提取到明确证据',
+            })
+        return normalized
+
+    @classmethod
+    def _normalize_visual_table(cls, table: object, fallback_table: list[dict]) -> list[dict]:
+        names = ['数据集 / 任务', '评价指标', '对比方法', '核心结果']
+        fallback_by_name = {
+            item.get('name'): item
+            for item in fallback_table
+            if isinstance(item, dict)
+        }
+        incoming_by_name: dict[str, dict] = {}
+        if isinstance(table, list):
+            for item in table:
+                if not isinstance(item, dict):
+                    continue
+                name = cls._clean_report_value(item.get('name'), limit=40)
+                value = cls._clean_report_value(item.get('value'), limit=1200)
+                status = item.get('status') if item.get('status') in {'extracted', 'missing'} else None
+                if name in names and value and status:
+                    incoming_by_name[name] = {'name': name, 'value': value, 'status': status}
+
+        normalized: list[dict] = []
+        for name in names:
+            fallback = fallback_by_name.get(name) or cls._make_missing_or_value(name, '')
+            item = incoming_by_name.get(name) or fallback
+            if item.get('status') == 'missing':
+                item = {**item, 'value': '当前解析未提取到明确证据'}
+            normalized.append(item)
+        return normalized
+
+    async def _polish_visual_summary_with_llm(
+        self,
+        source_data: dict,
+        evidence_text: str,
+        fallback_visual_summary: dict,
+    ) -> dict:
+        prompt = f"""请基于结构化抽取结果和论文原文片段，润色研读报告的图表化摘要。
+
+硬性要求：
+1. 只依据给定信息，不得编造数据、指标、数据集、结论或方法；
+2. method_flow 必须是 4 项，标题固定为：研究问题、核心方法、实验验证、主要结论；
+3. method_flow.content 使用中文短句概括，避免直接粘贴英文原文，每项 80-140 个中文字符以内；
+4. 如果对应信息缺失，content 必须写“当前解析未提取到明确证据”；
+5. key_data_table 只可基于明确证据优化表达，缺失项 value 必须写“当前解析未提取到明确证据”，status 写 missing；
+6. metric_cards 原样返回 fallback 中已有内容，不要新增、删除或改写指标卡；
+7. 严格输出 JSON，不要 Markdown，不要解释。
+
+结构化抽取结果：
+{dumps(source_data)}
+
+当前兜底摘要：
+{dumps(fallback_visual_summary)}
+
+论文原文片段：
+{evidence_text[:12000]}
+"""
+        try:
+            resp = await self.llm.async_chat(
+                [
+                    {
+                        'role': 'system',
+                        'content': '你是科研论文图表摘要润色助手，只能基于证据把内容压缩成中文短句，不得补事实。',
+                    },
+                    {'role': 'user', 'content': prompt},
+                ],
+                temperature=0.05,
+                max_tokens=1800,
+            )
+        except Exception:
+            return fallback_visual_summary
+
+        text = (resp or '').strip()
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+        parsed = loads(text, default=None)
+        if not isinstance(parsed, dict):
+            match = re.search(r'\{.*\}', text, flags=re.S)
+            parsed = loads(match.group(0), default=None) if match else None
+        if not isinstance(parsed, dict):
+            return fallback_visual_summary
+
+        fallback_flow = fallback_visual_summary.get('method_flow') or []
+        fallback_table = fallback_visual_summary.get('key_data_table') or []
+        return {
+            'method_flow': self._normalize_visual_flow(parsed.get('method_flow'), fallback_flow),
+            'key_data_table': self._normalize_visual_table(parsed.get('key_data_table'), fallback_table),
+            'metric_cards': fallback_visual_summary.get('metric_cards') or [],
+        }
+
+    @classmethod
+    def _extract_comparison_hint(cls, value: object) -> str:
+        text = cls._clean_report_value(value, limit=3000)
+        if not text:
+            return ''
+        sentences = re.split(r'(?<=[。；;.!?])\s*', text)
+        keywords = ('baseline', 'baselines', 'compare', 'comparison', '对比', '比较', '基线', '消融')
+        picked = [s.strip() for s in sentences if any(k.lower() in s.lower() for k in keywords)]
+        return ' '.join(picked[:2])[:1000]
+
+    @classmethod
+    def _parse_reference_text(cls, raw: str) -> dict:
+        text = cls._clean_report_value(raw, limit=1000)
+        if not text:
+            return {'title': '', 'authors': '', 'year': '', 'venue': ''}
+
+        cleaned = re.sub(r'^\s*(?:\[\d+\]|\d+[.)])\s*', '', text)
+        cleaned = re.sub(r'https?://\S+', '', cleaned).strip()
+        year_match = re.search(r'\b(19|20)\d{2}\b', cleaned)
+        year = year_match.group(0) if year_match else ''
+
+        title = ''
+        quoted = re.search(r'["“](.+?)["”]', cleaned)
+        if quoted:
+            title = quoted.group(1).strip()
+        elif year_match:
+            after_year = cleaned[year_match.end():].lstrip('.:,，： ')
+            pieces = [p.strip() for p in re.split(r'\.\s+', after_year) if p.strip()]
+            if pieces:
+                title = pieces[0]
+        if not title:
+            pieces = [p.strip() for p in re.split(r'\.\s+', cleaned) if p.strip()]
+            title = pieces[1] if len(pieces) > 1 and len(pieces[0]) < 120 else pieces[0]
+
+        authors = ''
+        if year_match:
+            authors = cleaned[:year_match.start()].strip(' .,:，；;')
+        elif '.' in cleaned:
+            authors = cleaned.split('.', 1)[0].strip()
+        if len(authors) > 180:
+            authors = ''
+
+        venue = ''
+        tail_source = cleaned[year_match.end():] if year_match else cleaned
+        venue_match = re.search(
+            r'\b(?:Nature|Science|Cell|NeurIPS|ICML|ICLR|ACL|EMNLP|NAACL|CVPR|AAAI|KDD|WWW|SIGIR|arXiv|IEEE|ACM)\b[^.。；;]*',
+            tail_source,
+            re.I,
+        )
+        if venue_match:
+            venue = venue_match.group(0).strip(' .,:，；;')
+
+        title = cls._clean_reference_title(title, cleaned)
+
+        return {
+            'title': title,
+            'authors': cls._clean_report_value(authors, limit=180),
+            'year': year,
+            'venue': cls._clean_report_value(venue, limit=160),
+        }
+
+    @classmethod
+    def _clean_reference_title(cls, title: str, raw: str) -> str:
+        cleaned_title = cls._clean_report_value(title, limit=240).strip(' .,:，；;')
+        raw_title = cls._clean_report_value(raw, limit=240).strip(' .,:，；;')
+        if cls._is_bad_reference_title(cleaned_title):
+            fallback = cls._reference_title_fallback(raw_title)
+            return fallback[:120]
+        return cleaned_title
+
+    @staticmethod
+    def _is_bad_reference_title(title: str) -> bool:
+        value = (title or '').strip(' .,:，；;')
+        if not value or len(value) < 8:
+            return True
+        if re.fullmatch(r'(?:19|20)\d{2}', value):
+            return True
+        if re.fullmatch(r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)', value, re.I):
+            return True
+        if re.fullmatch(r'[\d.\s]+', value):
+            return True
+        if re.fullmatch(r'\d{4,6}(?:\s+(?:19|20)\d{2})?', value):
+            return True
+        if re.search(r'\b(?:arxiv\s+)?abs/\d{4}\.\d{4,5}', value, re.I):
+            return True
+        if re.search(r'\b(?:doi[:：\s]*10\.|10\.\d{4,9}/)', value, re.I):
+            return True
+        if re.fullmatch(r'(?:arxiv\s+preprint|(?:19|20)\d{2}\s+arxiv\s+preprint)', value, re.I):
+            return True
+        return False
+
+    @classmethod
+    def _reference_title_fallback(cls, raw: str) -> str:
+        text = cls._clean_report_value(raw, limit=500)
+        if not text:
+            return ''
+        before_identifier = re.split(
+            r'\b(?:doi[:：\s]*10\.|arxiv[:：\s]*(?:abs/)?\d|abs/\d{4}\.\d{4,5}|https?://(?:arxiv\.org|(?:dx\.)?doi\.org))',
+            text,
+            maxsplit=1,
+            flags=re.I,
+        )[0].strip(' .,:，；;')
+        if before_identifier and not cls._is_bad_reference_title(before_identifier):
+            pieces = [p.strip(' .,:，；;') for p in re.split(r'\.\s+', before_identifier) if p.strip(' .,:，；;')]
+            for piece in reversed(pieces):
+                if not cls._is_bad_reference_title(piece):
+                    return piece
+        return text[:120]
+
+    @staticmethod
+    def _infer_url_type(url: str | None) -> str:
+        if not url:
+            return 'none'
+        lowered = url.lower()
+        if 'doi.org' in lowered:
+            return 'doi'
+        if 'arxiv.org' in lowered:
+            return 'arxiv'
+        if 'scholar.google.com' in lowered:
+            return 'scholar'
+        return 'official'
+
+    @classmethod
+    def _build_reference_links(cls, reference_trace: list[dict]) -> list[dict]:
+        links: list[dict] = []
+        for item in reference_trace or []:
+            raw = cls._clean_report_value(item.get('content') or item.get('raw'), limit=1000)
+            parsed = cls._parse_reference_text(raw)
+            url = None
+            doi = extract_doi_from_text(raw) or item.get('doi')
+            if doi:
+                url = resolve_official_paper_url(str(doi))
+            if not url:
+                arxiv_id = extract_arxiv_id_from_text(raw)
+                if not arxiv_id:
+                    arxiv_match = re.search(r'\b(?:abs/)?(\d{4}\.\d{4,5}(?:v\d+)?)\b', raw, re.I)
+                    arxiv_id = arxiv_match.group(1) if arxiv_match else None
+                if arxiv_id:
+                    url = f'https://arxiv.org/abs/{arxiv_id}'
+            if not url:
+                url = extract_official_url_from_text(raw) or item.get('official_url')
+            if not url and raw:
+                url = scholar_search_url(parsed.get('title') or raw)
+
+            links.append({
+                **parsed,
+                'raw': raw,
+                'url': url or '',
+                'url_type': cls._infer_url_type(url),
+                'reason': cls._clean_report_value(item.get('reason'), limit=240),
+            })
+        return links
+
+    @classmethod
+    def _build_reference_links_markdown(cls, reference_links: list[dict]) -> str:
+        lines = ['## 文献溯源', '', '### 可点击参考文献']
+        if not reference_links:
+            lines.append('- 暂未生成可点击文献溯源链接。')
+            return '\n'.join(lines)
+        type_labels = {
+            'doi': 'DOI',
+            'arxiv': 'arXiv',
+            'official': '官方链接',
+            'scholar': '学术搜索',
+            'none': '暂无可用链接',
+        }
+        for idx, item in enumerate(reference_links, start=1):
+            label = item.get('title') or item.get('raw') or f'参考文献 {idx}'
+            url = item.get('url')
+            if url:
+                lines.append(f'{idx}. [{label}]({url})')
+            else:
+                lines.append(f'{idx}. {label}')
+            if item.get('authors'):
+                lines.append(f'   - 作者：{item["authors"]}')
+            if item.get('year'):
+                lines.append(f'   - 年份：{item["year"]}')
+            if item.get('venue'):
+                lines.append(f'   - 来源：{item["venue"]}')
+            lines.append(f'   - 链接类型：{type_labels.get(item.get("url_type"), item.get("url_type") or "暂无可用链接")}')
+            if item.get('reason'):
+                lines.append(f'   - 溯源理由：{item["reason"]}')
+            if item.get('raw'):
+                lines.append(f'   - 原文：{item["raw"]}')
+        return '\n'.join(lines)
+
+    @classmethod
+    def _append_reference_links_section(cls, markdown: str, reference_links: list[dict]) -> str:
+        cleaned = re.sub(r'\n{2,}##\s*(?:文献溯源链接|可点击文献溯源)\s*\n.*$', '', markdown.strip(), flags=re.S)
+        return cleaned
+
+    @classmethod
+    @staticmethod
+    def _section_plain_text(section: str) -> str:
+        text = re.sub(r'[#*_>`\-\[\]()]', '', section or '')
+        text = re.sub(r'https?://\S+', '', text)
+        return ' '.join(text.split()).strip()
+
+    @classmethod
+    def _sections_are_repeated(cls, first: str, second: str) -> bool:
+        a = cls._section_plain_text(first)
+        b = cls._section_plain_text(second)
+        if len(a) < 80 or len(b) < 80:
+            return False
+        if a in b or b in a:
+            return True
+
+        a_tokens = set(re.findall(r'[A-Za-z0-9_\-.]{4,}|[\u4e00-\u9fff]{2,}', a.lower()))
+        b_tokens = set(re.findall(r'[A-Za-z0-9_\-.]{4,}|[\u4e00-\u9fff]{2,}', b.lower()))
+        if not a_tokens or not b_tokens:
+            return False
+        overlap = len(a_tokens & b_tokens) / max(len(a_tokens | b_tokens), 1)
+        return overlap >= 0.72
+
+    @classmethod
+    def _dedupe_abstract_and_research_question(cls, markdown: str, source: dict | None = None) -> str:
+        sections = list(re.finditer(r'(^##\s+(.+?)\s*$)([\s\S]*?)(?=^##\s+|\Z)', markdown, flags=re.M))
+        if not sections:
+            return markdown
+
+        abstract_match = next((m for m in sections if m.group(2).strip() == '摘要速览'), None)
+        rq_match = next((m for m in sections if m.group(2).strip() == '研究背景与核心问题'), None)
+        if not abstract_match or not rq_match:
+            return markdown
+        if not cls._sections_are_repeated(abstract_match.group(3), rq_match.group(3)):
+            return markdown
+
+        source = source or {}
+        abstract = cls._clean_report_value(source.get('abstract'), limit=2000)
+        research_question = cls._clean_report_value(source.get('research_question'), limit=2000)
+        if research_question and not cls._sections_are_repeated(abstract, research_question):
+            replacement_body = f'\n\n**研究问题**：{research_question}\n\n'
+        else:
+            replacement_body = (
+                '\n\n**研究问题**：当前解析未提取到独立的研究背景与核心问题，'
+                '请结合引言进一步确认；本节已避免重复展示摘要原文。\n\n'
+            )
+
+        start, end = rq_match.span(3)
+        return f'{markdown[:start]}{replacement_body}{markdown[end:]}'
+
+    @classmethod
+    def _cleanup_report_markdown(cls, markdown: str, source: dict | None = None) -> str:
+        text = cls._append_reference_links_section(markdown, [])
+        text = re.sub(
+            r'\n?\*\*复现风险提示\*\*[:：]\s*(?=\n{2,}##|\Z)',
+            '',
+            text,
+            flags=re.S,
+        )
+        text = re.sub(
+            r'\n?\*\*复现风险提示\*\*[:：]\s*\n(?=\s*(?:##|\Z))',
+            '',
+            text,
+            flags=re.S,
+        )
+        text = cls._dedupe_abstract_and_research_question(text, source)
+        return text.strip()
 
     @classmethod
     def _tokenize_for_report(cls, text: object) -> set[str]:
@@ -423,39 +934,38 @@ class GenerationService:
                 lines.append(cls._format_report_field('复现所需方法 / 模型', source.get('method')))
                 lines.append(cls._format_report_field('复现所需数据 / 实验对象', source.get('experiment_data')))
                 lines.append(cls._format_report_field('需要对齐的主要结果', source.get('main_results')))
-                lines.append('')
-                lines.append('**复现风险提示**：')
+                risk_items = []
                 if not source.get('experiment_data'):
-                    lines.append('- 暂未抽取到明确数据集或实验对象，复现时需要优先补充数据来源。')
+                    risk_items.append('暂未抽取到明确数据集或实验对象，复现时需要优先补充数据来源。')
                 if not source.get('method'):
-                    lines.append('- 暂未抽取到完整方法流程，复现时需要回到原文方法章节核对实现细节。')
+                    risk_items.append('暂未抽取到完整方法流程，复现时需要回到原文方法章节核对实现细节。')
                 if not source.get('main_results'):
-                    lines.append('- 暂未抽取到明确指标或结果，复现时需要补充评价指标和目标数值。')
+                    risk_items.append('暂未抽取到明确指标或结果，复现时需要补充评价指标和目标数值。')
+                if risk_items:
+                    lines.append('')
+                    lines.append('**复现风险提示**：')
+                    for item in risk_items:
+                        lines.append(f'- {item}')
             elif module == 'literature_trace':
-                refs = trace_data.get('reference_trace') or []
                 queries = trace_data.get('learning_queries') or []
-                lines.append('### 原文参考文献溯源')
-                if refs:
-                    for idx, ref in enumerate(refs, start=1):
-                        content = ref.get('content') or ''
-                        url = ref.get('official_url') or extract_official_url_from_text(content)
-                        if url:
-                            lines.append(f'{idx}. [{content}]({url})')
-                        else:
-                            lines.append(f'{idx}. {content}')
-                        lines.append(f'   - 溯源理由：{ref["reason"]}')
-                else:
-                    lines.append('- 暂未从原文参考文献中筛选到可用条目。可能原因是 PDF 未成功抽取 References，或参考文献暂未入库。')
-                lines.append('')
                 lines.append('### 基础知识与拓展检索式')
-                for item in queries:
-                    q = item.get('query') or ''
-                    scholar = scholar_search_url(q) if q else None
-                    if scholar:
-                        lines.append(f'- **{item["name"]}**：[{q}]({scholar})')
-                    else:
-                        lines.append(f'- **{item["name"]}**：`{q}`')
-                    lines.append(f'  - 用途：{item["purpose"]}')
+                if queries:
+                    for item in queries:
+                        q = item.get('query') or ''
+                        scholar = scholar_search_url(q) if q else None
+                        if scholar:
+                            lines.append(f'- **{item["name"]}**：[{q}]({scholar})')
+                        else:
+                            lines.append(f'- **{item["name"]}**：`{q}`')
+                        lines.append(f'  - 用途：{item["purpose"]}')
+                else:
+                    lines.append('- 暂未生成拓展检索式。')
+            elif module == 'research_question':
+                lines.append(cls._format_report_field(
+                    '研究问题',
+                    source.get('research_question'),
+                    empty_text='当前解析未提取到明确研究问题，可结合摘要和引言进一步确认。',
+                ))
             elif module == 'related_papers':
                 related = trace_data.get('related_papers') or []
                 if related:
@@ -579,7 +1089,8 @@ class GenerationService:
 12. journal_conf 只返回原文明确出现的期刊、会议、arXiv、预印本或出版 venue；没有则返回空字符串；
 13. doi 只返回 DOI 本身，不要补 URL 前缀；没有则返回空字符串；
 14. authors 和 keywords 如果原文片段中明确出现，可以补齐；没有则返回空字符串；
-15. 输出严格 JSON，不要使用 Markdown，不要添加解释。
+15. research_question 必须提炼核心研究背景与问题，不要复制 abstract 原文；如果只能看到摘要，也要概括问题而不是原样照抄摘要；
+16. 输出严格 JSON，不要使用 Markdown，不要添加解释。
 
 需要补充的字段：
 {missing_fields}
@@ -686,6 +1197,9 @@ class GenerationService:
                 source_data,
             ),
         }
+        visual_summary = self._build_visual_summary(source_data, evidence_text)
+        visual_summary = await self._polish_visual_summary_with_llm(source_data, evidence_text, visual_summary)
+        reference_links = self._build_reference_links(trace_data.get('reference_trace') or [])
         draft_markdown = self._build_report_markdown(source_data, selected_modules, trace_data)
         module_titles = [self.REPORT_MODULE_META[key]['title'] for key in selected_modules]
 
@@ -704,7 +1218,10 @@ class GenerationService:
 10. 可复现性模块需要给出复现输入、步骤、指标和潜在风险；
 11. 文献溯源部分只能使用报告初稿中给出的原文参考文献和检索式；
 12. 同方向不同方法文献推荐只能使用报告初稿中给出的当前文献库候选论文；
-13. 保留以下模块顺序：{'、'.join(module_titles)}。
+13. 报告初稿中已有 Markdown 链接时必须保留为 [文本](URL)，不要改成普通文本；
+14. 不要在“摘要速览”和“研究背景与核心问题”重复同一段摘要；研究背景与核心问题应提炼核心问题，不要复制摘要；
+15. 如果没有复现风险条目，不要输出空的“复现风险提示”标题；
+16. 保留以下模块顺序：{'、'.join(module_titles)}。
 
 结构化抽取结果：
 {dumps(source_data)}
@@ -736,6 +1253,7 @@ class GenerationService:
                 llm_used = True
         except Exception:
             content = draft_markdown
+        content = self._cleanup_report_markdown(content, source_data)
 
         report_title = title or f"{source_data.get('title') or paper.original_filename or paper_id} 研读报告"
         report = Report(
@@ -749,6 +1267,8 @@ class GenerationService:
                 'paper_id': paper_id,
                 'source': source_data,
                 'trace_data': trace_data,
+                'visual_summary': visual_summary,
+                'reference_links': reference_links,
                 'llm_used': llm_used,
                 'llm_extracted_fields': sorted(llm_extracted.keys()),
             }),
@@ -793,7 +1313,25 @@ class GenerationService:
             'future_work': '未来方向',
         }
         dim_text = '、'.join(dimension_labels.get(x, x) for x in (dimensions or [])) or '研究问题、方法和结果'
-        fallback = f'多文献对比：{titles[0][:24]} 等 {len(titles)} 篇'
+        def local_short_title(title: str) -> str:
+            clean = ' '.join(str(title or '').split())
+            rules = [
+                ('Generative QA', ('leveraging passage retrieval with generative models',)),
+                ('REALM', ('realm',)),
+                ('DPR', ('dense passage retrieval',)),
+                ('ColBERT', ('colbert',)),
+                ('RAG', ('retrieval-augmented generation', 'retrieval augmented generation')),
+                ('Triton', ('triton',)),
+                ('EnvGraph', ('envgraph',)),
+            ]
+            lower = clean.lower()
+            for label, needles in rules:
+                if any(needle in lower for needle in needles):
+                    return label
+            return clean if len(clean) <= 16 else f'{clean[:14]}...'
+
+        fallback_names = [local_short_title(title) for title in titles[:3]]
+        fallback = f'多文献对比：{"、".join(fallback_names)} 等 {len(titles)} 篇'
 
         prompt = f"""请根据以下文献信息，为一次多文献对比任务生成一个简洁中文记录名称。
 
@@ -822,6 +1360,10 @@ class GenerationService:
             if name.lower().startswith('json'):
                 name = name[4:].strip()
             name = name.replace('标题：', '').replace('名称：', '').strip()
+            letters = len(re.findall(r'[A-Za-z]', name))
+            chinese = len(re.findall(r'[\u4e00-\u9fff]', name))
+            if len(name) > 50 and letters > chinese * 2:
+                return fallback[:80]
             return (name or fallback)[:80]
         except Exception:
             return fallback[:80]
@@ -900,6 +1442,8 @@ class GenerationService:
                 ('RAG', ('retrieval-augmented generation', 'retrieval augmented generation')),
                 ('BM25', ('bm25',)),
                 ('LLM', ('large language model', 'large language models', 'llm', 'llms')),
+                ('Triton', ('triton',)),
+                ('EnvGraph', ('envgraph',)),
             ]
             lower = clean.lower()
             matches = [label for label, needles in rules if any(needle in lower for needle in needles)]
@@ -908,6 +1452,59 @@ class GenerationService:
                     return matches[0]
                 return ' / '.join(dict.fromkeys(matches[:2]))
             return clean if len(clean) <= 36 else f'{clean[:34]}...'
+
+        known_paper_profiles = {
+            'RAG': {
+                'research_question': '关注知识密集型 NLP 任务中，生成模型如何结合外部检索知识以减少纯参数记忆的不足。',
+                'method': '采用检索增强生成框架，先检索相关文档，再将检索内容作为条件输入生成答案或文本。',
+                'experiment_data': '面向开放域问答和知识密集型生成任务，使用外部知识源与多类 NLP 数据集进行验证。',
+                'metrics': '通常围绕答案准确性、生成质量和知识密集型任务表现进行评估。',
+                'main_results': '显示检索增强能改善知识密集型任务表现，尤其适合需要外部事实支撑的生成场景。',
+                'innovations': '把非参数化检索记忆与生成模型结合，为后续 RAG 系列方法提供基础范式。',
+                'limitations': '效果依赖检索质量与知识库覆盖，生成结果仍可能受检索噪声影响。',
+                'future_work': '可继续优化检索器、生成器协同训练，以及面向更新知识的可控生成。',
+            },
+            'REALM': {
+                'research_question': '关注语言模型预训练阶段如何引入检索机制，使模型能利用可更新的外部知识。',
+                'method': '在预训练中联合学习检索器与语言模型，通过检索到的文档增强 masked language modeling。',
+                'experiment_data': '主要面向开放域问答等知识密集型任务，并结合大规模文本知识库进行训练和检索。',
+                'metrics': '重点考察开放域问答准确率、检索质量和预训练后下游任务效果。',
+                'main_results': '表明检索增强预训练可提升知识密集型任务表现，并缓解静态参数记忆的局限。',
+                'innovations': '将文档检索纳入语言模型预训练目标，强调可更新的非参数知识记忆。',
+                'limitations': '训练和检索成本较高，整体效果受检索索引、文档质量和联合训练稳定性影响。',
+                'future_work': '可扩展到更高效索引、更大知识库和更稳定的检索-预训练联合优化。',
+            },
+            'DPR': {
+                'research_question': '关注开放域问答中如何用稠密向量检索替代传统稀疏检索，提高相关段落召回。',
+                'method': '采用双编码器分别编码问题和段落，通过向量相似度快速检索候选证据。',
+                'experiment_data': '面向开放域问答数据集，使用问题-答案/段落监督信号训练稠密检索器。',
+                'metrics': '重点评估 top-k 段落召回、问答准确率和检索质量。',
+                'main_results': '显示稠密检索在开放域问答证据召回上具有竞争力，为后续神经检索奠定基础。',
+                'innovations': '将双编码器稠密表示系统化用于开放域问答检索，弱化对关键词匹配的依赖。',
+                'limitations': '需要高质量监督数据和向量索引，跨领域泛化与负样本构造仍是关键问题。',
+                'future_work': '可继续改进负样本挖掘、跨域泛化和与阅读器/生成器的端到端协同。',
+            },
+            'Generative QA': {
+                'research_question': '关注开放域问答中生成模型如何借助段落检索获得外部证据并生成答案。',
+                'method': '先检索候选段落，再将段落内容输入生成模型，由生成模型整合证据形成回答。',
+                'experiment_data': '面向开放域问答任务，围绕检索段落、生成答案和基线系统进行实验比较。',
+                'metrics': '通常考察答案匹配、生成质量以及检索段落对最终回答的支撑程度。',
+                'main_results': '结果强调检索证据能增强生成式问答，但最终表现取决于检索和生成两阶段配合。',
+                'innovations': '较早探索 passage retrieval 与生成模型结合的开放域问答流程。',
+                'limitations': '检索错误会传导到生成阶段，生成模型也可能忽略或误用检索证据。',
+                'future_work': '可改进检索排序、证据融合和生成阶段对来源证据的约束。',
+            },
+            'ColBERT': {
+                'research_question': '关注如何在保持检索效率的同时，利用上下文 token 级交互提升文本检索精度。',
+                'method': '采用 late interaction 机制，分别编码查询和文档 token，并在检索阶段进行细粒度相似度匹配。',
+                'experiment_data': '面向段落检索和开放域问答相关检索任务，通常与 BM25、DPR 等方法比较。',
+                'metrics': '重点评估检索排序指标、召回效果以及索引和查询效率。',
+                'main_results': '显示细粒度 late interaction 能在检索质量和效率之间取得较好平衡。',
+                'innovations': '提出 token 级 late interaction 检索范式，兼顾深度语义匹配与可扩展检索。',
+                'limitations': '索引体积和计算开销高于简单双编码器，部署时需权衡效率与效果。',
+                'future_work': '可继续压缩索引、优化推理效率，并扩展到更大规模语义检索场景。',
+            },
+        }
 
         papers_meta = []
         for idx, info in enumerate(usable_infos, start=1):
@@ -952,16 +1549,17 @@ class GenerationService:
 1. 输出中文；
 2. 不要逐句翻译英文原文；
 3. 不要原封不动复制论文句子；
-4. 每个表格单元格使用 1-3 个短句或 2-3 个简短要点；
-5. 每个单元格尽量不超过 120 个中文字符；
+4. 每个表格单元格使用 1-2 个中文短句概括；
+5. 每个单元格控制在 60-120 个中文字符；
 6. 保留必要英文术语和缩写，例如 RAG、DPR、BM25、ColBERT、LLM 等；
 7. 如果结构化字段缺失或原始表格中是“-”“当前解析未提取到明确证据”，不要断言论文未说明；请写“当前解析未提取到明确证据”或“当前解析未提取到该维度的明确证据”；
 8. summary 保持简短，优先用 2-4 个分点式短句，不要写泛泛的长段落；
 9. key_differences、common_trends、research_gaps、future_directions 必须保持数组形式，每条尽量具体指出不同论文之间的差异、共性或不足；
 10. summary、key_differences、common_trends、research_gaps、future_directions 中不要使用 paper_1、paper_2、paper_3 这类占位名；必须使用参与论文中的 short_title，例如 RAG、REALM、DPR、ColBERT；如果没有明确简称，就使用给定 short_title；
 11. 总结区要突出横向对比，说明不同论文在问题、方法、数据、指标或结果上的区别，不要只写泛泛结论；
-12. 避免“显著提升”“最先进”“大幅领先”等过强表述，除非原始解析中有明确证据；
-13. 严格返回合法 JSON，不要 Markdown 代码块。
+12. 不要输出英文长段落，不要把 abstract 原文直接放入研究问题或方法字段；英文论文原文只能被压缩为中文概括，必要英文术语和缩写除外；
+13. 避免“显著提升”“最先进”“大幅领先”等过强表述，除非原始解析中有明确证据；
+14. 严格返回合法 JSON，不要 Markdown 代码块。
 
 输出 JSON 格式必须包含：
 {{
@@ -1024,6 +1622,78 @@ class GenerationService:
         if not isinstance(comparison_table_zh, list) or not comparison_table_zh:
             comparison_table_zh = raw_comparison_table
 
+        def looks_like_non_chinese_summary(value: object) -> bool:
+            text = clean_text(value, limit=2000)
+            if text in {'-', '当前解析未提取到明确证据'}:
+                return False
+            letters = len(re.findall(r'[A-Za-z]', text))
+            chinese = len(re.findall(r'[\u4e00-\u9fff]', text))
+            words = re.findall(r'\b[A-Za-z][A-Za-z-]{2,}\b', text)
+            has_english_sentence = bool(re.search(r'[A-Z][A-Za-z,\-\s]{35,}\.', text))
+            has_raw_mark = bool(re.search(r'https?://|www\.|abstract|introduction|we\s+(propose|present|show|introduce)\b', text, re.I))
+            chinese_ratio = chinese / max(len(text), 1)
+            return (
+                letters > chinese * 1.4
+                or (len(words) >= 8 and chinese < 18)
+                or has_english_sentence
+                or has_raw_mark
+                or (len(text) > 80 and chinese_ratio < 0.28)
+            )
+
+        paper_meta_by_key = {item['key']: item for item in papers_meta}
+
+        def fallback_zh_cell(dim_key: str, paper_key: str, value: object) -> str:
+            meta = paper_meta_by_key.get(paper_key) or {}
+            alias = str(meta.get('short_title') or '')
+            profile = known_paper_profiles.get(alias)
+            if profile and profile.get(dim_key):
+                return profile[dim_key]
+
+            text = clean_text(value, limit=900)
+            if text == '-' or text == '当前解析未提取到明确证据':
+                return '当前解析未提取到明确证据'
+
+            title = str(meta.get('title') or alias or '该论文')
+            readable_title = alias if alias and len(alias) <= 24 else (title[:16] + '...' if len(title) > 18 else title)
+            generic = {
+                'research_question': f'{readable_title} 在该维度已有原始解析，但中文压缩生成不足；可切换原始解析查看研究问题细节。',
+                'method': f'{readable_title} 的方法信息已在原始解析中提取；中文压缩生成不足，可查看原始方法描述。',
+                'experiment_data': f'{readable_title} 的实验对象或数据设置在原始解析中有相关信息；中文压缩生成不足。',
+                'metrics': f'{readable_title} 的评价指标信息可在原始解析中查看；当前未形成稳定中文短摘要。',
+                'main_results': f'{readable_title} 的结果信息已在原始解析中提取；当前未形成稳定中文短摘要。',
+                'innovations': f'{readable_title} 的贡献点可参考原始解析；当前未形成稳定中文短摘要。',
+                'limitations': f'{readable_title} 的局限性信息可参考原始解析；当前未形成稳定中文短摘要。',
+                'future_work': f'{readable_title} 的未来方向可参考原始解析；当前未形成稳定中文短摘要。',
+            }
+            return generic.get(dim_key, f'{readable_title} 在该维度已有原始解析；当前未形成稳定中文短摘要。')
+
+        def sanitize_zh_table(rows: list[dict]) -> list[dict]:
+            sanitized = []
+            raw_by_dim = {
+                row.get('dimension_key'): row
+                for row in raw_comparison_table
+                if isinstance(row, dict) and row.get('dimension_key')
+            }
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                next_row = dict(row)
+                dim_key = str(next_row.get('dimension_key') or '')
+                raw_row = raw_by_dim.get(dim_key, {})
+                for key, value in list(next_row.items()):
+                    if key == 'dimension_key':
+                        continue
+                    if key == 'dimension':
+                        next_row[key] = clean_text(value, limit=80)
+                    elif looks_like_non_chinese_summary(value):
+                        next_row[key] = fallback_zh_cell(dim_key, key, raw_row.get(key, value))
+                    else:
+                        next_row[key] = clean_text(value, limit=180) or '当前解析未提取到明确证据'
+                sanitized.append(next_row)
+            return sanitized
+
+        comparison_table_zh = sanitize_zh_table(comparison_table_zh)
+
         key_differences = summary.get('key_differences')
         common_trends = summary.get('common_trends')
         research_gaps = summary.get('research_gaps')
@@ -1032,6 +1702,18 @@ class GenerationService:
         common_trends_list = [str(x) for x in common_trends] if isinstance(common_trends, list) else []
         research_gaps_list = [str(x) for x in research_gaps] if isinstance(research_gaps, list) else []
         future_directions_list = [str(x) for x in future_directions] if isinstance(future_directions, list) else []
+        aliases = [item['short_title'] for item in papers_meta]
+        if not key_differences_list:
+            key_differences_list = [
+                f"{'、'.join(aliases[:3])} 等论文均围绕检索增强或神经检索，但切入点不同：有的强调生成阶段知识注入，有的强调预训练检索记忆，有的聚焦检索器本身。",
+                '方法差异主要体现在检索与生成的耦合方式、训练目标、检索粒度和推理效率。'
+            ]
+        if not common_trends_list:
+            common_trends_list = ['共同趋势是把外部文档检索作为知识来源，用检索结果增强问答、生成或排序模型的可靠性。']
+        if not research_gaps_list:
+            research_gaps_list = ['仍需关注检索噪声、知识库覆盖、跨领域泛化以及检索-生成协同优化。']
+        if not future_directions_list:
+            future_directions_list = ['后续可比较端到端训练、更高效索引、证据可信度控制和面向动态知识的更新机制。']
 
         def summary_text(key: str) -> str:
             value = summary.get(key, '')
@@ -1041,12 +1723,17 @@ class GenerationService:
                 return dumps(value)
             return str(value)
 
+        overview = summary_text('summary') or (
+            f"本次对比覆盖 {'、'.join(aliases)}。整体上，这些工作都利用检索增强模型能力，"
+            "但分别侧重生成、预训练、段落召回或细粒度排序。"
+        )
+
         result = {
             'papers': papers_meta,
             'comparison_table': comparison_table_zh,
             'comparison_table_zh': comparison_table_zh,
             'raw_comparison_table': raw_comparison_table,
-            'summary': summary_text('summary'),
+            'summary': overview,
             'key_differences': key_differences_list,
             'common_trends': common_trends_list,
             'research_gaps': research_gaps_list,

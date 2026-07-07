@@ -152,7 +152,7 @@ class ModelConfig(Base):
     __tablename__ = 'model_configs'
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     model_type: Mapped[str] = mapped_column(String(30), index=True)
-    scenario: Mapped[str | None] = mapped_column(String(30), index=True)
+    scenario: Mapped[str] = mapped_column(String(30), nullable=False, default='default', server_default='default', index=True)
     model_name: Mapped[str] = mapped_column(String(100))
     version: Mapped[str | None] = mapped_column(String(50))
     api_endpoint: Mapped[str | None] = mapped_column(String(255))

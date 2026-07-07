@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, utility
+import warnings
+
+from pymilvus import (
+    Collection,
+    CollectionSchema,
+    DataType,
+    FieldSchema,
+    PyMilvusDeprecationWarning,
+    connections,
+    utility,
+)
 
 from app.core.config import get_settings
 
@@ -11,8 +21,10 @@ _store: 'MilvusChunkStore | None' = None
 
 class MilvusChunkStore:
     def __init__(self) -> None:
-        connections.connect(alias='default', host=settings.milvus_host, port=str(settings.milvus_port))
-        self.collection = self._ensure_collection()
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=PyMilvusDeprecationWarning)
+            connections.connect(alias='default', host=settings.milvus_host, port=str(settings.milvus_port))
+            self.collection = self._ensure_collection()
 
     def _ensure_collection(self) -> Collection:
         name = settings.milvus_collection

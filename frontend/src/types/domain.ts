@@ -137,7 +137,39 @@ export interface Source {
   journal_conf?: string | null
   official_url?: string | null
 }
-export interface Report { id: number; paper_id: number; title: string; content: any; created_at: string }
+
+export interface ReportMetricCard {
+  label: string
+  value: string
+  note?: string
+  source?: string
+}
+
+export interface ReportVisualSummary {
+  method_flow?: Array<{ title: string; content: string }>
+  key_data_table?: Array<{ name: string; value: string; status: 'extracted' | 'missing' | string }>
+  metric_cards?: ReportMetricCard[]
+}
+
+export interface ReportReferenceLink {
+  title?: string
+  authors?: string
+  year?: string
+  venue?: string
+  raw: string
+  url?: string
+  url_type: 'doi' | 'arxiv' | 'official' | 'scholar' | 'none' | string
+  reason?: string
+}
+
+export interface ReportContent {
+  markdown?: string
+  visual_summary?: ReportVisualSummary
+  reference_links?: ReportReferenceLink[]
+  [key: string]: unknown
+}
+
+export interface Report { id: number; paper_id: number; title: string; content: ReportContent; created_at: string }
 export interface GraphNode { 
   id: number | string
   entity_type: string

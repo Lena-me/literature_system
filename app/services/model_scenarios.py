@@ -15,6 +15,7 @@ SCENARIO_IDS = {item['id'] for item in MODEL_SCENARIOS}
 SCENARIO_NAME_MAP = {item['id']: item['name'] for item in MODEL_SCENARIOS}
 
 DEFAULT_LLM_SCENARIO = 'qa'
+DEFAULT_NON_LLM_SCENARIO = 'default'
 
 
 def scenario_name(scenario: str | None) -> str | None:
