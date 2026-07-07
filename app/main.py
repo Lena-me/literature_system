@@ -16,6 +16,7 @@ from app.core.security import hash_password
 from app.core.trace_middleware import TraceMiddleware
 from app.db.mysql import AsyncSessionLocal, create_all_tables
 from app.models import ModelConfig, TaskSchedulerConfig, User
+from app.services.model_scenarios import DEFAULT_NON_LLM_SCENARIO
 from app.utils.json_utils import dumps
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -30,9 +31,9 @@ async def seed_initial_data() -> None:
         exists = (await db.execute(select(ModelConfig))).first()
         if not exists:
             db.add_all([
-                ModelConfig(model_type='parse', model_name='GROBID+PyMuPDF+pdfplumber', version='0.8.0/1.25/0.11', api_endpoint=settings.grobid_base_url, config_json=dumps({'engine_chain':['GROBID','PyMuPDF','pdfplumber']}), is_active=True),
-                ModelConfig(model_type='vector', model_name=settings.bge_embedding_model, version='BGE', api_endpoint='local://sentence-transformers', config_json=dumps({'dim': settings.milvus_vector_dim, 'normalize': True}), is_active=True),
-                ModelConfig(model_type='reranker', model_name=settings.bge_reranker_model, version='BGE', api_endpoint='local://sentence-transformers', config_json=dumps({'top_n': settings.rerank_top_n}), is_active=True),
+                ModelConfig(model_type='parse', scenario=DEFAULT_NON_LLM_SCENARIO, model_name='GROBID+PyMuPDF+pdfplumber', version='0.8.0/1.25/0.11', api_endpoint=settings.grobid_base_url, config_json=dumps({'engine_chain':['GROBID','PyMuPDF','pdfplumber']}), is_active=True),
+                ModelConfig(model_type='vector', scenario=DEFAULT_NON_LLM_SCENARIO, model_name=settings.bge_embedding_model, version='BGE', api_endpoint='local://sentence-transformers', config_json=dumps({'dim': settings.milvus_vector_dim, 'normalize': True}), is_active=True),
+                ModelConfig(model_type='reranker', scenario=DEFAULT_NON_LLM_SCENARIO, model_name=settings.bge_reranker_model, version='BGE', api_endpoint='local://sentence-transformers', config_json=dumps({'top_n': settings.rerank_top_n}), is_active=True),
             ])
         if not (await db.execute(select(TaskSchedulerConfig))).first():
             db.add(TaskSchedulerConfig(max_concurrent_tasks=4, per_user_concurrent=2, timeout_seconds=300))

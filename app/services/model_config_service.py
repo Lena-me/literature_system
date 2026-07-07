@@ -4,7 +4,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ModelConfig
-from app.services.model_scenarios import DEFAULT_LLM_SCENARIO, scenario_name, validate_scenario
+from app.services.model_scenarios import DEFAULT_LLM_SCENARIO, DEFAULT_NON_LLM_SCENARIO, scenario_name, validate_scenario
 from app.utils.json_utils import dumps, loads
 
 
@@ -59,4 +59,4 @@ def validate_llm_scenario_fields(*, scenario: str | None, is_primary: bool | Non
 def default_scenario_for_type(model_type: str) -> str | None:
     if model_type == 'llm':
         return DEFAULT_LLM_SCENARIO
-    return None
+    return DEFAULT_NON_LLM_SCENARIO

@@ -22,7 +22,10 @@ settings = get_settings()
 def _web_engine_options() -> dict:
     return {
         'echo': False,
-        'pool_pre_ping': settings.mysql_pool_pre_ping,
+        # aiomysql 0.2.x requires ping(reconnect), while SQLAlchemy's generic
+        # pre-ping calls ping() without arguments. Keep explicit SELECT 1 checks
+        # in _new_checked_session instead of enabling pool_pre_ping here.
+        'pool_pre_ping': False,
         'pool_size': settings.mysql_pool_size,
         'max_overflow': settings.mysql_max_overflow,
         'pool_recycle': settings.mysql_pool_recycle_seconds,
@@ -170,7 +173,7 @@ async def migrate_model_config_schema() -> None:
         existing = {row[0] for row in rows}
 
         if 'scenario' not in existing:
-            await conn.execute(text('ALTER TABLE model_configs ADD COLUMN scenario VARCHAR(30) NULL'))
+            await conn.execute(text("ALTER TABLE model_configs ADD COLUMN scenario VARCHAR(30) NOT NULL DEFAULT 'default'"))
         if 'is_primary' not in existing:
             await conn.execute(
                 text('ALTER TABLE model_configs ADD COLUMN is_primary TINYINT(1) NOT NULL DEFAULT 0')
@@ -185,6 +188,19 @@ async def migrate_model_config_schema() -> None:
                   AND (scenario IS NULL OR scenario = '')
                 """
             )
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE model_configs
+                SET scenario = 'default'
+                WHERE model_type <> 'llm'
+                  AND (scenario IS NULL OR scenario = '')
+                """
+            )
+        )
+        await conn.execute(
+            text("ALTER TABLE model_configs MODIFY COLUMN scenario VARCHAR(30) NOT NULL DEFAULT 'default'")
         )
 
 

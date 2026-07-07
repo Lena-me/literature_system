@@ -43,7 +43,7 @@ type SelectedPanel =
   | { kind: 'node'; node: LiteratureGraphNode }
   | { kind: 'edge'; edge: LiteratureGraphEdge }
 
-type RightPanelMode = 'overview' | 'paper' | 'relation'
+type RightPanelMode = 'overview' | 'node' | 'edge' | 'empty'
 type GraphDisplayState = 'empty' | 'low' | 'normal' | 'weak'
 interface GraphDisplayMessage { title: string; description: string; suggestion?: string }
 type WizardStep = 1 | 2 | 3 | 4
@@ -57,6 +57,9 @@ const papers = ref<LibraryPaper[]>([])
 const graph = ref<LiteratureGraph | null>(null)
 const loading = ref(false)
 const creating = ref(false)
+const deletingGraphIds = ref<Set<number>>(new Set())
+const sidebarCollapsed = ref(false)
+const sidebarHovered = ref(false)
 const leftTab = ref<LeftTab>('all')
 const graphSearch = ref('')
 const activeTopicId = ref<number | null>(null)
@@ -83,6 +86,10 @@ const generationSteps = [
   '生成图谱布局',
   '生成图谱摘要',
 ]
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+}
 
 const graphTitle = computed(() => graph.value?.name || '文献关系图谱')
 const graphSummary = computed(() => graph.value?.summary)
@@ -156,6 +163,29 @@ const filteredEdges = computed(() => {
   })
 })
 
+const totalEdges = computed(() => graph.value?.edges.length || 0)
+const mediumEdgeCount = computed(() => graph.value?.edges.filter(edge => edge.strength === 'medium').length || 0)
+const hiddenByThresholdCount = computed(() =>
+  graph.value?.edges.filter(edge => (edge.score || 0) < minScore.value).length || 0
+)
+const hiddenByTypeCount = computed(() => {
+  if (relationFilter.value === 'all') return 0
+  const edges = graph.value?.edges || []
+  return edges.filter(edge => {
+    if ((edge.score || 0) < minScore.value) return false
+    const types = edge.relation_types || []
+    if (relationFilter.value === 'strong') return edge.strength !== 'strong'
+    if (relationFilter.value === 'weak') return edge.strength !== 'weak'
+    if (relationFilter.value === 'semantic') return !types.includes('语义相似')
+    if (relationFilter.value === 'keyword') return !types.includes('关键词重合')
+    if (relationFilter.value === 'method') return !types.includes('方法相近')
+    return false
+  }).length
+})
+const hasOnlyWeakEdges = computed(() =>
+  totalEdges.value > 0 && (graph.value?.edges || []).every(edge => edge.strength === 'weak')
+)
+
 const connectedNodeIds = computed(() => {
   const ids = new Set<string>()
   for (const edge of filteredEdges.value) {
@@ -180,11 +210,26 @@ const layoutNodes = computed<LayoutNode[]>(() => {
     return (b.centrality || 0) - (a.centrality || 0)
   })
 
+  if (nodes.length === 1) {
+    const only = nodes[0]
+    return [{ ...only, x: cx, y: cy, radius: nodeRadius(only), color: nodeColor(only.year) }]
+  }
+
+  if (nodes.length === 2) {
+    return sorted.map((node, index) => ({
+      ...node,
+      x: cx + (index === 0 ? -190 : 190),
+      y: cy,
+      radius: nodeRadius(node),
+      color: nodeColor(node.year),
+    }))
+  }
+
   const core = [...nodes].sort((a, b) => (b.centrality || 0) - (a.centrality || 0))[0]
-  const coreId = nodes.length > 4 ? String(core.id) : ''
+  const coreId = nodes.length > 5 && totalEdges.value > 0 ? String(core.id) : ''
   const ringNodes = coreId ? sorted.filter(n => String(n.id) !== coreId) : sorted
-  const radiusX = nodes.length <= 4 ? 230 : 300
-  const radiusY = nodes.length <= 4 ? 172 : 210
+  const radiusX = nodes.length <= 5 ? 240 : 300
+  const radiusY = nodes.length <= 5 ? 180 : 210
 
   const positioned: LayoutNode[] = []
   if (coreId) {
@@ -204,10 +249,6 @@ const layoutNodes = computed<LayoutNode[]>(() => {
     })
   })
 
-  if (nodes.length === 1) {
-    const only = nodes[0]
-    return [{ ...only, x: cx, y: cy, radius: nodeRadius(only), color: nodeColor(only.year) }]
-  }
   return positioned
 })
 
@@ -251,6 +292,7 @@ const graphStats = computed(() => ({
   paperCount: graphSummary.value?.paper_count ?? graph.value?.nodes.length ?? 0,
   relationCount: graphSummary.value?.relation_count ?? graph.value?.edges.length ?? 0,
   strongCount: graphSummary.value?.strong_count ?? graph.value?.edges.filter(e => e.strength === 'strong').length ?? 0,
+  mediumCount: mediumEdgeCount.value,
   weakCount: graphSummary.value?.weak_count ?? graph.value?.edges.filter(e => e.strength === 'weak').length ?? 0,
   topicCount: graphSummary.value?.topic_count ?? 0,
 }))
@@ -258,8 +300,8 @@ const graphStats = computed(() => ({
 const graphDisplayState = computed<GraphDisplayState>(() => {
   const paperCount = graphStats.value.paperCount
   if (paperCount < 2) return 'empty'
+  if (paperCount <= 5) return 'low'
   if (graphStats.value.strongCount === 0) return 'weak'
-  if (paperCount <= 4) return 'low'
   return 'normal'
 })
 
@@ -295,15 +337,25 @@ const singlePaperForState = computed(() => graph.value?.nodes?.[0] ?? null)
 
 // 右侧面板状态机：未选中节点时显示图谱级洞察；点击节点后显示论文详情；点击边后显示关系解释。
 const rightPanelMode = computed<RightPanelMode>(() => {
-  if (selectedPanel.value.kind === 'node') return 'paper'
-  if (selectedPanel.value.kind === 'edge') return 'relation'
+  if (selectedPanel.value.kind === 'node') return 'node'
+  if (selectedPanel.value.kind === 'edge') return 'edge'
+  if (graph.value && graphStats.value.paperCount >= 2 && filteredEdges.value.length === 0) return 'empty'
   return 'overview'
 })
 const selectedNodeForPanel = computed(() => selectedPanel.value.kind === 'node' ? selectedPanel.value.node : null)
 const selectedEdgeForPanel = computed(() => selectedPanel.value.kind === 'edge' ? selectedPanel.value.edge : null)
 const isGraphOverview = computed(() => rightPanelMode.value === 'overview')
-const isPaperDetail = computed(() => rightPanelMode.value === 'paper')
-const isRelationDetail = computed(() => rightPanelMode.value === 'relation')
+const isPaperDetail = computed(() => rightPanelMode.value === 'node')
+const isRelationDetail = computed(() => rightPanelMode.value === 'edge')
+
+const emptyPanelReason = computed(() => {
+  if (!graph.value || graphStats.value.paperCount < 2) return 'insufficient'
+  if (totalEdges.value === 0) return 'no_edges'
+  if (filteredEdges.value.length === 0 && hiddenByThresholdCount.value >= totalEdges.value) return 'threshold'
+  if (filteredEdges.value.length === 0 && relationFilter.value !== 'all') return 'filter'
+  if (hasOnlyWeakEdges.value) return 'weak_only'
+  return 'filtered_empty'
+})
 
 onMounted(async () => {
   await Promise.all([loadTopics(), loadGraphs(), loadPapers()])
@@ -462,7 +514,12 @@ async function regenerateCurrentGraph() {
 }
 
 async function deleteCurrentGraph(item: GraphListItem) {
-  if (!window.confirm(`确定删除「${item.name}」吗？该操作不会删除原始论文。`)) return
+  if (deletingGraphIds.value.has(item.id)) return
+  deletingGraphIds.value.add(item.id)
+  if (!window.confirm(`确定删除「${item.name}」吗？该操作不会删除原始论文。`)) {
+    deletingGraphIds.value.delete(item.id)
+    return
+  }
   try {
     await knowledgeApi.deleteGraph(item.id)
     graphs.value = graphs.value.filter(g => g.id !== item.id)
@@ -474,6 +531,8 @@ async function deleteCurrentGraph(item: GraphListItem) {
     ElMessage.success('图谱已删除')
   } catch {
     ElMessage.error('删除失败')
+  } finally {
+    deletingGraphIds.value.delete(item.id)
   }
 }
 
@@ -523,9 +582,23 @@ function selectNodeById(id: string | number) {
   if (node) selectNode(node)
 }
 
+function openPaperFromNode(node: LiteratureGraphNode) {
+  router.push({ path: '/library', query: { paper_id: String(node.paper_id) } })
+}
+
+function createReportFromNode(node: LiteratureGraphNode) {
+  router.push({ path: '/reports', query: { paper_id: String(node.paper_id) } })
+}
+
+function compareFromGraph() {
+  const paperIds = graph.value?.nodes.map(node => node.paper_id).filter(Boolean).slice(0, 5) || []
+  router.push({ path: '/compare', query: paperIds.length ? { paper_ids: paperIds.join(',') } : {} })
+}
+
 function relatedEdgesForNode(node: LiteratureGraphNode): LiteratureGraphEdge[] {
-  return filteredEdges.value
+  return (graph.value?.edges || [])
     .filter(edge => String(edge.source) === String(node.id) || String(edge.target) === String(node.id))
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
     .slice(0, 6)
 }
 
@@ -612,17 +685,23 @@ function normalizeTerms(value: unknown): string[] {
 }
 
 function nodePrimaryLabel(node: LiteratureGraphNode): string {
-  const raw = node.label || node.name || node.title || '论文'
+  const candidates = [node.label, node.name, node.title, formatAuthors(node.authors), '论文']
+    .map(value => String(value || '').trim())
+    .filter(value => value && !['未知', 'unknown', 'Unknown', '年份未知'].includes(value))
+  const raw = candidates[0] || '论文'
   const first = raw.split(/[，,]/)[0]?.trim() || raw.trim()
   return first.length > 12 ? `${first.slice(0, 12)}…` : first
 }
 
 function nodeYearLabel(node: LiteratureGraphNode): string {
-  return node.year ? String(node.year) : '未知'
+  return node.year ? String(node.year) : ''
 }
 
 function nodeCaption(node: LiteratureGraphNode): string {
-  const source = node.name || node.title || node.label || '论文节点'
+  const candidates = [node.label, node.title, node.name, formatAuthors(node.authors), '论文节点']
+    .map(value => String(value || '').trim())
+    .filter(value => value && !['未知', 'unknown', 'Unknown', '年份未知'].includes(value))
+  const source = candidates[0] || '论文节点'
   return source.length > 22 ? `${source.slice(0, 22)}…` : source
 }
 
@@ -664,20 +743,41 @@ function delay(ms: number) {
 
 <template>
   <div class="literature-graph-page">
-    <GraphWorkbench
-      v-model:graph-search="graphSearch"
-      v-model:left-tab="leftTab"
-      v-model:active-topic-id="activeTopicId"
-      :library-stats="libraryStats"
-      :topics="topics"
-      :filtered-graphs="filteredGraphs"
-      :current-graph-id="graph?.id ?? null"
-      :format-date="formatDate"
-      @refresh="loadGraphs"
-      @open-create="openCreateDialog"
-      @open-graph="openGraph"
-      @delete-graph="deleteCurrentGraph"
-    />
+    <div
+      class="graph-sidebar-wrapper"
+      :class="{ collapsed: sidebarCollapsed }"
+      @mouseenter="sidebarHovered = true"
+      @mouseleave="sidebarHovered = false"
+    >
+      <GraphWorkbench
+        v-model:graph-search="graphSearch"
+        v-model:left-tab="leftTab"
+        v-model:active-topic-id="activeTopicId"
+        :library-stats="libraryStats"
+        :topics="topics"
+        :filtered-graphs="filteredGraphs"
+        :current-graph-id="graph?.id ?? null"
+        :format-date="formatDate"
+        @refresh="loadGraphs"
+        @open-create="openCreateDialog"
+        @open-graph="openGraph"
+        @delete-graph="deleteCurrentGraph"
+      />
+    </div>
+
+    <button
+      class="module-sidebar-toggle"
+      :class="{ visible: sidebarHovered || sidebarCollapsed, collapsed: sidebarCollapsed }"
+      :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
+      @click="toggleSidebar"
+      @mouseenter="sidebarHovered = true"
+      @mouseleave="sidebarHovered = false"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline v-if="!sidebarCollapsed" points="15 18 9 12 15 6"/>
+        <polyline v-else points="9 18 15 12 9 6"/>
+      </svg>
+    </button>
 
     <main class="graph-main">
       <section class="graph-toolbar">
@@ -696,9 +796,7 @@ function delay(ms: number) {
         <div class="create-home-shell">
           <section class="create-paper-card">
             <header class="create-home-head">
-              <span>新建图谱</span>
-              <h2>选择本地论文生成关系图谱</h2>
-              <p>从本地文献库选择 2 篇以上论文，系统将按语义相似、关键词重合、方法或任务关联生成论文关系网络。</p>
+              <h2>新建图谱</h2>
             </header>
 
             <div class="create-field-grid">
@@ -715,7 +813,6 @@ function delay(ms: number) {
             <div class="create-paper-toolbar">
               <div>
                 <strong>选择论文</strong>
-                <span>至少选择 2 篇本地论文</span>
               </div>
               <b>已选 {{ selectedPaperIds.length }}</b>
             </div>
@@ -735,7 +832,10 @@ function delay(ms: number) {
                 <input type="checkbox" :checked="selectedPaperIds.includes(paper.id)" @change="togglePaper(paper.id)" />
                 <div>
                   <strong>{{ paperTitle(paper) }}</strong>
-                  <span>{{ normalizeText(paper.authors) || '作者未知' }} · {{ paper.publication_year || paper.year || '年份未知' }} · {{ parseStatusText(paper.parse_status) }}</span>
+                  <span>
+                    {{ normalizeText(paper.authors) || '作者未知' }} · {{ paper.publication_year || paper.year || '年份未知' }} ·
+                    {{ paper.parse_status === 'failed' ? '解析失败，关系解释可能较少' : parseStatusText(paper.parse_status) }}
+                  </span>
                 </div>
               </label>
               <div v-if="!filteredPapers.length" class="empty-small">暂无可选择论文，请先上传或解析本地文献。</div>
@@ -744,7 +844,7 @@ function delay(ms: number) {
 
           <aside class="create-preview-card">
             <h3>生成预览</h3>
-            <p>图谱会以论文为节点，以论文间关系为边，生成当前选中文献的局部研究脉络。</p>
+            <p>将根据所选论文生成局部文献关系网络。</p>
 
             <div class="preview-stat-row">
               <div><b>{{ selectedPaperIds.length }}</b><span>已选论文</span></div>
@@ -755,9 +855,10 @@ function delay(ms: number) {
               <strong>已选论文</strong>
               <div v-if="selectedPapers.length" class="selected-paper-list">
                 <button v-for="paper in selectedPapers.slice(0, 6)" :key="paper.id" @click="togglePaper(paper.id)">
-                  <span>{{ paperTitle(paper) }}</span>
+                  <span :title="paperTitle(paper)">{{ paperTitle(paper) }}</span>
                   <small>移除</small>
                 </button>
+                <em v-if="selectedPapers.length > 6">另有 {{ selectedPapers.length - 6 }} 篇</em>
               </div>
               <p v-else>请选择至少 2 篇论文。</p>
             </div>
@@ -775,7 +876,7 @@ function delay(ms: number) {
             </button>
             <button class="create-library-btn" @click="router.push('/library')">去文献库上传 / 解析论文</button>
 
-            <p class="create-help-text">{{ formName.trim() ? selectedPaperIds.length >= 2 ? '准备就绪，可生成图谱。' : '还需要至少选择 2 篇论文。' : '请先填写图谱名称。' }}</p>
+            <p class="create-help-text">{{ formName.trim() ? selectedPaperIds.length >= 2 ? '准备就绪' : '至少选择 2 篇论文' : '请填写图谱名称' }}</p>
           </aside>
         </div>
       </section>
@@ -829,9 +930,17 @@ function delay(ms: number) {
 
         <GraphRightPanel
           :graph="graph"
+          :panel-mode="rightPanelMode"
           :selected-panel="selectedPanel"
           :graph-stats="graphStats"
           :filtered-edges="filteredEdges"
+          :total-edges="totalEdges"
+          :empty-reason="emptyPanelReason"
+          :relation-filter="relationFilter"
+          :min-score="minScore"
+          :hidden-by-type-count="hiddenByTypeCount"
+          :hidden-by-threshold-count="hiddenByThresholdCount"
+          :has-only-weak-edges="hasOnlyWeakEdges"
           :display-state="graphDisplayState"
           :display-message="graphDisplayMessage"
           :single-paper="singlePaperForState"
@@ -845,6 +954,9 @@ function delay(ms: number) {
           @select-core-paper="selectCorePaper"
           @select-edge="selectEdge"
           @select-node-by-id="selectNodeById"
+          @open-paper="openPaperFromNode"
+          @create-report="createReportFromNode"
+          @compare-graph="compareFromGraph"
         />
       </section>
     </main>
@@ -984,6 +1096,60 @@ function delay(ms: number) {
     linear-gradient(135deg, #f7faff 0%, #f4f8fb 42%, #f9fbfd 100%);
   color: var(--graph-text);
   overflow: hidden;
+  position: relative;
+}
+
+.graph-sidebar-wrapper {
+  position: relative;
+  flex-shrink: 0;
+  width: 292px;
+  overflow: hidden;
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.graph-sidebar-wrapper.collapsed {
+  width: 0;
+}
+
+.module-sidebar-toggle {
+  position: absolute;
+  left: 272px;
+  top: 18px;
+  z-index: 50;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 50%;
+  background: #fff;
+  color: #64748b;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 0.2s ease, transform 0.2s ease, color 0.15s, left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+.module-sidebar-toggle.visible {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.module-sidebar-toggle.collapsed {
+  left: 12px;
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.module-sidebar-toggle:hover {
+  color: #0f172a;
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
 }
 
 .graph-sidebar {
@@ -1426,36 +1592,20 @@ h1, h2, h3, p {
 .create-paper-card {
   display: flex;
   flex-direction: column;
-  padding: 20px;
+  padding: 18px;
   overflow: hidden;
 }
 
 .create-home-head {
-  margin-bottom: 16px;
-}
-
-.create-home-head span {
-  display: inline-flex;
-  margin-bottom: 8px;
-  color: #2563eb;
-  font-size: 12px;
-  font-weight: 850;
+  margin-bottom: 14px;
 }
 
 .create-home-head h2 {
-  margin: 0 0 8px;
+  margin: 0;
   color: #0f1f3d;
   font-size: 24px;
   line-height: 1.2;
-  letter-spacing: -0.04em;
-}
-
-.create-home-head p {
-  max-width: 640px;
-  margin: 0;
-  color: #607086;
-  font-size: 13px;
-  line-height: 1.65;
+  letter-spacing: 0;
 }
 
 .create-field-grid {
@@ -1469,7 +1619,7 @@ h1, h2, h3, p {
   display: block;
   margin-bottom: 7px;
   color: #334155;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 850;
 }
 
@@ -1548,10 +1698,13 @@ h1, h2, h3, p {
 }
 
 .inline-paper-option strong {
-  display: block;
+  display: -webkit-box;
   color: #1e293b;
   font-size: 13.5px;
   line-height: 1.42;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .inline-paper-option span {
@@ -1641,6 +1794,7 @@ h1, h2, h3, p {
 }
 
 .selected-paper-list span {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1648,7 +1802,15 @@ h1, h2, h3, p {
 }
 
 .selected-paper-list small {
+  flex: 0 0 auto;
   color: #ef4444;
+}
+
+.selected-paper-list em {
+  color: #718096;
+  font-size: 12px;
+  font-style: normal;
+  padding: 0 2px;
 }
 
 .create-mode-box {
@@ -1701,7 +1863,7 @@ h1, h2, h3, p {
 }
 
 .create-help-text {
-  margin: 10px 0 0;
+  margin: 12px 0 0;
 }
 
 @media (max-width: 1180px) {

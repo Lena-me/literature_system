@@ -41,6 +41,14 @@ from app.prompts.qa import USER_PROMPT_TEMPLATE as _USER_PROMPT_TEMPLATE
 _rag_service: 'RAGService | None' = None
 
 
+def _configured_cuda_devices() -> list[str]:
+    return [
+        device
+        for device in (settings.embedding_device, settings.reranker_device)
+        if str(device).lower().startswith('cuda')
+    ]
+
+
 def warmup_rag_models() -> None:
     """进程启动时预加载向量模型 / reranker / Milvus，避免首问冷启动。"""
     try:
@@ -51,14 +59,20 @@ def warmup_rag_models() -> None:
         if settings.rag_enable_reranker:
             load_rerank()
         get_milvus_store()
-        import torch
-        cuda_ok = torch.cuda.is_available()
+        cuda_devices = _configured_cuda_devices()
+        cuda_ok = False
+        gpu_name = ''
+        if cuda_devices:
+            import torch
+
+            cuda_ok = torch.cuda.is_available()
+            gpu_name = f', gpu={torch.cuda.get_device_name(0)}' if cuda_ok else ''
         logger.info(
             'RAG models warmed up (embedding=%s, reranker=%s, cuda=%s%s)',
             settings.embedding_device,
             settings.reranker_device,
             cuda_ok,
-            f', gpu={torch.cuda.get_device_name(0)}' if cuda_ok else '',
+            gpu_name,
         )
     except Exception as exc:
         logger.warning('RAG warmup skipped: %s', exc)

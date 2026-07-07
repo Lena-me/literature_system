@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-import logging
 from app.core.dependencies import get_current_user
 from app.db.mysql import get_db
 from app.models import (
@@ -22,7 +21,6 @@ from app.schemas import (
     DomainUpdateIn,
     ExploreRequestIn,
     ExploreResultOut,
-    GraphCreateIn,
     OverviewOutV2,
     MergeRequestIn,
     MergeResultOut,
@@ -31,10 +29,18 @@ from app.schemas import (
     RecommendationOut,
 )
 from app.services.generation_service import GenerationService
+from app.services.literature_graph_service import LiteratureGraphService
 from app.services.recommendation_service import RecommendationService
-from app.utils.json_utils import loads
 
 router = APIRouter(prefix='/knowledge-graphs', tags=['知识图谱'])
+
+
+class LiteratureGraphCreateIn(BaseModel):
+    paper_ids: list[int] = Field(min_length=2, max_length=50)
+    name: str | None = Field(default=None, max_length=200)
+    domain_id: int | None = None
+    build_mode: str = Field(default='fast', pattern='^(fast|deep)$')
+    include_weak: bool = True
 
 # ==================== 知识域 ====================
 
@@ -371,103 +377,28 @@ async def list_graphs(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """列出用户的所有知识图谱（可按知识域筛选）。"""
-    stmt = select(KnowledgeGraph).where(KnowledgeGraph.user_id == user.id)
-    if domain_id is not None:
-        stmt = stmt.where(KnowledgeGraph.domain_id == domain_id)
-    stmt = stmt.order_by(KnowledgeGraph.created_at.desc())
-
-    graphs = (await db.execute(stmt)).scalars().all()
-
-    results = []
-    for g in graphs:
-        # 统计该图谱关联的论文数
-        paper_cnt = (
-            await db.scalar(
-                select(func.count(KnowledgeGraphPaper.paper_id)).where(
-                    KnowledgeGraphPaper.graph_id == g.id
-                )
-            )
-        ) or 0
-        results.append({
-            'id': g.id,
-            'name': g.name,
-            'domain_id': g.domain_id,
-            'paper_count': paper_cnt,
-            'created_at': g.created_at.isoformat(),
-        })
-
-    return results
+    """列出用户的本地文献关系图谱（可按知识域筛选）。"""
+    return await LiteratureGraphService().list_graphs(db, user.id, domain_id=domain_id)
 
 @router.post('')
 async def create_graph(
-    data: GraphCreateIn,
+    data: LiteratureGraphCreateIn,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    if data.domain_id is not None:
-        domain = await db.get(KnowledgeDomain, data.domain_id)
-        if not domain or domain.user_id != user.id:
-            raise HTTPException(status_code=404, detail='知识域不存在')
-
-    graph = await GenerationService().create_graph(
-        db, user.id, data.paper_ids, data.name, domain_id=data.domain_id,
-    )
-
-    from app.db.neo4j_client import neo4j_manager
-
-    async with neo4j_manager.driver.session() as neo4j_session:
-        nodes_result = await neo4j_session.run(
-            "MATCH (n:Entity) WHERE n.graph_id = $graph_id "
-            "RETURN elementId(n) AS id, labels(n) AS labels, "
-            "n.name AS name, n.properties AS properties, "
-            "n.domain_id AS domain_id",
-            {'graph_id': graph.id},
+    try:
+        graph = await LiteratureGraphService().create_graph(
+            db=db,
+            user_id=user.id,
+            paper_ids=data.paper_ids,
+            name=data.name,
+            domain_id=data.domain_id,
+            build_mode=data.build_mode,
+            include_weak=data.include_weak,
         )
-        node_records = [r.data() async for r in nodes_result]
-
-        nodes = []
-        for rec in node_records:
-            raw_labels: list[str] = rec['labels']
-            entity_type = 'paper'
-            for lbl in raw_labels:
-                if lbl != 'Entity':
-                    entity_type = lbl.lower()
-                    break
-            nodes.append({
-                'id': rec['id'],
-                'type': entity_type,
-                'name': rec['name'],
-                'properties': loads(rec['properties'], {}),
-            })
-
-        edges_result = await neo4j_session.run(
-            "MATCH (s:Entity)-[r]->(t:Entity) "
-            "WHERE r.graph_id = $graph_id "
-            "RETURN elementId(r) AS id, elementId(s) AS source, elementId(t) AS target, "
-            "type(r) AS relation_type, r.properties AS properties",
-            {'graph_id': graph.id},
-        )
-        edge_records = [r.data() async for r in edges_result]
-
-        edges = [
-            {
-                'id': rec['id'],
-                'source': rec['source'],
-                'target': rec['target'],
-                'relation_type': rec['relation_type'],
-                'properties': loads(rec['properties'], {}),
-            }
-            for rec in edge_records
-        ]
-
-    return {
-        'id': graph.id,
-        'name': graph.name,
-        'domain_id': graph.domain_id,
-        'nodes': nodes,
-        'edges': edges,
-    }
+        return await LiteratureGraphService().get_graph(db, user.id, graph.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @router.get('/graph/{graph_id}')
 async def get_graph(
@@ -475,105 +406,39 @@ async def get_graph(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """查询知识图谱详情 — 元数据从 MySQL，节点/边从 Neo4j。"""
+    """查询本地文献关系图谱详情。"""
+    try:
+        return await LiteratureGraphService().get_graph(db, user.id, graph_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete('/graph/{graph_id}')
+async def delete_graph(
+    graph_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     graph = await db.get(KnowledgeGraph, graph_id)
-    if not graph or graph.user_id != user.id:
-        raise HTTPException(status_code=404, detail='知识图谱不存在')
+    if not graph:
+        return {'message': '文献图谱已不存在'}
+    if graph.user_id != user.id:
+        raise HTTPException(status_code=404, detail='文献图谱不存在。')
+    try:
+        await LiteratureGraphService().delete_graph(db, user.id, graph_id)
+        return {'message': '已删除文献图谱'}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    from app.db.neo4j_client import neo4j_manager
 
-    async with neo4j_manager.driver.session() as neo4j_session:
-        # ---------- 查询节点 ----------
-        nodes_result = await neo4j_session.run(
-            "MATCH (n:Entity) WHERE n.graph_id = $graph_id "
-            "RETURN elementId(n) AS id, labels(n) AS labels, "
-            "n.name AS name, n.properties AS properties, "
-            "n.domain_id AS domain_id",
-            {'graph_id': graph_id},
-        )
-        node_records = [r.data() async for r in nodes_result]
-
-        # 从 labels 中提取 entity_type（排除 'Entity' label）
-        nodes = []
-        for rec in node_records:
-            raw_labels: list[str] = rec['labels']
-            entity_type = 'paper'
-            for lbl in raw_labels:
-                if lbl != 'Entity':
-                    entity_type = lbl.lower()
-                    break
-            nodes.append({
-                'id': rec['id'],
-                'type': entity_type,
-                'name': rec['name'],
-                'properties': loads(rec['properties'], {}),
-            })
-
-        # ---------- 查询关系 ----------
-        edges_result = await neo4j_session.run(
-            "MATCH (s:Entity)-[r]->(t:Entity) "
-            "WHERE r.graph_id = $graph_id "
-            "RETURN elementId(r) AS id, elementId(s) AS source, elementId(t) AS target, "
-            "type(r) AS relation_type, r.properties AS properties",
-            {'graph_id': graph_id},
-        )
-        edge_records = [r.data() async for r in edges_result]
-
-        edges = [
-            {
-                'id': rec['id'],
-                'source': rec['source'],
-                'target': rec['target'],
-                'relation_type': rec['relation_type'],
-                'properties': loads(rec['properties'], {}),
-            }
-            for rec in edge_records
-        ]
-
-        # ★ 补偿查询：边引用了但节点查询漏掉的节点（通常是因为n.graph_id ≠ r.graph_id 的数据不一致）
-        existing_node_ids = {n['id'] for n in nodes}
-        referenced_node_ids: set[str] = set()
-        for rec in edge_records:
-            referenced_node_ids.add(rec['source'])
-            referenced_node_ids.add(rec['target'])
-        missing_node_ids = referenced_node_ids - existing_node_ids
-        if missing_node_ids:
-            logging.getLogger(__name__).warning(
-                f'[get_graph] graph_id={graph_id} 发现{len(missing_node_ids)}个孤儿节点引用，正在补偿查询...'
-            )
-            missing_result = await neo4j_session.run(
-                "MATCH (n:Entity) WHERE elementId(n) IN $ids "
-                "RETURN elementId(n) AS id, labels(n) AS labels, "
-                "n.name AS name, n.properties AS properties, "
-                "n.domain_id AS domain_id",
-                {'ids': list(missing_node_ids)},
-            )
-            async for rec in missing_result:
-                raw_labels: list[str] = list(rec['labels'])
-                entity_type = 'paper'
-                for lbl in raw_labels:
-                    if lbl != 'Entity':
-                        entity_type = lbl.lower()
-                        break
-                nodes.append({
-                    'id': rec['id'],
-                    'type': entity_type,
-                    'name': rec['name'],
-                    'properties': loads(rec['properties'], {}),
-                })
-
-    print(f'[get_graph] graph_id={graph_id} | Neo4j节点数={len(nodes)} | Neo4j边数={len(edges)}')
-    if nodes:
-        print(f'[get_graph] 第1个节点: id={nodes[0]["id"][:8]} type={nodes[0]["type"]} name={nodes[0]["name"][:30]}')
-    if edges:
-        print(f'[get_graph] 第1个边: id={edges[0]["id"][:8]} source={edges[0]["source"][:8]} target={edges[0]["target"][:8]} type={edges[0]["relation_type"]}')
-    else:
-        print(f'[get_graph] ⚠️ 无边数据! nodes={len(nodes)}')
-
-    return {
-        'id': graph.id,
-        'name': graph.name,
-        'domain_id': graph.domain_id,
-        'nodes': nodes,
-        'edges': edges,
-    }
+@router.post('/graph/{graph_id}/regenerate')
+async def regenerate_graph(
+    graph_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        graph = await LiteratureGraphService().regenerate_graph(db, user.id, graph_id)
+        return await LiteratureGraphService().get_graph(db, user.id, graph.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
