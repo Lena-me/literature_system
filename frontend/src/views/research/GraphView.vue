@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import GraphCanvas from './components/GraphCanvas.vue'
@@ -72,6 +72,7 @@ const wizardStep = ref<WizardStep>(1)
 const selectedPaperIds = ref<number[]>([])
 const paperSearch = ref('')
 const formName = ref('')
+const nameLoading = ref(false)
 const formTopicName = ref('')
 const formTopicId = ref<number | null>(null)
 const formDescription = ref('')
@@ -134,7 +135,19 @@ const selectedPapers = computed(() => {
   return papers.value.filter(paper => selected.has(paper.id))
 })
 
-const canCreateInlineGraph = computed(() => Boolean(formName.value.trim()) && selectedPaperIds.value.length >= 2 && !creating.value)
+const canCreateInlineGraph = computed(() => selectedPaperIds.value.length >= 2 && !creating.value && !nameLoading.value)
+
+const createButtonHint = computed(() => {
+  if (creating.value) return '正在生成图谱，请稍候…'
+  const count = selectedPaperIds.value.length
+  if (count < 2) {
+    return count === 0
+      ? '请至少选择 2 篇论文（知识图谱无次数限制）'
+      : `已选 ${count} 篇，还需再选 ${2 - count} 篇`
+  }
+  if (!formName.value.trim()) return '未填写名称时将由 AI 自动生成，也可先点击「AI 生成名称」'
+  return '准备就绪，点击生成文献关系图谱'
+})
 
 const yearRange = computed<[number, number]>(() => {
   const years = graph.value?.nodes.map(n => n.year).filter((y): y is number => typeof y === 'number') || []
@@ -390,6 +403,7 @@ async function loadPapers() {
 }
 
 async function openGraph(id: number) {
+  showCreateDialog.value = false
   loading.value = true
   try {
     graph.value = await knowledgeApi.get(id)
@@ -401,6 +415,8 @@ async function openGraph(id: number) {
     loading.value = false
   }
 }
+
+const createHomePanelRef = ref<HTMLElement | null>(null)
 
 function openCreateDialog() {
   wizardStep.value = 1
@@ -416,7 +432,11 @@ function openCreateDialog() {
   showCreateDialog.value = false
   graph.value = null
   selectedPanel.value = { kind: 'summary' }
-  router.replace({ query: {} })
+  router.replace({ query: {} }).finally(() => {
+    nextTick(() => {
+      createHomePanelRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  })
 }
 
 function closeCreateDialog() {
@@ -455,16 +475,13 @@ async function ensureTopicId(): Promise<number | null> {
 }
 
 async function createGraph() {
-  if (!formName.value.trim()) {
-    ElMessage.warning('请输入图谱名称')
-    wizardStep.value = 1
-    return
-  }
   if (selectedPaperIds.value.length < 2) {
     ElMessage.warning('至少选择 2 篇论文才能生成知识图谱')
     wizardStep.value = 2
     return
   }
+
+  const graphName = await ensureGraphName(true)
 
   creating.value = true
   wizardStep.value = 4
@@ -477,7 +494,7 @@ async function createGraph() {
     }
     const created = await knowledgeApi.create({
       paper_ids: selectedPaperIds.value,
-      name: formName.value.trim(),
+      name: graphName,
       domain_id: topicId,
       build_mode: buildMode.value,
       include_weak: includeWeak.value,
@@ -670,6 +687,65 @@ function paperTitle(paper: LibraryPaper): string {
   return paper.title || paper.original_filename || `论文 #${paper.id}`
 }
 
+function defaultGraphName(): string {
+  const topic = formTopicName.value.trim()
+  if (topic) return `${topic} · 文献关系图谱`
+  const titles = selectedPapers.value.slice(0, 2).map(paperTitle)
+  if (!titles.length) return '文献关系图谱'
+  if (selectedPaperIds.value.length <= 2) {
+    return `${titles.join(' / ')} · 关系图谱`
+  }
+  return `${titles[0]} 等 ${selectedPaperIds.value.length} 篇 · 关系图谱`
+}
+
+async function suggestGraphName() {
+  if (selectedPaperIds.value.length < 2) {
+    ElMessage.warning('至少选择 2 篇论文才能生成名称')
+    return
+  }
+  nameLoading.value = true
+  try {
+    const res = await knowledgeApi.suggestName({
+      paper_ids: selectedPaperIds.value,
+      topic_name: formTopicName.value.trim() || undefined,
+    })
+    const candidate = String(res?.name || '').trim()
+    formName.value = candidate || defaultGraphName()
+    ElMessage.success('已生成图谱名称')
+  } catch {
+    formName.value = defaultGraphName()
+    ElMessage.warning('AI 命名失败，已使用默认名称')
+  } finally {
+    nameLoading.value = false
+  }
+}
+
+async function ensureGraphName(preferLlm = false): Promise<string> {
+  const trimmed = formName.value.trim()
+  if (trimmed) return trimmed
+  if (preferLlm && selectedPaperIds.value.length >= 2) {
+    nameLoading.value = true
+    try {
+      const res = await knowledgeApi.suggestName({
+        paper_ids: selectedPaperIds.value,
+        topic_name: formTopicName.value.trim() || undefined,
+      })
+      const candidate = String(res?.name || '').trim()
+      if (candidate) {
+        formName.value = candidate
+        return candidate
+      }
+    } catch {
+      // fall through to rule-based name
+    } finally {
+      nameLoading.value = false
+    }
+  }
+  const generated = defaultGraphName()
+  formName.value = generated
+  return generated
+}
+
 function normalizeText(value: unknown): string {
   if (value == null) return ''
   if (Array.isArray(value)) return value.map(item => String(item).trim()).filter(Boolean).join('、')
@@ -793,7 +869,7 @@ function delay(ms: number) {
         </div>
       </section>
 
-      <section v-if="!graph" class="create-home-panel">
+      <section v-if="!graph" ref="createHomePanelRef" class="create-home-panel">
         <div class="create-home-shell">
           <section class="create-paper-card">
             <header class="create-home-head">
@@ -801,9 +877,19 @@ function delay(ms: number) {
             </header>
 
             <div class="create-field-grid">
-              <label class="inline-field">
+              <label class="inline-field name-field">
                 <span>图谱名称</span>
-                <input v-model="formName" placeholder="例如：RAG 相关论文研究脉络" />
+                <div class="name-input-row">
+                  <input v-model="formName" placeholder="例如：RAG 相关论文研究脉络" />
+                  <button
+                    type="button"
+                    class="ghost-btn name-suggest-btn"
+                    :disabled="nameLoading || selectedPaperIds.length < 2"
+                    @click="suggestGraphName"
+                  >
+                    {{ nameLoading ? '生成中…' : 'AI 生成名称' }}
+                  </button>
+                </div>
               </label>
               <label class="inline-field">
                 <span>研究主题</span>
@@ -877,7 +963,7 @@ function delay(ms: number) {
             </button>
             <button class="create-library-btn" @click="router.push('/library')">去文献库上传 / 解析论文</button>
 
-            <p class="create-help-text">{{ formName.trim() ? selectedPaperIds.length >= 2 ? '准备就绪' : '至少选择 2 篇论文' : '请填写图谱名称' }}</p>
+            <p class="create-help-text">{{ createButtonHint }}</p>
           </aside>
         </div>
       </section>
@@ -983,7 +1069,17 @@ function delay(ms: number) {
 
           <section v-if="wizardStep === 1" class="dialog-body">
             <label class="field-label">图谱名称</label>
-            <input v-model="formName" class="text-input" placeholder="例如：检索增强生成相关文献研究脉络" />
+            <div class="name-input-row">
+              <input v-model="formName" class="text-input" placeholder="例如：检索增强生成相关文献研究脉络" />
+              <button
+                type="button"
+                class="ghost-btn name-suggest-btn"
+                :disabled="nameLoading || selectedPaperIds.length < 2"
+                @click="suggestGraphName"
+              >
+                {{ nameLoading ? '生成中…' : 'AI 生成名称' }}
+              </button>
+            </div>
 
             <label class="field-label">研究主题</label>
             <div class="topic-select-row">
@@ -1637,6 +1733,25 @@ h1, h2, h3, p {
 
 .inline-field input {
   padding: 0 12px;
+}
+
+.name-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.name-input-row input,
+.name-input-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.name-suggest-btn {
+  flex-shrink: 0;
+  height: 40px;
+  padding: 0 12px;
+  white-space: nowrap;
 }
 
 .create-paper-toolbar {

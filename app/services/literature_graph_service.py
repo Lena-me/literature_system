@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
 from app.models import (
     GraphEdge,
     GraphNode,
@@ -385,6 +386,88 @@ class LiteratureGraphService:
             'status_hint': status_hint,
             'description': '节点代表论文，节点大小表示本地图谱中心性，节点颜色表示发表年份，边表示论文之间的语义、关键词和方法关联。',
         }
+
+    @classmethod
+    def _graph_name_fallback(cls, snapshots: list[dict[str, Any]], topic_name: str | None = None) -> str:
+        topic = cls._clean(topic_name, 80)
+        if topic:
+            return f'{topic} · 文献关系图谱'
+        titles = [cls._clean(s.get('title'), 80) for s in snapshots[:2] if cls._clean(s.get('title'), 80)]
+        if not titles:
+            return '文献关系图谱'
+        if len(snapshots) <= 2:
+            return f'{" / ".join(titles)} · 关系图谱'
+        return f'{titles[0]} 等 {len(snapshots)} 篇 · 关系图谱'
+
+    async def suggest_graph_name(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        paper_ids: list[int],
+        topic_name: str | None = None,
+    ) -> str:
+        bundles = await self._load_bundles(db, user_id, paper_ids)
+        if len(bundles) < 2:
+            raise ValueError('至少选择 2 篇文献才能生成图谱名称。')
+
+        snapshots = [self._bundle_to_snapshot(b) for b in bundles]
+        fallback = self._graph_name_fallback(snapshots, topic_name)
+
+        keyword_sets = [{k.lower() for k in (s.get('keywords') or []) if str(k).strip()} for s in snapshots]
+        shared_keywords = sorted(set.intersection(*keyword_sets)) if keyword_sets else []
+        if not shared_keywords and keyword_sets:
+            freq = Counter(k for ks in keyword_sets for k in ks)
+            shared_keywords = [k for k, _ in freq.most_common(6)]
+
+        paper_briefs: list[dict[str, Any]] = []
+        for snapshot in snapshots:
+            brief: dict[str, Any] = {
+                'title': snapshot['title'],
+                'year': snapshot.get('year'),
+                'keywords': (snapshot.get('keywords') or [])[:8],
+            }
+            if snapshot.get('research_question'):
+                brief['research_question'] = snapshot['research_question'][:120]
+            if snapshot.get('method'):
+                brief['method'] = snapshot['method'][:120]
+            paper_briefs.append(brief)
+
+        topic_text = self._clean(topic_name, 80) or '未指定'
+        prompt = f"""请根据以下文献信息，为一份「文献关系图谱」生成一个简洁中文名称。
+
+要求：
+1. 不超过 32 个中文字符或 60 个英文字符；
+2. 不要使用引号、编号、Markdown；
+3. 名称应概括所选论文的共同研究主题或关联线索，而不是只复制第一篇标题；
+4. 可体现方法、任务或研究脉络，例如「检索增强生成相关文献关联图谱」；
+5. 若主题分散，可用「多主题文献关系图谱：A 与 B」这类表达。
+
+研究主题（用户可选填）：{topic_text}
+文献概况：{dumps(paper_briefs)}
+共同关键词线索：{'、'.join(shared_keywords[:8]) or '暂无明确共同关键词'}
+"""
+
+        llm = OpenAICompatibleLLM(scenario='report')
+        try:
+            text = await llm.async_chat(
+                [
+                    {'role': 'system', 'content': '你为科研文献知识图谱任务生成简洁、准确的中文标题。'},
+                    {'role': 'user', 'content': prompt},
+                ],
+                temperature=0.2,
+                max_tokens=120,
+            )
+            name = text.strip().strip('`').strip().strip('"').strip("'")
+            if '\n' in name:
+                name = name.splitlines()[0].strip()
+            name = name.replace('标题：', '').replace('名称：', '').strip()
+            letters = len(re.findall(r'[A-Za-z]', name))
+            chinese = len(re.findall(r'[\u4e00-\u9fff]', name))
+            if len(name) > 50 and letters > chinese * 2:
+                return fallback[:80]
+            return (name or fallback)[:80]
+        except Exception:
+            return fallback[:80]
 
     async def create_graph(
         self,

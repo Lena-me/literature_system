@@ -42,6 +42,11 @@ class LiteratureGraphCreateIn(BaseModel):
     build_mode: str = Field(default='fast', pattern='^(fast|deep)$')
     include_weak: bool = True
 
+
+class LiteratureGraphNameIn(BaseModel):
+    paper_ids: list[int] = Field(min_length=2, max_length=50)
+    topic_name: str | None = Field(default=None, max_length=120)
+
 # ==================== 知识域 ====================
 
 @router.post('/domains', response_model=DomainOut)
@@ -379,6 +384,25 @@ async def list_graphs(
 ):
     """列出用户的本地文献关系图谱（可按知识域筛选）。"""
     return await LiteratureGraphService().list_graphs(db, user.id, domain_id=domain_id)
+
+@router.post('/suggest-name')
+async def suggest_graph_name(
+    data: LiteratureGraphNameIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        name = await LiteratureGraphService().suggest_graph_name(
+            db,
+            user.id,
+            data.paper_ids,
+            data.topic_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {'name': name}
+
 
 @router.post('')
 async def create_graph(

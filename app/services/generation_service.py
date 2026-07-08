@@ -447,7 +447,7 @@ class GenerationService:
 
     @classmethod
     def _parse_reference_text(cls, raw: str) -> dict:
-        text = cls._clean_report_value(raw, limit=1000)
+        text = cls._clean_report_value(raw, limit=2000)
         if not text:
             return {'title': '', 'authors': '', 'year': '', 'venue': ''}
 
@@ -528,7 +528,7 @@ class GenerationService:
 
     @classmethod
     def _reference_title_fallback(cls, raw: str) -> str:
-        text = cls._clean_report_value(raw, limit=500)
+        text = cls._clean_report_value(raw, limit=2000)
         if not text:
             return ''
         before_identifier = re.split(
@@ -561,7 +561,7 @@ class GenerationService:
     def _build_reference_links(cls, reference_trace: list[dict]) -> list[dict]:
         links: list[dict] = []
         for item in reference_trace or []:
-            raw = cls._clean_report_value(item.get('content') or item.get('raw'), limit=1000)
+            raw = cls._clean_report_value(item.get('content') or item.get('raw'), limit=2000)
             parsed = cls._parse_reference_text(raw)
             url = None
             doi = extract_doi_from_text(raw) or item.get('doi')
@@ -581,6 +581,7 @@ class GenerationService:
 
             links.append({
                 **parsed,
+                'title': raw,
                 'raw': raw,
                 'url': url or '',
                 'url_type': cls._infer_url_type(url),
@@ -677,8 +678,40 @@ class GenerationService:
         return f'{markdown[:start]}{replacement_body}{markdown[end:]}'
 
     @classmethod
+    def _strip_duplicate_reference_markdown(cls, markdown: str) -> str:
+        text = markdown
+        text = re.sub(
+            r'\n#{1,3}\s*原文参考文献(?:溯源|列表)?\s*\n[\s\S]*?(?=\n#{1,3}\s|\n##\s|$)',
+            '\n',
+            text,
+        )
+        text = re.sub(
+            r'\n#{1,3}\s*可点击参考文献\s*\n[\s\S]*?(?=\n#{1,3}\s|\n##\s|$)',
+            '\n',
+            text,
+        )
+
+        def trim_extension_section(match: re.Match[str]) -> str:
+            heading = match.group(1)
+            body = match.group(2)
+            learning = re.search(
+                r'###\s*基础知识与拓展检索式[\s\S]*?(?=\n###\s|\n##\s|$)',
+                body,
+            )
+            if learning:
+                return f'{heading}{learning.group(0).strip()}\n\n'
+            return heading
+
+        return re.sub(
+            r'(##\s*拓展检索\s*\n)([\s\S]*?)(?=\n##\s|$)',
+            trim_extension_section,
+            text,
+        )
+
+    @classmethod
     def _cleanup_report_markdown(cls, markdown: str, source: dict | None = None) -> str:
         text = cls._append_reference_links_section(markdown, [])
+        text = cls._strip_duplicate_reference_markdown(text)
         text = re.sub(
             r'\n?\*\*复现风险提示\*\*[:：]\s*(?=\n{2,}##|\Z)',
             '',
@@ -800,7 +833,7 @@ class GenerationService:
         seen: set[str] = set()
 
         for _, row, overlap in scored:
-            content = self._clean_report_value(row.content, limit=500)
+            content = self._clean_report_value(row.content, limit=2000)
             key = content[:120]
             if key in seen:
                 continue
@@ -808,7 +841,7 @@ class GenerationService:
             results.append({
                 'content': content,
                 'page_number': row.page_number,
-                'reason': f"匹配关键词：{'、'.join(overlap)}",
+                'reason': '与本文研究方向相关',
                 'source_type': 'reference',
                 'doi': extract_doi_from_text(content),
                 'official_url': extract_official_url_from_text(content)
@@ -819,7 +852,7 @@ class GenerationService:
 
         if not results:
             for row in rows[:limit]:
-                content = self._clean_report_value(row.content, limit=500)
+                content = self._clean_report_value(row.content, limit=2000)
                 if not content:
                     continue
                 key = content[:120]
@@ -829,7 +862,7 @@ class GenerationService:
                 results.append({
                     'content': content,
                     'page_number': row.page_number,
-                    'reason': '来自原文参考文献列表，可作为背景知识或研究脉络补充阅读候选。',
+                    'reason': '可作为研究脉络补充阅读',
                     'source_type': 'reference',
                     'doi': extract_doi_from_text(content),
                     'official_url': extract_official_url_from_text(content)
@@ -1453,6 +1486,54 @@ class GenerationService:
                 return ' / '.join(dict.fromkeys(matches[:2]))
             return clean if len(clean) <= 36 else f'{clean[:34]}...'
 
+        def compress_compare_cell(value: object, limit: int = 96) -> str:
+            text = clean_text(value, limit=1200)
+            if text in {'-', '当前解析未提取到明确证据'}:
+                return '-'
+            parts = re.split(r'(?<=[。；;])\s*', text)
+            first = (parts[0] if parts else text).strip()
+            if len(first) > limit:
+                return f'{first[:limit]}…'
+            return first or '-'
+
+        def build_local_comparison_table_zh(raw_rows: list[dict]) -> list[dict]:
+            localized: list[dict] = []
+            for row in raw_rows:
+                if not isinstance(row, dict):
+                    continue
+                next_row = {
+                    'dimension': row.get('dimension'),
+                    'dimension_key': row.get('dimension_key'),
+                }
+                for key, value in row.items():
+                    if key in {'dimension', 'dimension_key'}:
+                        continue
+                    next_row[key] = compress_compare_cell(value)
+                localized.append(next_row)
+            return localized
+
+        def align_zh_table_with_raw(zh_rows: list[dict], raw_rows: list[dict]) -> list[dict]:
+            raw_by_dim = {
+                row.get('dimension_key'): row
+                for row in raw_rows
+                if isinstance(row, dict) and row.get('dimension_key')
+            }
+            aligned: list[dict] = []
+            for row in zh_rows:
+                if not isinstance(row, dict):
+                    continue
+                next_row = dict(row)
+                raw_row = raw_by_dim.get(next_row.get('dimension_key'), {})
+                for key, value in list(next_row.items()):
+                    if key in {'dimension', 'dimension_key'}:
+                        continue
+                    raw_val = clean_text(raw_row.get(key), limit=1200)
+                    zh_val = clean_text(value, limit=180)
+                    if raw_val not in {'-', '当前解析未提取到明确证据'} and zh_val == raw_val:
+                        next_row[key] = compress_compare_cell(raw_val)
+                aligned.append(next_row)
+            return aligned
+
         known_paper_profiles = {
             'RAG': {
                 'research_question': '关注知识密集型 NLP 任务中，生成模型如何结合外部检索知识以减少纯参数记忆的不足。',
@@ -1620,7 +1701,7 @@ class GenerationService:
 
         comparison_table_zh = summary.get('comparison_table_zh')
         if not isinstance(comparison_table_zh, list) or not comparison_table_zh:
-            comparison_table_zh = raw_comparison_table
+            comparison_table_zh = build_local_comparison_table_zh(raw_comparison_table)
 
         def looks_like_non_chinese_summary(value: object) -> bool:
             text = clean_text(value, limit=2000)
@@ -1643,29 +1724,7 @@ class GenerationService:
         paper_meta_by_key = {item['key']: item for item in papers_meta}
 
         def fallback_zh_cell(dim_key: str, paper_key: str, value: object) -> str:
-            meta = paper_meta_by_key.get(paper_key) or {}
-            alias = str(meta.get('short_title') or '')
-            profile = known_paper_profiles.get(alias)
-            if profile and profile.get(dim_key):
-                return profile[dim_key]
-
-            text = clean_text(value, limit=900)
-            if text == '-' or text == '当前解析未提取到明确证据':
-                return '当前解析未提取到明确证据'
-
-            title = str(meta.get('title') or alias or '该论文')
-            readable_title = alias if alias and len(alias) <= 24 else (title[:16] + '...' if len(title) > 18 else title)
-            generic = {
-                'research_question': f'{readable_title} 在该维度已有原始解析，但中文压缩生成不足；可切换原始解析查看研究问题细节。',
-                'method': f'{readable_title} 的方法信息已在原始解析中提取；中文压缩生成不足，可查看原始方法描述。',
-                'experiment_data': f'{readable_title} 的实验对象或数据设置在原始解析中有相关信息；中文压缩生成不足。',
-                'metrics': f'{readable_title} 的评价指标信息可在原始解析中查看；当前未形成稳定中文短摘要。',
-                'main_results': f'{readable_title} 的结果信息已在原始解析中提取；当前未形成稳定中文短摘要。',
-                'innovations': f'{readable_title} 的贡献点可参考原始解析；当前未形成稳定中文短摘要。',
-                'limitations': f'{readable_title} 的局限性信息可参考原始解析；当前未形成稳定中文短摘要。',
-                'future_work': f'{readable_title} 的未来方向可参考原始解析；当前未形成稳定中文短摘要。',
-            }
-            return generic.get(dim_key, f'{readable_title} 在该维度已有原始解析；当前未形成稳定中文短摘要。')
+            return compress_compare_cell(value)
 
         def sanitize_zh_table(rows: list[dict]) -> list[dict]:
             sanitized = []
@@ -1693,6 +1752,7 @@ class GenerationService:
             return sanitized
 
         comparison_table_zh = sanitize_zh_table(comparison_table_zh)
+        comparison_table_zh = align_zh_table_with_raw(comparison_table_zh, raw_comparison_table)
 
         key_differences = summary.get('key_differences')
         common_trends = summary.get('common_trends')

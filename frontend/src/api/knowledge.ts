@@ -100,8 +100,15 @@ export interface LiteratureGraphCreatePayload {
   include_weak?: boolean
 }
 
+export interface LiteratureGraphNamePayload {
+  paper_ids: number[]
+  topic_name?: string
+}
+
 export const knowledgeApi = {
   // 文献关系图谱
+  suggestName: (payload: LiteratureGraphNamePayload) =>
+    http.post<{ name: string }>('/knowledge-graphs/suggest-name', payload),
   create: (payload: LiteratureGraphCreatePayload) =>
     http.post<LiteratureGraph>('/knowledge-graphs', payload),
   list: (domainId?: number | null) =>

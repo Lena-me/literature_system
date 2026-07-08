@@ -29,7 +29,7 @@ const dimensionOptions = [
 const defaultDimensionValues = ['research_question', 'method', 'experiment_data', 'main_results', 'innovations']
 const allDimensionValues = dimensionOptions.map(x => x.value)
 
-const activeTab = ref<'setup' | 'result' | 'evidence'>('setup')
+const activeTab = ref<'setup' | 'result'>('setup')
 const activeHistoryId = ref<number | null>(null)
 const selectedIds = ref<number[]>([])
 const selectedDimensions = ref<string[]>([...defaultDimensionValues])
@@ -48,6 +48,8 @@ const evidenceResult = ref<any>(null)
 const history = ref<any[]>([])
 const expandedCompareCells = ref<Set<string>>(new Set())
 const expandedEvidenceItems = ref<Set<string>>(new Set())
+const sidebarCollapsed = ref(false)
+const sidebarHovered = ref(false)
 const compareSnapshotKey = 'multi-paper-compare:last-result'
 const evidenceSnapshotKey = 'multi-paper-compare:last-evidence'
 
@@ -153,12 +155,30 @@ const allDimensionsSelected = computed(() =>
   selectedDimensions.value.length === allDimensionValues.length
 )
 
+const selectedPaperCountLabel = computed(() => {
+  const count = selectedIds.value.length
+  return count ? `已选 ${count} 篇` : '未选择文献'
+})
+
+const selectedDimensionCountLabel = computed(() => `已选 ${selectedDimensions.value.length} 项`)
+
 const evidenceDimensions = computed(() => {
   return Array.isArray(evidenceResult.value?.dimensions) ? evidenceResult.value.dimensions : []
 })
 
 function paperTitle(paper: Paper) {
   return paper.title || paper.original_filename || `Paper ${paper.id}`
+}
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+}
+
+function formatDate(value?: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
 function tableHeader(key: string) {
@@ -386,6 +406,7 @@ async function runCompare() {
     await loadHistory()
     activeHistoryId.value = compareResult.value?.id ?? null
     activeTab.value = 'result'
+    await loadEvidenceSilently()
     ElMessage.success('多文献对比已生成')
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || e?.message || '多文献对比生成失败')
@@ -394,11 +415,8 @@ async function runCompare() {
   }
 }
 
-async function runEvidence() {
-  if (selectedIds.value.length < 1) {
-    ElMessage.warning('请先选择文献')
-    return
-  }
+async function loadEvidenceSilently() {
+  if (selectedIds.value.length < 1) return
 
   evidenceLoading.value = true
   try {
@@ -413,10 +431,8 @@ async function runEvidence() {
       selected_dimensions: [...selectedDimensions.value],
     }
     saveSnapshot(evidenceSnapshotKey, evidenceResult.value)
-    activeTab.value = 'evidence'
-    ElMessage.success('证据矩阵已生成')
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '证据矩阵生成失败')
+  } catch {
+    evidenceResult.value = null
   } finally {
     evidenceLoading.value = false
   }
@@ -432,6 +448,7 @@ async function openHistoryItem(item: any) {
   selectedIds.value = Array.isArray(compareResult.value?.paper_ids) ? compareResult.value.paper_ids : selectedIds.value
   activeHistoryId.value = item.id
   activeTab.value = 'result'
+  void loadEvidenceSilently()
 }
 
 function startNewCompare() {
@@ -504,11 +521,20 @@ async function deleteHistoryItem(item: any) {
 }
 
 function openEvidenceSource(evidence: any) {
-  const source = evidence?.source || {
-    paper_id: evidence.paper_id,
-    page_number: evidence.page_number,
-    section_title: evidence.section_title,
-    snippet: evidence.snippet,
+  const paper = paperStore.list.find(p => p.id === evidence?.paper_id)
+  const base = evidence?.source || {}
+  const source: Source = {
+    ...base,
+    paper_id: evidence.paper_id ?? base.paper_id,
+    page_number: evidence.page_number ?? base.page_number,
+    section_title: evidence.section_title || base.section_title,
+    snippet: evidence.snippet || base.snippet,
+    paper_title: evidence.paper_title || paper?.title || paper?.original_filename,
+    bbox: base.bbox ?? evidence.bbox,
+    chunk_id: base.chunk_id ?? evidence.chunk_id,
+    section_id: base.section_id ?? evidence.section_id,
+    locate_snippet: base.locate_snippet || evidence.snippet,
+    locate_type: base.locate_type,
   }
   emit('sourceClick', source)
 }
@@ -523,6 +549,25 @@ function isCompareCellExpanded(rowIndex: number, key: string) {
 
 function shouldShowCompareToggle(value: unknown) {
   return tableViewMode.value === 'raw' && String(value || '').length > 160
+}
+
+function isMissingCompareText(value: unknown) {
+  const text = String(value || '').trim()
+  return (
+    !text
+    || text === '-'
+    || text === '当前解析未提取到明确证据'
+    || text === '当前解析未提取到明确中文概括'
+  )
+}
+
+function summarizeCompareCell(text: string, maxLen = 96) {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (!normalized) return '-'
+  const parts = normalized.split(/(?<=[。；;])\s*/).filter(Boolean)
+  const first = (parts[0] || normalized).trim()
+  if (first.length <= maxLen) return first
+  return `${first.slice(0, maxLen)}…`
 }
 
 function isEnglishLongText(value: unknown) {
@@ -542,61 +587,6 @@ function isEnglishLongText(value: unknown) {
   )
 }
 
-const knownPaperProfiles: Record<string, Record<string, string>> = {
-  RAG: {
-    research_question: '关注知识密集型 NLP 中生成模型如何结合外部检索知识，减少纯参数记忆不足。',
-    method: '采用检索增强生成框架，先检索相关文档，再将检索内容作为条件输入生成答案或文本。',
-    experiment_data: '面向开放域问答和知识密集型生成任务，结合外部知识源与多类 NLP 数据集验证。',
-    metrics: '围绕答案准确性、生成质量和知识密集型任务表现进行评估。',
-    main_results: '检索增强改善了知识密集型任务表现，尤其适合需要外部事实支撑的生成场景。',
-    innovations: '把非参数化检索记忆与生成模型结合，为后续 RAG 方法提供基础范式。',
-  },
-  REALM: {
-    research_question: '关注语言模型预训练阶段如何引入检索机制，使模型利用可更新的外部知识。',
-    method: '在预训练中联合学习检索器与语言模型，通过检索文档增强 masked language modeling。',
-    experiment_data: '面向开放域问答等知识密集型任务，并结合大规模文本知识库训练和检索。',
-    metrics: '重点考察开放域问答准确率、检索质量和预训练后下游任务效果。',
-    main_results: '检索增强预训练提升了知识密集型任务表现，并缓解静态参数记忆局限。',
-    innovations: '将文档检索纳入语言模型预训练目标，强调可更新的非参数知识记忆。',
-  },
-  DPR: {
-    research_question: '关注开放域问答中如何用稠密向量检索替代稀疏检索，提高相关段落召回。',
-    method: '采用双编码器分别编码问题和段落，通过向量相似度快速检索候选证据。',
-    experiment_data: '面向开放域问答数据集，使用问题-答案/段落监督信号训练稠密检索器。',
-    metrics: '重点评估 top-k 段落召回、问答准确率和检索质量。',
-    main_results: '稠密检索在开放域问答证据召回上具有竞争力，为后续神经检索奠定基础。',
-    innovations: '将双编码器稠密表示系统化用于开放域问答检索，弱化对关键词匹配的依赖。',
-  },
-  'Generative QA': {
-    research_question: '关注开放域问答中生成模型如何借助段落检索获得外部证据并生成答案。',
-    method: '先检索候选段落，再将段落内容输入生成模型，由生成模型整合证据形成回答。',
-    experiment_data: '面向开放域问答任务，围绕检索段落、生成答案和基线系统进行实验比较。',
-    metrics: '考察答案匹配、生成质量以及检索段落对最终回答的支撑程度。',
-    main_results: '强调检索证据能增强生成式问答，最终表现取决于检索和生成两阶段配合。',
-    innovations: '较早探索 passage retrieval 与生成模型结合的开放域问答流程。',
-  },
-  ColBERT: {
-    research_question: '关注如何在保持检索效率的同时，用上下文 token 级交互提升文本检索精度。',
-    method: '采用 late interaction，分别编码查询和文档 token，并进行细粒度相似度匹配。',
-    experiment_data: '面向段落检索和开放域问答相关检索任务，通常与 BM25、DPR 等方法比较。',
-    metrics: '重点评估检索排序指标、召回效果以及索引和查询效率。',
-    main_results: '细粒度 late interaction 在检索质量和效率之间取得较好平衡。',
-    innovations: '提出 token 级 late interaction 检索范式，兼顾深度语义匹配与可扩展检索。',
-  },
-}
-
-function fallbackCompareCell(row: any, key: string, value: unknown) {
-  const dimKey = String(row?.dimension_key || '')
-  const paper = resultPapers.value.find((p: any) => p.key === key)
-  const alias = paper?.title ? shortPaperHeader(paper.title) : key
-  const profile = knownPaperProfiles[alias]
-  if (profile?.[dimKey]) return profile[dimKey]
-
-  const text = String(value || '').trim()
-  if (!text || text === '当前解析未提取到明确证据') return '当前解析未提取到明确证据'
-  return `${alias} 在该维度已有原始解析；中文压缩不足时可切换“原始解析”查看细节。`
-}
-
 function rawCompareValue(row: any, key: string) {
   const dimKey = row?.dimension_key
   const rawRows = Array.isArray(resultData.value.raw_comparison_table) ? resultData.value.raw_comparison_table : []
@@ -605,10 +595,24 @@ function rawCompareValue(row: any, key: string) {
 }
 
 function displayCompareCell(value: unknown, row: any, key: string) {
-  if (tableViewMode.value === 'zh' && (isEnglishLongText(value) || value === '当前解析未提取到明确中文概括')) {
-    return fallbackCompareCell(row, key, rawCompareValue(row, key))
+  if (key === 'dimension' || key === 'dimension_key') {
+    return String(value || '-')
   }
-  return value || '-'
+
+  const rawText = String(rawCompareValue(row, key) || '').trim()
+
+  if (tableViewMode.value === 'raw') {
+    return isMissingCompareText(rawText) ? '-' : rawText
+  }
+
+  const zhText = String(value || '').trim()
+  if (isMissingCompareText(zhText)) {
+    return isMissingCompareText(rawText) ? '-' : summarizeCompareCell(rawText)
+  }
+  if (rawText && (zhText === rawText || rawText.includes(zhText) || zhText.includes(rawText))) {
+    return summarizeCompareCell(rawText)
+  }
+  return zhText
 }
 
 function focusCompareName() {
@@ -649,56 +653,105 @@ function toggleEvidenceItem(evidence: any, prefix = 'evidence') {
   expandedEvidenceItems.value = next
 }
 
-function evidenceTitle(row: any, evidence: any) {
-  return shortPaperHeader(row?.title || evidence?.title || evidence?.source?.title || `Paper ${evidence?.paper_id || ''}`)
-}
-
 function evidenceSupport(evidence: any) {
   return String(evidence?.support || evidence?.strength || 'related').toLowerCase()
+}
+
+function evidenceSupportLabel(evidence: any) {
+  const level = evidenceSupport(evidence)
+  if (level === 'strong') return '高度相关'
+  if (level === 'medium' || level === 'related') return '部分相关'
+  if (level === 'weak') return '弱相关'
+  return ''
+}
+
+function evidenceSectionLabel(section?: string) {
+  const value = String(section || '').trim()
+  if (!value || value === '结构化抽取结果' || value === '结构化摘要') return ''
+  return value
+}
+
+function shouldShowEvidenceSupport(evidence: any) {
+  return Boolean(evidenceSupportLabel(evidence))
+}
+
+function evidencePageLabel(page?: number | string) {
+  const value = Number(page)
+  return Number.isFinite(value) && value > 0 ? `第 ${value} 页` : ''
 }
 </script>
 
 <template>
-  <div class="compare-page">
-    <aside class="history-panel">
-      <div class="sidebar-head">
-        <h3>多文献对比</h3>
-        <span class="count">{{ history.length }} 条</span>
-      </div>
-      <button class="new-compare-btn" @click="startNewCompare">新建对比</button>
-      <div class="history-list slim-scroll">
-        <div v-if="historyLoading" class="empty-note">加载中...</div>
-        <div v-else-if="!history.length" class="empty-note">暂无历史记录</div>
-        <div
-          v-for="item in history"
-          :key="item.id"
-          class="history-card"
-          :class="{ active: activeHistoryId === item.id }"
-        >
-          <button class="history-card-main" @click="openHistoryItem(item)">
-            <strong>{{ item.name || '未命名对比' }}</strong>
-            <em>{{ (item.paper_ids || []).length }} 篇文献 · {{ item.created_at }}</em>
-          </button>
-          <button class="delete-action" title="删除" @click="deleteHistoryItem(item)">删除</button>
+  <div class="compare-workspace">
+    <div
+      class="compare-sidebar-wrapper"
+      :class="{ collapsed: sidebarCollapsed }"
+      @mouseenter="sidebarHovered = true"
+      @mouseleave="sidebarHovered = false"
+    >
+      <aside class="compare-sidebar">
+        <div class="compare-sidebar-head">
+          <h2 class="compare-sidebar-title">多文献对比</h2>
+          <span class="compare-count">{{ history.length }} 条</span>
         </div>
-      </div>
-      <button class="ghost-action refresh-btn" :disabled="historyLoading" @click="loadHistory">刷新历史</button>
-    </aside>
 
-    <section class="main-panel">
-      <header class="panel-head">
-        <div>
-          <h2>多文献对比</h2>
+        <div class="compare-divider" />
+
+        <div class="compare-create-block">
+          <button class="compare-create-btn" @click="startNewCompare">新建对比</button>
         </div>
+
+        <div class="compare-divider" />
+
+        <div class="compare-list-wrap slim-scroll">
+          <div v-if="historyLoading" class="compare-empty-side">加载中...</div>
+          <div v-else-if="!history.length" class="compare-empty-side">暂无历史记录</div>
+          <div
+            v-for="item in history"
+            :key="item.id"
+            class="compare-list-item"
+            :class="{ active: activeHistoryId === item.id }"
+            @click="openHistoryItem(item)"
+          >
+            <div class="compare-item-main">
+              <div class="compare-item-title">{{ item.name || '未命名对比' }}</div>
+              <div class="compare-item-meta">{{ (item.paper_ids || []).length }} 篇文献 · {{ formatDate(item.created_at) }}</div>
+            </div>
+            <button class="compare-item-delete" title="删除" @click.stop="deleteHistoryItem(item)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <button
+      class="compare-sidebar-toggle"
+      :class="{ visible: sidebarHovered || sidebarCollapsed, collapsed: sidebarCollapsed }"
+      :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
+      @click="toggleSidebar"
+      @mouseenter="sidebarHovered = true"
+      @mouseleave="sidebarHovered = false"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline v-if="!sidebarCollapsed" points="15 18 9 12 15 6"/>
+        <polyline v-else points="9 18 15 12 9 6"/>
+      </svg>
+    </button>
+
+    <main class="compare-main" :class="{ 'is-sidebar-collapsed': sidebarCollapsed }">
+      <header class="compare-header">
+        <h2 class="compare-header-title">多文献对比</h2>
       </header>
 
-      <div class="panel-tabs">
+      <div class="compare-tabs">
         <button :class="{ active: activeTab === 'setup' }" @click="activeTab = 'setup'">设置</button>
         <button :class="{ active: activeTab === 'result' }" @click="activeTab = 'result'" :disabled="!compareResult">对比结果</button>
-        <button :class="{ active: activeTab === 'evidence' }" @click="activeTab = 'evidence'" :disabled="!evidenceResult">证据矩阵</button>
       </div>
 
-      <section v-if="activeTab === 'setup'" class="panel-body slim-scroll">
+      <section v-if="activeTab === 'setup'" class="compare-body slim-scroll">
         <div class="section-block config-block">
           <div class="field-row name-row">
             <label class="field-label">记录名称</label>
@@ -735,10 +788,10 @@ function evidenceSupport(evidence: any) {
         <div class="section-block">
           <div class="section-title">
             <span>选择文献</span>
-            <b>{{ selectedIds.length }}/{{ completedPapers.length }}</b>
+            <b>{{ selectedPaperCountLabel }}</b>
           </div>
           <div v-if="completedPapers.length < 2" class="empty-note">
-            文献库中至少需要 2 篇已完成解析（completed / indexed）的文献。
+            文献库中至少需要 2 篇已完成解析的文献。
           </div>
           <label
             v-for="paper in libraryPapers"
@@ -754,7 +807,6 @@ function evidenceSupport(evidence: any) {
             />
             <span>
               <strong>{{ paperTitle(paper) }}</strong>
-              <em>{{ paper.parse_status || 'unknown' }}</em>
             </span>
           </label>
         </div>
@@ -772,7 +824,7 @@ function evidenceSupport(evidence: any) {
                 />
                 <span>全选</span>
               </label>
-              <b>{{ selectedDimensions.length }}/{{ dimensionOptions.length }}</b>
+              <b>{{ selectedDimensionCountLabel }}</b>
             </div>
           </div>
           <label v-for="item in dimensionOptions" :key="item.value" class="dimension-option">
@@ -785,16 +837,13 @@ function evidenceSupport(evidence: any) {
         </div>
 
         <div class="action-row">
-          <button class="primary-action" :disabled="compareLoading" @click="runCompare">
-            {{ compareLoading ? '生成中...' : '生成对比' }}
-          </button>
-          <button class="secondary-action" :disabled="evidenceLoading" @click="runEvidence">
-            {{ evidenceLoading ? '检索中...' : '生成证据矩阵' }}
+          <button class="primary-action" :disabled="compareLoading || evidenceLoading" @click="runCompare">
+            {{ compareLoading || evidenceLoading ? '生成中...' : '生成对比' }}
           </button>
         </div>
       </section>
 
-      <section v-else-if="activeTab === 'result'" class="panel-body slim-scroll">
+      <section v-else-if="activeTab === 'result'" class="compare-body slim-scroll">
         <div class="result-meta">
           <div class="result-title-row">
             <div>
@@ -807,17 +856,20 @@ function evidenceSupport(evidence: any) {
                 :class="{ active: tableViewMode === 'zh' }"
                 @click="tableViewMode = 'zh'"
               >
-                中文总结
+                对比摘要
               </button>
               <button
                 type="button"
                 :class="{ active: tableViewMode === 'raw' }"
                 @click="tableViewMode = 'raw'"
               >
-                原始解析
+                原文摘录
               </button>
             </div>
           </div>
+          <p class="table-view-hint">
+            {{ tableViewMode === 'zh' ? '各维度的横向压缩摘要，便于快速比较' : '结构化抽取的完整原文，便于核对细节' }}
+          </p>
         </div>
 
         <div v-if="comparisonTable.length" class="compare-table-wrap" :class="{ 'raw-mode': tableViewMode === 'raw' }">
@@ -856,43 +908,90 @@ function evidenceSupport(evidence: any) {
           {{ compareResult?.result || compareResult || '暂无结果' }}
         </div>
 
-        <div class="analysis-grid">
-          <div v-for="card in summaryCards" :key="card.key" class="analysis-card">
+        <div class="analysis-sections">
+          <div v-for="card in summaryCards" :key="card.key" class="analysis-section">
             <h4>{{ card.title }}</h4>
             <ul>
               <li v-for="(item, idx) in card.items" :key="idx">{{ item }}</li>
             </ul>
           </div>
-          <div v-if="!summaryCards.length" class="analysis-card">
+          <div v-if="!summaryCards.length" class="analysis-section">
             <h4>综合分析</h4>
             <p>暂无总结内容</p>
           </div>
         </div>
-      </section>
 
-      <section v-else-if="activeTab === 'evidence'" class="panel-body slim-scroll">
-        <div class="result-meta">
-          <h3>证据矩阵</h3>
-          <p>{{ evidenceResult?.question || evidenceQuestion }}</p>
+        <div v-if="evidenceLoading" class="evidence-panel">
+          <h3 class="evidence-panel-title">原文依据</h3>
+          <p class="evidence-panel-hint">正在整理原文摘录…</p>
         </div>
-        <template v-if="evidenceDimensions.length">
-          <div
-            v-for="dimension in evidenceDimensions"
-            :key="dimension.dimension_key"
-            class="evidence-dimension"
-          >
-            <h3>{{ dimension.label || dimensionLabel(dimension.dimension_key) }}</h3>
-            <p>{{ dimension.query }}</p>
 
+        <div v-else-if="evidenceResult" class="evidence-panel">
+          <div class="evidence-panel-head">
+            <h3 class="evidence-panel-title">原文依据</h3>
+            <p class="evidence-panel-hint">点击条目可在 PDF 中定位到对应页码并高亮原文</p>
+            <p v-if="evidenceResult?.question || evidenceQuestion" class="evidence-panel-question">
+              {{ evidenceResult?.question || evidenceQuestion }}
+            </p>
+          </div>
+
+          <template v-if="evidenceDimensions.length">
             <div
-              v-for="row in dimension.rows || []"
-              :key="`${dimension.dimension_key}-${row.paper_id}`"
-              class="evidence-group"
+              v-for="dimension in evidenceDimensions"
+              :key="dimension.dimension_key"
+              class="evidence-dimension"
             >
-              <h4>{{ row.title }}</h4>
+              <h4>{{ dimension.label || dimensionLabel(dimension.dimension_key) }}</h4>
+
+              <div
+                v-for="row in dimension.rows || []"
+                :key="`${dimension.dimension_key}-${row.paper_id}`"
+                class="evidence-group"
+              >
+                <p class="evidence-paper-title">{{ row.title }}</p>
+                <div
+                  v-for="evidence in row.evidences || []"
+                  :key="`${dimension.dimension_key}-${evidence.paper_id}-${evidence.page_number}-${evidence.snippet}`"
+                  class="evidence-item"
+                  role="button"
+                  tabindex="0"
+                  @click="openEvidenceSource(evidence)"
+                  @keydown.enter="openEvidenceSource(evidence)"
+                >
+                  <div class="evidence-item-head">
+                    <span class="evidence-tags">
+                      <em v-if="evidencePageLabel(evidence.page_number)">{{ evidencePageLabel(evidence.page_number) }}</em>
+                      <em v-if="evidenceSectionLabel(evidence.section_title)">{{ evidenceSectionLabel(evidence.section_title) }}</em>
+                      <em
+                        v-if="shouldShowEvidenceSupport(evidence)"
+                        :class="['support-tag', evidenceSupport(evidence)]"
+                      >{{ evidenceSupportLabel(evidence) }}</em>
+                    </span>
+                  </div>
+                  <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, dimension.dimension_key) }">
+                    {{ evidence.snippet }}
+                  </span>
+                  <button
+                    v-if="shouldShowEvidenceToggle(evidence)"
+                    type="button"
+                    class="inline-toggle"
+                    @click.stop="toggleEvidenceItem(evidence, dimension.dimension_key)"
+                  >
+                    {{ isEvidenceExpanded(evidence, dimension.dimension_key) ? '收起' : '展开' }}
+                  </button>
+                </div>
+                <div v-if="!(row.evidences || []).length" class="empty-note">
+                  该文献在此维度暂无原文依据。
+                </div>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div v-for="row in evidenceResult?.rows || []" :key="row.paper_id" class="evidence-group">
+              <p class="evidence-paper-title">{{ row.title }}</p>
               <div
                 v-for="evidence in row.evidences || []"
-                :key="`${dimension.dimension_key}-${evidence.paper_id}-${evidence.page_number}-${evidence.snippet}`"
+                :key="`${evidence.paper_id}-${evidence.page_number}-${evidence.snippet}`"
                 class="evidence-item"
                 role="button"
                 tabindex="0"
@@ -900,194 +999,559 @@ function evidenceSupport(evidence: any) {
                 @keydown.enter="openEvidenceSource(evidence)"
               >
                 <div class="evidence-item-head">
-                  <strong :title="row.title">{{ evidenceTitle(row, evidence) }}</strong>
                   <span class="evidence-tags">
-                    <em v-if="evidence.page_number">Page {{ evidence.page_number }}</em>
-                    <em>{{ evidence.section_title || '正文片段' }}</em>
-                    <em :class="['support-tag', evidenceSupport(evidence)]">{{ evidence.support || 'related' }}</em>
+                    <em v-if="evidencePageLabel(evidence.page_number)">{{ evidencePageLabel(evidence.page_number) }}</em>
+                    <em v-if="evidenceSectionLabel(evidence.section_title)">{{ evidenceSectionLabel(evidence.section_title) }}</em>
+                    <em
+                      v-if="shouldShowEvidenceSupport(evidence)"
+                      :class="['support-tag', evidenceSupport(evidence)]"
+                    >{{ evidenceSupportLabel(evidence) }}</em>
                   </span>
                 </div>
-                <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, dimension.dimension_key) }">
+                <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, 'flat') }">
                   {{ evidence.snippet }}
                 </span>
                 <button
                   v-if="shouldShowEvidenceToggle(evidence)"
                   type="button"
                   class="inline-toggle"
-                  @click.stop="toggleEvidenceItem(evidence, dimension.dimension_key)"
+                  @click.stop="toggleEvidenceItem(evidence, 'flat')"
                 >
-                  {{ isEvidenceExpanded(evidence, dimension.dimension_key) ? '收起原文' : '展开原文' }}
+                  {{ isEvidenceExpanded(evidence, 'flat') ? '收起' : '展开' }}
                 </button>
               </div>
-              <div v-if="!(row.evidences || []).length" class="empty-note">
-                该文献在此维度下暂未检索到高质量证据。
-              </div>
             </div>
-          </div>
-        </template>
-        <template v-else>
-          <div v-for="row in evidenceResult?.rows || []" :key="row.paper_id" class="evidence-group">
-            <h4>{{ row.title }}</h4>
-            <div
-              v-for="evidence in row.evidences || []"
-              :key="`${evidence.paper_id}-${evidence.page_number}-${evidence.snippet}`"
-              class="evidence-item"
-              role="button"
-              tabindex="0"
-              @click="openEvidenceSource(evidence)"
-              @keydown.enter="openEvidenceSource(evidence)"
-            >
-              <div class="evidence-item-head">
-                <strong :title="row.title">{{ evidenceTitle(row, evidence) }}</strong>
-                <span class="evidence-tags">
-                  <em v-if="evidence.page_number">Page {{ evidence.page_number }}</em>
-                  <em>{{ evidence.section_title || '正文片段' }}</em>
-                  <em :class="['support-tag', evidenceSupport(evidence)]">{{ evidence.support || 'related' }}</em>
-                </span>
-              </div>
-              <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, 'flat') }">
-                {{ evidence.snippet }}
-              </span>
-              <button
-                v-if="shouldShowEvidenceToggle(evidence)"
-                type="button"
-                class="inline-toggle"
-                @click.stop="toggleEvidenceItem(evidence, 'flat')"
-              >
-                {{ isEvidenceExpanded(evidence, 'flat') ? '收起原文' : '展开原文' }}
-              </button>
-            </div>
-          </div>
-        </template>
+          </template>
+        </div>
       </section>
-    </section>
+    </main>
   </div>
 </template>
 
 <style scoped>
-.compare-page {
-  display: grid;
-  grid-template-columns: 300px 1fr;
-  gap: 16px;
+.compare-workspace {
+  position: relative;
+  display: flex;
   height: 100%;
-  padding: 20px;
+  min-height: 0;
+  overflow: hidden;
+  background: #F8FAFC;
+}
+
+.compare-sidebar-wrapper {
+  position: relative;
+  flex-shrink: 0;
+  width: 260px;
+  overflow: hidden;
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.compare-sidebar-wrapper.collapsed {
+  width: 0;
+}
+
+.compare-sidebar {
+  width: 260px;
+  height: 100%;
+  background: #fff;
+  border-right: 1px solid #E2E8F0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
   box-sizing: border-box;
 }
 
-.history-panel {
-  border-radius: 20px;
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.sidebar-head {
+.compare-sidebar-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 18px 12px;
-  border-bottom: 1px solid var(--academic-border);
+  padding: 0 8px;
 }
 
-.sidebar-head h3 {
+.compare-sidebar-title {
   margin: 0;
   font-size: 16px;
-  color: var(--academic-text-main);
+  font-weight: 700;
+  color: #0F172A;
 }
 
-.count {
-  font-size: 12px;
-  color: var(--academic-text-muted);
-}
-
-.new-compare-btn {
-  margin: 12px 14px 0;
-  padding: 10px 14px;
-  border: none;
+.compare-count {
+  font-size: 11px;
+  color: #94A3B8;
+  font-weight: 500;
+  background: #F1F5F9;
+  padding: 1px 7px;
   border-radius: 10px;
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+}
+
+.compare-divider {
+  height: 1px;
+  background: #F1F5F9;
+  margin: 12px 0;
+}
+
+.compare-create-block {
+  display: grid;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.compare-create-btn {
+  height: 34px;
+  border: none;
+  border-radius: 8px;
+  background: #3B82F6;
   color: #fff;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s;
 }
 
-.history-list {
+.compare-create-btn:hover {
+  background: #2563EB;
+}
+
+.compare-list-wrap {
   flex: 1;
-  overflow: auto;
-  padding: 10px 12px;
+  overflow-y: auto;
+  margin: 0 -12px;
+  padding-bottom: 8px;
 }
 
-.history-card {
+.compare-list-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
-  margin-bottom: 6px;
-  border-radius: 10px;
-  border: 1px solid transparent;
-}
-
-.history-card.active {
-  border-color: rgba(124, 58, 237, 0.35);
-  background: rgba(124, 58, 237, 0.08);
-}
-
-.history-card-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border: 0;
-  background: transparent;
-  text-align: left;
+  gap: 10px;
+  padding: 12px 16px;
   cursor: pointer;
-  padding: 0;
+  transition: background 0.12s;
+  box-shadow: 0 1px 0 0 #F1F5F9;
 }
 
-.refresh-btn {
-  margin: 8px 14px 14px;
+.compare-list-item:hover {
+  background: #F1F5F9;
 }
 
-.main-panel {
-  border-radius: 20px;
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
+.compare-list-item.active {
+  background: #EFF6FF;
+}
+
+.compare-list-item.active:hover {
+  background: #DBEAFE;
+}
+
+.compare-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.compare-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0F172A;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+}
+
+.compare-list-item.active .compare-item-title {
+  color: #1D4ED8;
+}
+
+.compare-item-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #94A3B8;
+}
+
+.compare-item-delete {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #94A3B8;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.12s;
+}
+
+.compare-list-item:hover .compare-item-delete {
+  opacity: 1;
+}
+
+.compare-item-delete:hover {
+  background: #FEE2E2;
+  color: #EF4444;
+}
+
+.compare-empty-side {
+  padding: 32px 16px;
+  text-align: center;
+  color: #94A3B8;
+  font-size: 13px;
+}
+
+.compare-sidebar-toggle {
+  position: absolute;
+  left: 240px;
+  top: 18px;
+  z-index: 50;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #E2E8F0;
+  border-radius: 50%;
+  background: #fff;
+  color: #64748B;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 0.2s ease, transform 0.2s ease, color 0.15s, left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+.compare-sidebar-toggle.visible {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.compare-sidebar-toggle.collapsed {
+  left: 12px;
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.compare-sidebar-toggle:hover {
+  color: #0F172A;
+  border-color: #CBD5E1;
+}
+
+.compare-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
   overflow: hidden;
 }
 
-.panel-head {
+.compare-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  flex-shrink: 0;
+  background: #F8FAFC;
+}
+
+.compare-main.is-sidebar-collapsed .compare-header {
+  padding-left: 48px;
+}
+
+.compare-header-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.compare-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 24px;
+  border-bottom: 1px solid #E2E8F0;
+  background: #F8FAFC;
+  flex-shrink: 0;
+}
+
+.compare-tabs button {
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #64748B;
+  cursor: pointer;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: -1px;
+}
+
+.compare-tabs button.active {
+  color: #2563EB;
+  border-bottom-color: #2563EB;
+  font-weight: 600;
+}
+
+.compare-tabs button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.compare-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 24px 32px;
+  background: #F8FAFC;
+}
+
+.section-block {
+  padding: 16px 0;
+  border-bottom: 1px solid #E2E8F0;
+}
+
+.section-block:first-child {
+  padding-top: 0;
+}
+
+.section-block:last-child {
+  border-bottom: none;
+}
+
+.config-block {
+  display: grid;
+  gap: 14px;
+}
+
+.section-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--academic-border);
-  background: var(--academic-canvas);
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #0F172A;
+  font-size: 14px;
+  font-weight: 600;
 }
 
-.panel-head h2,
-.result-meta h3,
-.analysis-grid h4,
-.evidence-group h4 {
+.section-title b {
+  color: #64748B;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.section-title.with-actions {
+  align-items: center;
+}
+
+.title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.select-all-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #64748B;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.select-all-box input {
   margin: 0;
-  letter-spacing: 0;
 }
 
-.panel-head h2 {
-  font-size: 18px;
+.paper-option,
+.dimension-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: 6px;
+  cursor: pointer;
 }
 
-.panel-head p,
+.dimension-option {
+  display: flex;
+}
+
+.paper-option input {
+  margin-top: 2px;
+}
+
+.paper-option:hover,
+.dimension-option:hover {
+  background: #F1F5F9;
+}
+
+.paper-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.paper-option span,
+.dimension-option span {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.paper-option strong,
+.dimension-option strong {
+  color: #0F172A;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.paper-option em,
+.dimension-option em,
+.evidence-item em {
+  color: #94A3B8;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.4;
+}
+
+.field-label {
+  display: block;
+  margin: 0 0 7px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.field-row {
+  min-width: 0;
+}
+
+.name-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.inline-action {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: none;
+  background: #F1F5F9;
+  color: #2563EB;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.inline-action:hover:not(:disabled) {
+  background: #E2E8F0;
+}
+
+.inline-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.text-field,
+.text-area {
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: #334155;
+  font: inherit;
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+  background: #fff;
+  box-shadow: 0 0 0 1px #E2E8F0;
+}
+
+.text-field {
+  height: 40px;
+}
+
+.text-area {
+  min-height: 68px;
+  max-height: 120px;
+}
+
+.text-field:focus,
+.text-area:focus {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.action-row {
+  display: flex;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.primary-action,
+.secondary-action {
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 10px 16px;
+}
+
+.primary-action {
+  background: #3B82F6;
+  color: #fff;
+}
+
+.primary-action:hover:not(:disabled) {
+  background: #2563EB;
+}
+
+.secondary-action {
+  background: #fff;
+  color: #2563EB;
+  box-shadow: 0 0 0 1px #E2E8F0;
+}
+
+.primary-action:disabled,
+.secondary-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.result-meta {
+  margin-bottom: 16px;
+}
+
+.result-meta h3,
+.analysis-section h4,
+.evidence-dimension > h4 {
+  margin: 0;
+  color: #0F172A;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.evidence-paper-title {
+  margin: 0 0 8px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
 .result-meta p {
-  margin: 4px 0 0;
-  color: var(--academic-text-muted);
+  margin: 6px 0 0;
+  color: #64748B;
   font-size: 13px;
   line-height: 1.5;
 }
@@ -1122,19 +1586,19 @@ function evidenceSupport(evidence: any) {
   display: inline-flex;
   flex-shrink: 0;
   overflow: hidden;
-  border: 1px solid var(--academic-border);
   border-radius: 8px;
   background: #fff;
+  box-shadow: 0 0 0 1px #E2E8F0;
 }
 
 .table-view-switch button {
   border: 0;
-  border-right: 1px solid var(--academic-border);
+  border-right: 1px solid #E2E8F0;
   background: transparent;
-  color: var(--academic-text-muted);
+  color: #64748B;
   cursor: pointer;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   padding: 8px 12px;
   white-space: nowrap;
 }
@@ -1144,328 +1608,15 @@ function evidenceSupport(evidence: any) {
 }
 
 .table-view-switch button.active {
-  background: var(--academic-primary);
-  color: #fff;
-}
-
-.icon-button {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--academic-border);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--academic-text-muted);
-  cursor: pointer;
-  font-size: 22px;
-  line-height: 1;
-}
-
-.panel-tabs {
-  display: flex;
-  gap: 6px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--academic-border);
-}
-
-.panel-tabs button,
-.ghost-action {
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--academic-text-muted);
-  cursor: pointer;
-  padding: 7px 11px;
-  font-size: 13px;
-}
-
-.panel-tabs button.active {
-  background: var(--academic-primary-light);
-  color: var(--academic-primary);
-  font-weight: 700;
-}
-
-.panel-tabs button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.panel-body {
-  flex: 1;
-  overflow: auto;
-  padding: 18px;
-}
-
-.section-block {
-  padding: 14px 0 18px;
-  border-bottom: 1px solid var(--academic-border);
-}
-
-.config-block {
-  display: grid;
-  gap: 14px;
-  padding: 12px 14px 14px;
-  margin-bottom: 12px;
-  border: 1px solid var(--academic-border);
-  border-radius: 12px;
-  background: #fff;
-}
-
-.section-block:first-child {
-  padding-top: 0;
-}
-
-.section-block.config-block:first-child {
-  padding-top: 12px;
-}
-
-.section-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-  color: var(--academic-text-main);
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.section-title b {
-  color: var(--academic-primary);
-  font-size: 12px;
-}
-
-.section-title.with-actions {
-  align-items: center;
-}
-
-.title-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.select-all-box {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--academic-text-muted);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.select-all-box input {
-  margin: 0;
-}
-
-.paper-option {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.paper-option input {
-  margin-top: 2px;
-}
-
-.dimension-option {
-  display: flex;
-  gap: 10px;
-  padding: 10px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.paper-option:hover,
-.dimension-option:hover,
-.history-row:hover {
-  background: var(--academic-primary-light);
-}
-
-.paper-option.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.paper-option span,
-.dimension-option span {
-  display: flex;
-  min-width: 0;
-  width: 100%;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.dimension-option strong,
-.history-row strong {
-  color: var(--academic-text-main);
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.paper-option strong {
-  display: block;
-  width: 100%;
-  color: var(--academic-text-main);
-  font-size: 13px;
-  line-height: 1.35;
-  white-space: normal;
-  overflow: visible;
-  text-overflow: clip;
-  overflow-wrap: anywhere;
-}
-
-.paper-option em,
-.dimension-option em,
-.history-row em,
-.evidence-item em {
-  color: var(--academic-text-muted);
-  font-size: 12px;
-  font-style: normal;
-  line-height: 1.4;
-}
-
-.field-label {
-  display: block;
-  margin: 0 0 7px;
-  color: var(--academic-text-main);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.field-row {
-  min-width: 0;
-}
-
-.name-input-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.field-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0;
-}
-
-.field-head .field-label {
-  margin: 0 0 6px;
-}
-
-.compact-head {
-  align-items: baseline;
-}
-
-.field-hint {
-  color: var(--academic-text-muted);
-  cursor: help;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.inline-action {
-  height: 40px;
-  padding: 0 12px;
-  border-radius: 12px;
-  border: 1px solid var(--academic-border);
-  background: #fff;
-  color: var(--academic-primary);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.inline-action:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.field-help {
-  margin: 6px 0 0;
-  color: var(--academic-text-muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.field-help.compact {
-  margin-top: 2px;
-  line-height: 1.35;
-}
-
-.text-field,
-.text-area {
-  width: 100%;
-  border: 1px solid var(--academic-border);
-  border-radius: 12px;
-  padding: 9px 12px;
-  color: var(--academic-text-body);
-  font: inherit;
-  line-height: 1.5;
-  outline: none;
-  resize: vertical;
-}
-
-.text-field {
-  height: 40px;
-}
-
-.text-area {
-  min-height: 68px;
-  max-height: 120px;
-}
-
-.text-field:focus,
-.text-area:focus {
-  border-color: var(--academic-primary);
-}
-
-.action-row {
-  display: flex;
-  gap: 10px;
-  padding-top: 16px;
-}
-
-.primary-action,
-.secondary-action,
-.delete-action {
-  border-radius: 8px;
-  border: 1px solid var(--academic-border);
-  cursor: pointer;
-  font-weight: 700;
-  padding: 10px 14px;
-}
-
-.primary-action {
-  background: var(--academic-primary);
-  border-color: var(--academic-primary);
-  color: #fff;
-}
-
-.secondary-action {
-  background: #fff;
-  color: var(--academic-primary);
-}
-
-.primary-action:disabled,
-.secondary-action:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
+  background: #EFF6FF;
+  color: #2563EB;
 }
 
 .compare-table-wrap {
   overflow: auto;
-  border: 1px solid var(--academic-border);
-  border-radius: 8px;
   background: #fff;
+  box-shadow: 0 0 0 1px #E2E8F0;
+  border-radius: 8px;
 }
 
 .compare-table {
@@ -1478,17 +1629,17 @@ function evidenceSupport(evidence: any) {
 .compare-table th,
 .compare-table td {
   min-width: 190px;
-  padding: 9px 10px;
-  border-bottom: 1px solid var(--academic-border);
+  padding: 10px 12px;
+  border-bottom: 1px solid #F1F5F9;
   text-align: left;
   vertical-align: top;
   line-height: 1.55;
 }
 
 .compare-table th {
-  color: var(--academic-text-main);
-  background: var(--academic-canvas);
-  font-weight: 700;
+  color: #334155;
+  background: #F8FAFC;
+  font-weight: 600;
 }
 
 .compare-table th:first-child,
@@ -1499,12 +1650,12 @@ function evidenceSupport(evidence: any) {
   width: 140px;
   min-width: 140px;
   background: #fff;
-  box-shadow: 1px 0 0 var(--academic-border);
+  box-shadow: 1px 0 0 #F1F5F9;
 }
 
 .compare-table th:first-child {
   z-index: 3;
-  background: var(--academic-canvas);
+  background: #F8FAFC;
 }
 
 .compare-header-text {
@@ -1523,9 +1674,19 @@ function evidenceSupport(evidence: any) {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.compare-table-wrap:not(.raw-mode) .compare-cell-content {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
+}
+
+.table-view-hint {
+  margin: 8px 0 0;
+  color: #94A3B8;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .raw-mode .compare-cell-content {
@@ -1541,76 +1702,87 @@ function evidenceSupport(evidence: any) {
   overflow: visible;
 }
 
-.raw-mode .compare-cell-content::-webkit-scrollbar,
-.evidence-snippet::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-}
-
-.raw-mode .compare-cell-content::-webkit-scrollbar-thumb,
-.evidence-snippet::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.45);
-  border-radius: 999px;
-}
-
-.raw-mode .compare-cell-content::-webkit-scrollbar-track,
-.evidence-snippet::-webkit-scrollbar-track {
-  background: transparent;
-}
-
 .inline-toggle {
   margin-top: 6px;
   border: 0;
   background: transparent;
-  color: var(--academic-primary);
+  color: #2563EB;
   cursor: pointer;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   padding: 0;
 }
 
-.analysis-grid {
+.analysis-sections {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 0;
   margin-top: 16px;
-}
-
-.analysis-card {
-  border: 1px solid var(--academic-border);
-  border-radius: 8px;
   background: #fff;
-  padding: 14px 16px;
+  box-shadow: 0 0 0 1px #E2E8F0;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
-.analysis-card h4 {
-  color: var(--academic-text-main);
-  font-size: 14px;
+.evidence-panel {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #E2E8F0;
 }
 
-.analysis-card ul {
+.evidence-panel-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #0F172A;
+}
+
+.evidence-panel-head {
+  margin-bottom: 12px;
+}
+
+.evidence-panel-hint {
+  margin: 6px 0 0;
+  color: #64748B;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.evidence-panel-question {
+  margin: 6px 0 0;
+  color: #94A3B8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.analysis-section {
+  padding: 16px 18px;
+  border-right: 1px solid #F1F5F9;
+}
+
+.analysis-section:last-child {
+  border-right: none;
+}
+
+.analysis-section ul {
   display: grid;
   gap: 7px;
   margin: 10px 0 0;
   padding-left: 17px;
 }
 
-.analysis-card li,
-.analysis-card p {
-  color: var(--academic-text-body);
+.analysis-section li,
+.analysis-section p,
+.raw-result {
+  color: #475569;
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
 }
 
-.evidence-group {
-  border-top: 1px solid var(--academic-border);
-  padding-top: 14px;
-}
-
 .evidence-dimension {
   padding: 16px 0;
-  border-top: 1px solid var(--academic-border);
+  border-top: 1px solid #E2E8F0;
 }
 
 .evidence-dimension:first-of-type {
@@ -1618,26 +1790,20 @@ function evidenceSupport(evidence: any) {
   padding-top: 0;
 }
 
-.evidence-dimension h3 {
-  margin: 0;
-  color: var(--academic-text-main);
-  font-size: 15px;
-  letter-spacing: 0;
+.evidence-dimension h4 {
+  margin: 0 0 10px;
+  color: #0F172A;
+  font-size: 14px;
+  font-weight: 600;
 }
 
-.evidence-dimension > p {
-  margin: 5px 0 12px;
-  color: var(--academic-text-muted);
-  font-size: 12px;
-  line-height: 1.5;
+.evidence-dimension:first-of-type h4 {
+  margin-top: 0;
 }
 
-.analysis-grid p,
-.raw-result {
-  color: var(--academic-text-body);
-  font-size: 13px;
-  line-height: 1.65;
-  white-space: pre-wrap;
+.evidence-group {
+  border-top: 1px solid #F1F5F9;
+  padding-top: 14px;
 }
 
 .evidence-item {
@@ -1646,30 +1812,29 @@ function evidenceSupport(evidence: any) {
   flex-direction: column;
   gap: 8px;
   margin-top: 10px;
-  padding: 12px;
-  border: 1px solid var(--academic-border);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--academic-text-body);
+  padding: 12px 0;
+  border: none;
+  border-bottom: 1px solid #F1F5F9;
+  background: transparent;
+  color: #475569;
   text-align: left;
   cursor: pointer;
   line-height: 1.55;
 }
 
 .evidence-item:hover {
-  border-color: var(--academic-primary);
-  background: var(--academic-primary-light);
+  background: #F8FAFC;
 }
 
 .evidence-item-head {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
 }
 
 .evidence-item-head strong {
-  color: var(--academic-text-main);
+  color: #0F172A;
   font-size: 13px;
   line-height: 1.4;
 }
@@ -1683,8 +1848,8 @@ function evidenceSupport(evidence: any) {
 
 .evidence-tags em {
   border-radius: 999px;
-  background: var(--academic-canvas);
-  color: var(--academic-text-muted);
+  background: #F1F5F9;
+  color: #64748B;
   font-size: 11px;
   font-style: normal;
   line-height: 1;
@@ -1692,17 +1857,17 @@ function evidenceSupport(evidence: any) {
 }
 
 .evidence-tags .support-tag.strong {
-  background: #dcfce7;
+  background: #DCFCE7;
   color: #166534;
 }
 
 .evidence-tags .support-tag.medium {
-  background: #fef3c7;
-  color: #92400e;
+  background: #FEF3C7;
+  color: #92400E;
 }
 
 .evidence-tags .support-tag.weak {
-  background: #f1f5f9;
+  background: #F1F5F9;
   color: #475569;
 }
 
@@ -1712,12 +1877,10 @@ function evidenceSupport(evidence: any) {
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
-  color: var(--academic-text-body);
+  color: #475569;
   font-size: 13px;
   line-height: 1.65;
   overflow-wrap: anywhere;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
 }
 
 .evidence-snippet.expanded {
@@ -1727,57 +1890,50 @@ function evidenceSupport(evidence: any) {
   -webkit-line-clamp: unset;
 }
 
-.history-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border-radius: 8px;
-  padding: 8px;
-}
-
-.history-row > button:first-child {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-
-.delete-action {
-  padding: 7px 10px;
-  background: #fff;
-  color: var(--danger);
-}
-
 .empty-note {
   padding: 12px;
   border-radius: 8px;
-  background: var(--academic-canvas);
-  color: var(--academic-text-muted);
+  background: #F8FAFC;
+  color: #64748B;
   font-size: 13px;
 }
 
 @media (max-width: 960px) {
-  .compare-page {
+  .compare-sidebar-wrapper {
+    width: 220px;
+  }
+
+  .compare-sidebar {
+    width: 220px;
+  }
+
+  .compare-sidebar-toggle {
+    left: 200px;
+  }
+
+  .analysis-sections {
     grid-template-columns: 1fr;
-    padding: 12px;
   }
 
-  .history-panel {
-    max-height: 240px;
+  .analysis-section {
+    border-right: none;
+    border-bottom: 1px solid #F1F5F9;
   }
 
-  .analysis-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .analysis-section:last-child {
+    border-bottom: none;
   }
 }
 
 @media (max-width: 640px) {
-  .analysis-grid {
-    grid-template-columns: 1fr;
+  .compare-body {
+    padding: 16px;
+  }
+
+  .compare-tabs,
+  .compare-header {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 
   .result-title-row,

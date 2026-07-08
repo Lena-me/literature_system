@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -31,6 +32,7 @@ from app.workers.celery_app import celery_app
 
 settings = get_settings()
 router = APIRouter(prefix='/papers', tags=['文献管理'])
+logger = logging.getLogger(__name__)
 
 _FIGURE_IMAGE_LINE_RE = re.compile(r'^!\[[^\]]*\]\(([^)]+)\)\s*$')
 _DEFAULT_FIGURE_CAPTION = 'Figure extracted by MinerU'
@@ -346,7 +348,13 @@ async def parse_events_stream(
                 yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
             while True:
-                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=25.0)
+                try:
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=25.0)
+                except Exception as exc:
+                    logger.warning('parse-events redis error for user %s: %s', user.id, exc)
+                    yield ': keepalive\n\n'
+                    await asyncio.sleep(1)
+                    continue
                 if message is None:
                     yield ': keepalive\n\n'
                     continue
@@ -357,6 +365,8 @@ async def parse_events_stream(
                     yield f'data: {data}\n\n'
         except asyncio.CancelledError:
             return
+        except Exception as exc:
+            logger.warning('parse-events stream closed for user %s: %s', user.id, exc)
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.aclose()

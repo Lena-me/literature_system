@@ -11,8 +11,9 @@ from app.core.dependencies import get_current_user
 from app.db.mysql import get_db
 from app.integrations.embeddings.bge_embedding import BGEEmbedding
 from app.integrations.milvus.client import MilvusChunkStore
-from app.models import ContentItem, LearningRecord, Paper, PaperExtractedInfo, QAMessage, User
+from app.models import ContentItem, LearningRecord, Paper, PaperExtractedInfo, QAMessage, TextChunk, User
 from app.schemas import EvidenceMatrixIn, ResearchRadarIn
+from app.utils.chunk_quality import normalize_chunk_text, normalize_page_number
 
 router = APIRouter(prefix='/analytics', tags=['research analytics'])
 
@@ -109,6 +110,36 @@ def _is_generic_compare_question(question: str | None) -> bool:
     return any(token in q for token in generic_tokens)
 
 
+GENERIC_EVIDENCE_PHRASES = (
+    '当前解析未提取到明确证据',
+    '当前解析未提取',
+    '原文片段中未充分体现',
+    '未单独抽取该字段',
+    '可参考摘要',
+    '基于公开数据集进行实验验证',
+    '在公开数据集和临床超声图像上进行实验验证',
+    '在两个数据集上进行定量和定性实验验证',
+)
+
+
+def _is_generic_extracted_snippet(text: str) -> bool:
+    content = re.sub(r'\s+', ' ', (text or '').strip())
+    if not content or content in {'-', '—', '–'}:
+        return True
+    if content.startswith('暂未') and len(content) < 80:
+        return True
+    if any(phrase in content for phrase in GENERIC_EVIDENCE_PHRASES):
+        return len(content) <= 72
+    return False
+
+
+def _sanitize_section_title(section_title: str | None) -> str:
+    title = (section_title or '').strip()
+    if title in {'结构化抽取结果', '结构化摘要'}:
+        return ''
+    return title
+
+
 def _is_low_quality_evidence(
     text: str,
     section_title: str | None = None,
@@ -177,6 +208,9 @@ def _normalize_snippet(text: str, limit: int = 900) -> str:
 
 def _looks_like_natural_evidence(text: str) -> bool:
     content = text or ''
+    chinese_count = len(re.findall(r'[\u4e00-\u9fff]', content))
+    if chinese_count >= 30 and len(content) >= 50:
+        return True
     if len(content) < 80:
         return False
 
@@ -200,49 +234,57 @@ def _matches_dimension(text: str, section_title: str | None, dimension_key: str)
             'we aim', 'we seek', 'this paper aims', 'we investigate',
             'we study', 'challenge', 'problem', 'goal', 'objective',
             'research question', 'task definition',
+            '研究问题', '研究目标', '本文旨在', '针对', '挑战',
         ],
         'method': [
             'we propose', 'we introduce', 'framework', 'method',
             'approach', 'pipeline', 'architecture', 'algorithm',
             'system', 'model', 'harness', 'protocol',
+            '方法', '模型', '网络', '框架', '算法', '模块',
         ],
         'experiment_data': [
             'dataset', 'benchmark', 'data collection', 'tasks',
             'experimental setup', 'task setup', 'evaluation setup',
             'instances', 'samples', 'cases',
+            '数据集', '实验数据', '训练集', '测试集', '样本', '超声图像',
         ],
         'metrics': [
             'metric', 'score', 'accuracy', 'precision', 'recall',
             'f1', 'auc', 'pass rate', 'evaluation', 'measure',
+            '指标', 'psnr', 'ssim', 'dice', 'iou', '准确率', '召回率',
         ],
         'main_results': [
             'results', 'performance', 'outperform', 'achieves',
             'improves', 'we find', 'table', 'overall performance',
             'main results',
+            '实验结果', '结果表明', '性能', '优于', '提升', '达到',
         ],
         'innovations': [
             'contribution', 'novel', 'first', 'new', 'we introduce',
             'we propose', 'innovation', 'unified', 'process-verified',
+            '创新', '贡献', '首次', '提出',
         ],
         'limitations': [
             'limitation', 'threat', 'fail', 'failure', 'risk',
             'weakness', 'future work', 'cannot', 'not address',
+            '局限', '不足', '限制', '失败',
         ],
         'future_work': [
             'future work', 'future direction', 'further research',
             'we plan', 'could be extended', 'next step',
+            '未来工作', '进一步', '展望',
         ],
     }
 
     section_prefer = {
-        'research_question': ['abstract', 'introduction'],
-        'method': ['method', 'approach', 'framework', 'system', 'design'],
-        'experiment_data': ['dataset', 'benchmark', 'data collection', 'experimental setup', 'task setup'],
-        'metrics': ['metric', 'evaluation', 'experimental setup', 'results'],
-        'main_results': ['result', 'experiment', 'evaluation', 'overall performance'],
-        'innovations': ['abstract', 'introduction', 'conclusion'],
-        'limitations': ['limitation', 'threat', 'discussion', 'conclusion'],
-        'future_work': ['future', 'conclusion', 'discussion'],
+        'research_question': ['abstract', 'introduction', '摘要', '引言'],
+        'method': ['method', 'approach', 'framework', 'system', 'design', '方法', '模型'],
+        'experiment_data': ['dataset', 'benchmark', 'data collection', 'experimental setup', 'task setup', '数据', '实验'],
+        'metrics': ['metric', 'evaluation', 'experimental setup', 'results', '指标', '评价'],
+        'main_results': ['result', 'experiment', 'evaluation', 'overall performance', '结果', '实验'],
+        'innovations': ['abstract', 'introduction', 'conclusion', '摘要', '结论'],
+        'limitations': ['limitation', 'threat', 'discussion', 'conclusion', '讨论', '局限'],
+        'future_work': ['future', 'conclusion', 'discussion', '展望', '未来'],
     }
 
     positives = positive_keywords.get(dimension_key, [])
@@ -269,6 +311,119 @@ def _support_from_score(score: float | None) -> str:
     return 'strong' if score >= 0.65 else 'related' if score >= 0.45 else 'weak'
 
 
+def _normalize_bbox(raw: object) -> list[float] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)) and len(raw) == 4:
+        try:
+            nums = [float(x) for x in raw]
+        except (TypeError, ValueError):
+            return None
+        if all(abs(x) < 1e9 for x in nums):
+            return nums
+    if isinstance(raw, dict):
+        if all(k in raw for k in ('left', 'top', 'width', 'height')):
+            left = float(raw['left'])
+            top = float(raw['top'])
+            width = float(raw['width'])
+            height = float(raw['height'])
+            return [left, top, left + width, top + height]
+    return None
+
+
+def _pick_locate_snippet(text: str, limit: int = 160) -> str:
+    content = _normalize_snippet(text, 900)
+    if len(content) <= limit:
+        return content
+
+    best = ''
+    best_score = -1
+    for sent in re.split(r'(?<=[。！？；;!?])\s*', content):
+        piece = sent.strip()
+        if len(piece) < 20:
+            continue
+        score = len(piece)
+        score += len(re.findall(r'[\u4e00-\u9fff]', piece)) * 2
+        score += len(re.findall(r'\d+\.?\d*', piece)) * 5
+        if score > best_score and len(piece) <= limit:
+            best_score = score
+            best = piece
+    if best:
+        return best[:limit]
+
+    start = max(0, (len(content) - limit) // 3)
+    return content[start:start + limit]
+
+
+def _locate_snippet_in_content(
+    paper_id: int,
+    snippet: str,
+    content_by_paper: dict[int, list[ContentItem]],
+    page_hint: int | None = None,
+) -> tuple[int | None, list[float] | None, str]:
+    needle = _normalize_snippet(snippet, 220)
+    needle_lower = needle.lower()
+    if len(re.sub(r'\s+', '', needle)) < 8:
+        return None, None, ''
+
+    items = content_by_paper.get(paper_id, [])
+    if page_hint:
+        page_items = [item for item in items if item.page_number == page_hint]
+        if page_items:
+            items = page_items
+
+    best: tuple[int | None, list[float] | None, str, int] | None = None
+
+    for item in items:
+        text = (item.content or '').strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        score = 0
+
+        if needle_lower in lowered:
+            score = len(needle_lower) + 1000
+        else:
+            for probe_len in (160, 120, 80, 48, 32):
+                probe = needle_lower[:probe_len]
+                if len(probe) >= 12 and probe in lowered:
+                    score = probe_len
+                    break
+            if score <= 0:
+                continue
+
+        if page_hint and item.page_number == page_hint:
+            score += 500
+        if item.bbox:
+            score += 20
+
+        if best is None or score > best[3]:
+            best = (item.page_number, _normalize_bbox(item.bbox), item.item_type or '', score)
+
+    if best:
+        return best[0], best[1], best[2]
+    return None, None, ''
+
+
+def _load_chunk_locators(
+    chunk_rows: list[tuple[TextChunk, ContentItem | None]],
+) -> dict[int, dict]:
+    locators: dict[int, dict] = {}
+    for chunk, item in chunk_rows:
+        chunk_text = normalize_chunk_text(chunk.chunk_text or '')
+        page_number = normalize_page_number(chunk.page_number) or normalize_page_number(
+            item.page_number if item else None
+        )
+        locators[int(chunk.id)] = {
+            'chunk_id': int(chunk.id),
+            'section_id': chunk.section_id,
+            'page_number': page_number,
+            'bbox': _normalize_bbox(item.bbox if item else None),
+            'chunk_text': chunk_text,
+        }
+    return locators
+
+
 def _make_evidence(
     paper: Paper,
     snippet: str,
@@ -276,22 +431,65 @@ def _make_evidence(
     section_title: str | None,
     score: float | None,
     dimension_key: str,
+    bbox: object | None = None,
+    content_by_paper: dict[int, list[ContentItem]] | None = None,
+    chunk_id: int | None = None,
+    section_id: int | None = None,
 ) -> dict:
     text = _normalize_snippet(snippet)
+    located_page = normalize_page_number(page_number)
+    located_bbox = _normalize_bbox(bbox)
+    located_section = section_title or ''
+
+    if content_by_paper is not None and not located_bbox:
+        found_page, found_bbox, found_section = _locate_snippet_in_content(
+            paper.id,
+            text,
+            content_by_paper,
+            page_hint=located_page,
+        )
+        if found_page and not located_page:
+            located_page = found_page
+        if found_bbox:
+            located_bbox = found_bbox
+        if found_section and not located_section:
+            located_section = found_section
+
+    locate_snippet = _pick_locate_snippet(text)
+
+    source: dict = {
+        'paper_id': paper.id,
+        'page_number': located_page or None,
+        'section_title': located_section,
+        'snippet': text,
+        'paper_title': paper.title or paper.original_filename,
+    }
+    if chunk_id:
+        source['chunk_id'] = int(chunk_id)
+    if section_id:
+        source['section_id'] = int(section_id)
+    if located_bbox:
+        source['bbox'] = located_bbox
+        source['locate_type'] = 'bbox'
+        source['locate_snippet'] = locate_snippet
+    elif located_page:
+        source['locate_type'] = 'page'
+        source['locate_snippet'] = locate_snippet
+
+    clean_section = _sanitize_section_title(located_section)
+
     return {
         'paper_id': paper.id,
         'paper_title': paper.title or paper.original_filename,
         'snippet': text,
-        'page_number': page_number or None,
-        'section_title': section_title or '',
+        'page_number': located_page or None,
+        'section_title': clean_section,
         'score': round(score, 4) if score is not None else None,
         'support': _support_from_score(score),
         'dimension_key': dimension_key,
         'source': {
-            'paper_id': paper.id,
-            'page_number': page_number or None,
-            'section_title': section_title or '',
-            'snippet': text,
+            **source,
+            'section_title': clean_section,
         },
     }
 
@@ -347,6 +545,15 @@ async def evidence_matrix(
     for item in content_items:
         content_by_paper[item.paper_id].append(item)
 
+    chunk_rows = (
+        await db.execute(
+            select(TextChunk, ContentItem)
+            .outerjoin(ContentItem, TextChunk.section_id == ContentItem.id)
+            .where(TextChunk.paper_id.in_(paper_ids))
+        )
+    ).all()
+    chunk_locators = _load_chunk_locators(chunk_rows)
+
     try:
         embedding = BGEEmbedding()
         store = MilvusChunkStore()
@@ -398,14 +605,27 @@ async def evidence_matrix(
                         continue
                     seen.add(normalized_key)
 
+                    chunk_id = c.get('chunk_id')
+                    chunk_meta = chunk_locators.get(int(chunk_id)) if chunk_id is not None else None
+                    if chunk_meta:
+                        snippet = chunk_meta.get('chunk_text') or snippet
+
                     evidences.append(
                         _make_evidence(
                             paper=paper,
                             snippet=snippet,
-                            page_number=c.get('page_number') or None,
+                            page_number=(
+                                chunk_meta.get('page_number')
+                                if chunk_meta
+                                else normalize_page_number(c.get('page_number'))
+                            ),
                             section_title=section_title,
                             score=score,
                             dimension_key=dim_key,
+                            bbox=chunk_meta.get('bbox') if chunk_meta else None,
+                            chunk_id=int(chunk_id) if chunk_id is not None else None,
+                            section_id=chunk_meta.get('section_id') if chunk_meta else None,
+                            content_by_paper=content_by_paper,
                         )
                     )
                     if evidences[-1].get('support') == 'weak':
@@ -414,38 +634,86 @@ async def evidence_matrix(
                     if len(evidences) >= 2:
                         break
 
-            if not evidences and anchor:
-                evidences.append(
-                    _make_evidence(
-                        paper=paper,
-                        snippet=anchor,
-                        page_number=None,
-                        section_title='结构化抽取结果',
-                        score=None,
-                        dimension_key=dim_key,
-                    )
-                )
-
             if not evidences:
                 for item in content_by_paper.get(paper.id, []):
                     text = (item.content or '').strip()
+                    if _is_generic_extracted_snippet(text):
+                        continue
                     if _is_low_quality_evidence(text, item.item_type or '', dim_key):
                         continue
                     if not _looks_like_natural_evidence(text):
                         continue
                     if not _matches_dimension(text, item.item_type or '', dim_key):
                         continue
+
+                    normalized_key = _normalize_snippet(text, 160).lower()
+                    if normalized_key in seen:
+                        continue
+                    seen.add(normalized_key)
+
                     evidences.append(
                         _make_evidence(
                             paper=paper,
                             snippet=text,
-                            page_number=item.page_number,
+                            page_number=normalize_page_number(item.page_number),
                             section_title=item.item_type or '',
                             score=None,
                             dimension_key=dim_key,
+                            bbox=item.bbox,
+                            section_id=int(item.id),
+                            content_by_paper=content_by_paper,
                         )
                     )
-                    break
+                    if len(evidences) >= 2:
+                        break
+
+            if not evidences and anchor and not _is_generic_extracted_snippet(anchor):
+                anchor_page, anchor_bbox, anchor_section = _locate_snippet_in_content(
+                    paper.id,
+                    anchor,
+                    content_by_paper,
+                )
+                display_snippet = ''
+                display_page = anchor_page
+                display_bbox = anchor_bbox
+                display_section = anchor_section
+                matched_item: ContentItem | None = None
+
+                if anchor_page:
+                    for item in content_by_paper.get(paper.id, []):
+                        if item.page_number != anchor_page:
+                            continue
+                        item_text = (item.content or '').strip()
+                        if not item_text or _is_generic_extracted_snippet(item_text):
+                            continue
+                        display_snippet = item_text
+                        display_section = item.item_type or anchor_section
+                        display_bbox = _normalize_bbox(item.bbox) or anchor_bbox
+                        matched_item = item
+                        break
+
+                if not display_snippet and len(anchor) >= 80:
+                    display_snippet = anchor
+
+                if display_snippet and _looks_like_natural_evidence(display_snippet):
+                    evidences.append(
+                        _make_evidence(
+                            paper=paper,
+                            snippet=display_snippet,
+                            page_number=normalize_page_number(display_page),
+                            section_title=display_section or '',
+                            score=None,
+                            dimension_key=dim_key,
+                            bbox=display_bbox,
+                            section_id=int(matched_item.id) if matched_item else None,
+                            content_by_paper=content_by_paper,
+                        )
+                    )
+
+            evidences = [
+                ev for ev in evidences
+                if not _is_generic_extracted_snippet(ev.get('snippet', ''))
+            ]
 
             for ev in evidences:
                 legacy_by_paper[paper.id].append(ev)

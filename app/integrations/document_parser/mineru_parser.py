@@ -274,10 +274,18 @@ class MinerUParser:
             str(output_dir),
         ]
 
+        backend = self._resolve_mineru_backend(settings.mineru_backend)
+        if backend:
+            cmd.extend(['-b', backend])
+
         if settings.mineru_method:
             cmd.extend(['-m', settings.mineru_method])
         if settings.mineru_language:
             cmd.extend(['-l', settings.mineru_language])
+        if settings.mineru_api_url:
+            cmd.extend(['--api-url', settings.mineru_api_url])
+
+        logger.info('Running MinerU command: %s', ' '.join(cmd))
 
         try:
             proc = subprocess.run( 
@@ -299,6 +307,23 @@ class MinerUParser:
                 f'MinerU parse failed: returncode={proc.returncode}\n'
                 f'STDOUT:\n{stdout}\nSTDERR:\n{stderr}'
             )
+
+    @staticmethod
+    def _resolve_mineru_backend(raw: str | None) -> str | None:
+        """Map .env MINERU_BACKEND to MinerU CLI --backend values."""
+        value = (raw or '').strip().lower()
+        if not value:
+            return None
+        aliases = {
+            'pipeline': 'pipeline',
+            'vlm': 'vlm-engine',
+            'vlm-engine': 'vlm-engine',
+            'hybrid': 'hybrid-engine',
+            'hybrid-engine': 'hybrid-engine',
+            'vlm-http-client': 'vlm-http-client',
+            'hybrid-http-client': 'hybrid-http-client',
+        }
+        return aliases.get(value, value)
 
     def _convert_outputs(
         self,

@@ -53,7 +53,7 @@ export const papersApi = {
       }
     } catch (e: any) {
       if (e?.name === 'AbortError') throw e
-      console.error('[papersApi] parse-events stream error:', e)
+      // SSE 长连接在 dev proxy / 页面切换时偶发断连，store 会自动重连，不必刷红错
       throw e
     }
   },

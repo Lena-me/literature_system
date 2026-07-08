@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,7 +10,20 @@ from app.schemas import ReportCreateIn
 from app.services.audit_service import audit_action
 from app.services.generation_service import GenerationService
 from app.utils.json_utils import loads
+
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/reports', tags=['研读报告'])
+
+
+def _serialize_report_summary(obj: Report) -> dict:
+    """创建接口只返回摘要，避免超大 JSON 导致前端网络错误。"""
+    return {
+        'id': obj.id,
+        'paper_id': obj.paper_id,
+        'title': obj.title,
+        'created_at': obj.created_at,
+    }
+
 
 @router.post('')
 async def create_report(
@@ -22,28 +37,29 @@ async def create_report(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    user.report_generate_count += 1
-    await audit_action(
-        db,
-        user_id=user.id,
-        module='reports',
-        operation_type='generate',
-        content={
-            'report_id': obj.id,
-            'paper_id': obj.paper_id,
-            'title': obj.title,
-            'modules': data.modules,
-        },
-        request=request,
-    )
-    await db.commit()
-    return {
-        'id': obj.id,
-        'paper_id': obj.paper_id,
-        'title': obj.title,
-        'content': loads(obj.content),
-        'created_at': obj.created_at,
-    }
+    # create_report 内部已 commit；此处仅补审计/计数，失败不应让前端误判为“报告未生成”
+    try:
+        await db.refresh(user)
+        user.report_generate_count += 1
+        await audit_action(
+            db,
+            user_id=user.id,
+            module='reports',
+            operation_type='generate',
+            content={
+                'report_id': obj.id,
+                'paper_id': obj.paper_id,
+                'title': obj.title,
+                'modules': data.modules,
+            },
+            request=request,
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception('Report %s saved but audit/quota update failed', obj.id)
+
+    return _serialize_report_summary(obj)
 
 @router.get('')
 async def list_reports(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
@@ -124,19 +140,30 @@ def _plain_text(text: object) -> str:
     return value.strip()
 
 
+def _display_export_value(value: object) -> str:
+    text = _plain_text(value)
+    if not text or text == '-':
+        return '-'
+    if text.startswith('匹配关键词'):
+        return ''
+    if '当前解析未提取' in text or '原文片段中未充分体现' in text or text.startswith('暂未'):
+        return '-'
+    return text
+
+
 def _report_visual_summary_markdown(content: dict) -> str:
     visual = content.get('visual_summary') or {}
     if not isinstance(visual, dict):
         return ''
 
-    lines: list[str] = ['## 图表化摘要', '']
+    lines: list[str] = ['## 速览', '']
     flow = visual.get('method_flow') or []
     if flow:
         lines.append('### 方法流程')
         lines.append('')
         for idx, item in enumerate(flow, start=1):
             title = item.get('title') or f'步骤 {idx}'
-            body = item.get('content') or '当前解析未提取到明确证据'
+            body = _display_export_value(item.get('content'))
             lines.append(f'{idx}. **{title}**：{body}')
         lines.append('')
 
@@ -144,28 +171,26 @@ def _report_visual_summary_markdown(content: dict) -> str:
     if table:
         lines.append('### 关键数据')
         lines.append('')
-        lines.append('| 字段 | 内容 | 状态 |')
-        lines.append('| --- | --- | --- |')
+        lines.append('| 字段 | 内容 |')
+        lines.append('| --- | --- |')
         for row in table:
-            status = '已提取' if row.get('status') == 'extracted' else '未提取到明确证据'
-            value = str(row.get('value') or '').replace('|', '/')
-            lines.append(f'| {row.get("name") or ""} | {value} | {status} |')
+            value = _display_export_value(row.get('value')).replace('|', '/')
+            lines.append(f'| {row.get("name") or ""} | {value} |')
         lines.append('')
 
     cards = visual.get('metric_cards') or []
-    lines.append('### 数值指标')
+    lines.append('### 核心指标')
     lines.append('')
     if cards:
         for card in cards:
             extra = []
             if card.get('note'):
-                extra.append(str(card['note']))
-            if card.get('source'):
-                extra.append(f'来源：{card["source"]}')
-            suffix = f'（{"；".join(extra)}）' if extra else ''
-            lines.append(f'- **{card.get("label") or "指标"}**：{card.get("value") or ""}{suffix}')
+                extra.append(_display_export_value(card['note']))
+            suffix = f'（{"；".join(extra)}）' if extra and extra[0] != '-' else ''
+            value = _display_export_value(card.get('value'))
+            lines.append(f'- **{card.get("label") or "指标"}**：{value}{suffix}')
     else:
-        lines.append('- 当前解析未提取到明确数值型指标。')
+        lines.append('-')
     return '\n'.join(lines).strip()
 
 
@@ -173,32 +198,17 @@ def _reference_links_markdown(content: dict) -> str:
     refs = content.get('reference_links') or []
     if not refs:
         return ''
-    type_labels = {
-        'doi': 'DOI',
-        'arxiv': 'arXiv',
-        'official': '官方链接',
-        'scholar': '学术搜索',
-        'none': '暂无可用链接',
-    }
-    lines = ['## 文献溯源', '', '### 可点击参考文献']
+    lines = ['## 延伸阅读', '']
     for idx, item in enumerate(refs, start=1):
-        label = item.get('title') or item.get('raw') or f'参考文献 {idx}'
+        label = item.get('raw') or item.get('title') or f'参考文献 {idx}'
         url = item.get('url')
         if url:
             lines.append(f'{idx}. [{label}]({url})')
         else:
             lines.append(f'{idx}. {label}')
-        if item.get('authors'):
-            lines.append(f'   - 作者：{item["authors"]}')
-        if item.get('year'):
-            lines.append(f'   - 年份：{item["year"]}')
-        if item.get('venue'):
-            lines.append(f'   - 来源：{item["venue"]}')
-        lines.append(f'   - 链接类型：{type_labels.get(item.get("url_type"), item.get("url_type") or "暂无可用链接")}')
-        if item.get('reason'):
-            lines.append(f'   - 溯源理由：{item["reason"]}')
-        if item.get('raw'):
-            lines.append(f'   - 原文：{item["raw"]}')
+        reason = _display_export_value(item.get('reason'))
+        if reason:
+            lines.append(f'   - 说明：{reason}')
     return '\n'.join(lines).strip()
 
 
@@ -277,56 +287,54 @@ def _set_table_widths(table, widths: list[int]) -> None:
 def _add_key_data_table_to_docx(doc: Document, rows: list[dict]) -> None:
     if not rows:
         return
-    table = doc.add_table(rows=1, cols=3)
+    table = doc.add_table(rows=1, cols=2)
     table.style = 'Table Grid'
-    for idx, header in enumerate(['字段', '内容', '状态']):
+    for idx, header in enumerate(['字段', '内容']):
         _set_docx_cell_text(table.rows[0].cells[idx], header)
     for row in rows:
         cells = table.add_row().cells
-        status = '已提取' if row.get('status') == 'extracted' else '未提取到明确证据'
         _set_docx_cell_text(cells[0], row.get('name') or '')
-        _set_docx_cell_text(cells[1], row.get('value') or '')
-        _set_docx_cell_text(cells[2], status)
-    _set_table_widths(table, [1800, 6500, 2100])
+        _set_docx_cell_text(cells[1], _display_export_value(row.get('value')))
+    _set_table_widths(table, [2200, 8200])
 
 
 def _add_visual_summary_to_docx(doc: Document, visual: dict) -> None:
     if not isinstance(visual, dict) or not visual:
         return
-    doc.add_heading('图表化摘要', level=2)
+    doc.add_heading('速览', level=2)
     flow = visual.get('method_flow') or []
     if flow:
         doc.add_heading('方法流程', level=3)
         for idx, item in enumerate(flow, start=1):
             title = item.get('title') or f'步骤 {idx}'
-            body = item.get('content') or '当前解析未提取到明确证据'
-            doc.add_paragraph(f'{title}：{_plain_text(body)}', style='List Number')
+            body = _display_export_value(item.get('content'))
+            doc.add_paragraph(f'{title}：{body}', style='List Number')
     table = visual.get('key_data_table') or []
     if table:
         doc.add_heading('关键数据', level=3)
         _add_key_data_table_to_docx(doc, table)
-    doc.add_heading('数值指标', level=3)
+    doc.add_heading('核心指标', level=3)
     cards = visual.get('metric_cards') or []
     if cards:
         for card in cards:
             extra = []
-            if card.get('source'):
-                extra.append(f'来源：{card["source"]}')
             if card.get('note'):
-                extra.append(str(card['note']))
+                note = _display_export_value(card['note'])
+                if note != '-':
+                    extra.append(note)
             suffix = f'（{"；".join(extra)}）' if extra else ''
-            doc.add_paragraph(f'{card.get("label") or "指标"}：{card.get("value") or ""}{suffix}', style='List Bullet')
+            value = _display_export_value(card.get('value'))
+            doc.add_paragraph(f'{card.get("label") or "指标"}：{value}{suffix}', style='List Bullet')
     else:
-        doc.add_paragraph('当前解析未提取到明确数值型指标。', style='List Bullet')
+        doc.add_paragraph('-', style='List Bullet')
 
 
 def _add_reference_links_to_docx(doc: Document, refs: list[dict]) -> None:
     if not refs:
         return
-    doc.add_heading('文献溯源', level=2)
-    doc.add_heading('可点击参考文献', level=3)
+    doc.add_heading('延伸阅读', level=2)
     for item in refs:
-        title = item.get('title') or item.get('raw') or '未命名参考文献'
+        title = item.get('raw') or item.get('title') or '未命名参考文献'
         url = item.get('url')
         text = f'{title}：{url}' if url else title
         doc.add_paragraph(_plain_text(text), style='List Number')
@@ -467,29 +475,27 @@ def _build_pdf_story(content: dict, title: str, font_name: str) -> list:
     story = [_para(title, styles['title'])]
     visual = content.get('visual_summary') or {}
     if isinstance(visual, dict) and visual:
-        story.extend([_para('图表化摘要', styles['h2']), _para('方法流程', styles['h3'])])
+        story.extend([_para('速览', styles['h2']), _para('方法流程', styles['h3'])])
         flow_items = []
         for idx, item in enumerate(visual.get('method_flow') or [], start=1):
             title_text = item.get('title') or f'步骤 {idx}'
-            body = item.get('content') or '当前解析未提取到明确证据'
+            body = _display_export_value(item.get('content'))
             flow_items.append(ListItem(_para(f'{title_text}：{body}', styles['body'])))
         if flow_items:
             story.append(ListFlowable(flow_items, bulletType='1', leftIndent=16))
         else:
-            story.append(_para('当前解析未提取到明确方法流程。', styles['body']))
+            story.append(_para('-', styles['body']))
 
         table_rows = visual.get('key_data_table') or []
         if table_rows:
             story.append(_para('关键数据', styles['h3']))
-            data = [[_para('字段', styles['small']), _para('内容', styles['small']), _para('状态', styles['small'])]]
+            data = [[_para('字段', styles['small']), _para('内容', styles['small'])]]
             for row in table_rows:
-                status = '已提取' if row.get('status') == 'extracted' else '未提取到明确证据'
                 data.append([
                     _para(row.get('name'), styles['small']),
-                    _para(row.get('value'), styles['small']),
-                    _para(status, styles['small']),
+                    _para(_display_export_value(row.get('value')), styles['small']),
                 ])
-            table = Table(data, colWidths=[34 * mm, 110 * mm, 34 * mm], repeatRows=1)
+            table = Table(data, colWidths=[40 * mm, 138 * mm], repeatRows=1)
             table.setStyle(TableStyle([
                 ('FONTNAME', (0, 0), (-1, -1), font_name),
                 ('FONTSIZE', (0, 0), (-1, -1), 8.5),
@@ -502,15 +508,17 @@ def _build_pdf_story(content: dict, title: str, font_name: str) -> list:
             ]))
             story.extend([table, Spacer(1, 6)])
 
-        story.append(_para('数值指标', styles['h3']))
+        story.append(_para('核心指标', styles['h3']))
         cards = visual.get('metric_cards') or []
         metric_items = []
         if cards:
             for card in cards:
-                extra = f'（来源：{card["source"]}）' if card.get('source') else ''
-                metric_items.append(ListItem(_para(f'{card.get("label") or "指标"}：{card.get("value") or ""}{extra}', styles['body'])))
+                note = _display_export_value(card.get('note'))
+                extra = f'（{note}）' if note and note != '-' else ''
+                value = _display_export_value(card.get('value'))
+                metric_items.append(ListItem(_para(f'{card.get("label") or "指标"}：{value}{extra}', styles['body'])))
         else:
-            metric_items.append(ListItem(_para('当前解析未提取到明确数值型指标。', styles['body'])))
+            metric_items.append(ListItem(_para('-', styles['body'])))
         story.append(ListFlowable(metric_items, bulletType='bullet', leftIndent=16))
 
     body = _body_markdown(content)
@@ -533,9 +541,9 @@ def _build_pdf_story(content: dict, title: str, font_name: str) -> list:
 
     refs = content.get('reference_links') or []
     if refs:
-        story.append(_para('文献溯源', styles['h2']))
+        story.append(_para('延伸阅读', styles['h2']))
         for idx, item in enumerate(refs, start=1):
-            label = item.get('title') or item.get('raw') or f'参考文献 {idx}'
+            label = item.get('raw') or item.get('title') or f'参考文献 {idx}'
             url = item.get('url')
             story.append(_para(f'{idx}. {label}{f"：{url}" if url else ""}', styles['small']))
     return story

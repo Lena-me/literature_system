@@ -3,6 +3,7 @@ import MarkdownIt from 'markdown-it'
 import { computed } from 'vue'
 import 'katex/dist/katex.min.css'
 import { renderChatMarkdownHtml } from '@/utils/mathRender'
+import { injectHeadingAnchors } from '@/utils/reportMarkdown'
 import { linkifyScholarlyReferences, injectPaperTitleLinks, ensureExternalLinksOpenInNewTab } from '@/utils/paperOfficialUrl'
 import type { ExternalReference } from '@/types/domain'
 
@@ -10,6 +11,7 @@ const props = defineProps<{
   content: string
   linkifyReferences?: boolean
   paperLinks?: ExternalReference[]
+  headingAnchors?: boolean
 }>()
 
 const md = new MarkdownIt({ html: true, linkify: true, breaks: true })
@@ -37,6 +39,9 @@ const html = computed(() => {
   )
 
   let rendered = renderChatMarkdownHtml(raw, s => md.render(s))
+  if (props.headingAnchors) {
+    rendered = injectHeadingAnchors(rendered)
+  }
   if (props.linkifyReferences !== false) {
     rendered = linkifyScholarlyReferences(rendered)
   }

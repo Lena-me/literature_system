@@ -169,7 +169,7 @@ export interface ReportContent {
   [key: string]: unknown
 }
 
-export interface Report { id: number; paper_id: number; title: string; content: ReportContent; created_at: string }
+export interface Report { id: number; paper_id: number; title: string; content?: ReportContent; created_at: string }
 export interface GraphNode { 
   id: number | string
   entity_type: string

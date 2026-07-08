@@ -23,7 +23,7 @@ export function parseSourceBbox(raw: unknown): [number, number, number, number] 
 }
 
 type PdfReaderLike = {
-  jumpTo?: (page: number, text?: string) => Promise<void> | void
+  jumpTo?: (page: number, text?: string) => Promise<boolean> | boolean
   highlightAndScrollTo?: (page: number, bbox: [number, number, number, number]) => Promise<void> | void
   whenReady?: (timeoutMs?: number) => Promise<boolean>
 }
@@ -64,6 +64,11 @@ export async function navigateSourceInPdf(
     await new Promise(resolve => setTimeout(resolve, delayMs))
   }
 
+  if (highlightText && typeof pdfReader.jumpTo === 'function') {
+    const located = await pdfReader.jumpTo(page, highlightText)
+    if (located) return
+  }
+
   if (bbox && typeof pdfReader.highlightAndScrollTo === 'function') {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -75,7 +80,7 @@ export async function navigateSourceInPdf(
     }
   }
 
-  await pdfReader.jumpTo?.(page, highlightText)
+  await pdfReader.jumpTo?.(page)
 }
 
 export async function navigateVisualInPdf(

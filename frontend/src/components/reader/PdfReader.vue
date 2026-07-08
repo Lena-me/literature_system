@@ -963,10 +963,110 @@ async function scrollToPage(page: number) {
   scrollPage.value = page
 }
 
-async function jumpTo(page: number, _text?: string) {
-  if (!doc) return
+function normalizeSearchText(text: string): string {
+  return text.replace(/\s+/g, '').toLowerCase()
+}
+
+function pickSearchNeedles(rawText: string): string[] {
+  const content = rawText.replace(/\s+/g, ' ').trim()
+  if (!content) return []
+
+  const needles = new Set<string>()
+  needles.add(content.slice(0, 160))
+  needles.add(content.slice(0, 80))
+  needles.add(content.slice(0, 48))
+
+  const sentences = content.split(/(?<=[。！？；;!?])\s*/).map(s => s.trim()).filter(s => s.length >= 16)
+  for (const sent of sentences.slice(0, 3)) {
+    needles.add(sent.slice(0, 120))
+  }
+
+  return [...needles].filter(n => n.length >= 8)
+}
+
+async function highlightTextOnPage(pageNum: number, rawText: string): Promise<boolean> {
+  const layer = textLayerMap.get(pageNum)
+  if (!layer || !rawText.trim()) return false
+
+  const spans = Array.from(layer.querySelectorAll('span')) as HTMLElement[]
+  if (!spans.length) return false
+
+  let full = ''
+  const map: Array<{ span: HTMLElement; start: number; end: number }> = []
+  for (const span of spans) {
+    const piece = span.textContent || ''
+    if (!piece) continue
+    const start = full.length
+    full += piece
+    map.push({ span, start, end: full.length })
+  }
+
+  const normalizedFull = normalizeSearchText(full)
+  let matchStart = -1
+  let matchLen = 0
+  for (const needle of pickSearchNeedles(rawText)) {
+    const normalizedNeedle = normalizeSearchText(needle)
+    const idx = normalizedFull.indexOf(normalizedNeedle)
+    if (idx >= 0) {
+      matchStart = idx
+      matchLen = normalizedNeedle.length
+      break
+    }
+  }
+  if (matchStart < 0) return false
+
+  const matchEnd = matchStart + matchLen
+  const matchedSpans = map.filter(entry => entry.end > matchStart && entry.start < matchEnd)
+  if (!matchedSpans.length) return false
+
+  const pageEl = containerRef.value?.querySelector<HTMLElement>(`[data-page="${pageNum}"]`)
+  const pageRect = pageEl?.getBoundingClientRect()
+  if (!pageRect?.width || !pageRect?.height) return false
+
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const { span } of matchedSpans) {
+    const rect = span.getBoundingClientRect()
+    minX = Math.min(minX, rect.left)
+    minY = Math.min(minY, rect.top)
+    maxX = Math.max(maxX, rect.right)
+    maxY = Math.max(maxY, rect.bottom)
+  }
+
+  const clamp = (v: number) => Math.max(0, Math.min(1, v))
+  const left = clamp((minX - pageRect.left) / pageRect.width)
+  const top = clamp((minY - pageRect.top) / pageRect.height)
+  const width = clamp(Math.max(0.01, (maxX - minX) / pageRect.width))
+  const height = clamp(Math.max(0.008, (maxY - minY) / pageRect.height))
+
+  clearLinkHighlight()
+  activeLinkHighlight.value = {
+    pageNum,
+    rect: { left, top, width, height },
+  }
+  await renderAnnotationLayer(pageNum)
+  linkHighlightTimer = setTimeout(() => {
+    clearLinkHighlight()
+  }, 3000)
+  return true
+}
+
+async function jumpTo(page: number, text?: string): Promise<boolean> {
+  if (!doc) return false
   const target = Math.min(Math.max(Number(page) || 1, 1), totalPages.value || 1)
+  await renderPage(target)
   await scrollToPage(target)
+
+  if (!text?.trim()) return false
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await nextTick()
+    if (await highlightTextOnPage(target, text)) return true
+    await new Promise(resolve => setTimeout(resolve, 180))
+  }
+  return false
 }
 
 // ── 联动高亮：接收物理坐标 bbox [x0, y0, x1, y1]，翻页并绘制临时高亮 ──

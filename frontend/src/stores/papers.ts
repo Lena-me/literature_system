@@ -120,7 +120,7 @@ export const usePaperStore = defineStore('papers', {
           } catch (err: unknown) {
             const error = err as Error
             if (error?.name === 'AbortError' || controller.signal.aborted) break
-            console.warn('[papers] parse-events disconnected:', error.message)
+            // 解析状态 SSE 断连后会自动重连，不影响研读报告等业务请求
           }
 
           if (controller.signal.aborted || this.parseEventsGeneration !== generation) break
