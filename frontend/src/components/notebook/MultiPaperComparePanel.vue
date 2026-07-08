@@ -6,6 +6,25 @@ import { featuresApi } from '@/api/features'
 import { usePaperStore } from '@/stores/papers'
 import type { Paper, Source } from '@/types/domain'
 
+interface CompareHistoryItem {
+  id: number
+  name?: string | null
+  paper_ids?: number[]
+  created_at?: string | null
+}
+
+interface EvidenceRow {
+  paper_id?: number | string
+  title?: string
+  evidences?: Record<string, unknown>[]
+}
+
+interface EvidenceDimensionGroup {
+  dimension_key?: string
+  label?: string
+  rows?: EvidenceRow[]
+}
+
 const paperStore = usePaperStore()
 const route = useRoute()
 
@@ -45,7 +64,7 @@ const isCompareNameAuto = ref(true)
 const tableViewMode = ref<'zh' | 'raw'>('zh')
 const compareResult = ref<any>(null)
 const evidenceResult = ref<any>(null)
-const history = ref<any[]>([])
+const history = ref<CompareHistoryItem[]>([])
 const expandedCompareCells = ref<Set<string>>(new Set())
 const expandedEvidenceItems = ref<Set<string>>(new Set())
 const sidebarCollapsed = ref(false)
@@ -162,9 +181,25 @@ const selectedPaperCountLabel = computed(() => {
 
 const selectedDimensionCountLabel = computed(() => `已选 ${selectedDimensions.value.length} 项`)
 
-const evidenceDimensions = computed(() => {
+const evidenceDimensions = computed<EvidenceDimensionGroup[]>(() => {
   return Array.isArray(evidenceResult.value?.dimensions) ? evidenceResult.value.dimensions : []
 })
+
+const compareResultTitle = computed(() => String(compareResult.value?.name || '多文献对比结果'))
+
+const compareResultBody = computed(() => compareResult.value?.result || compareResult.value || '暂无结果')
+
+const displayEvidenceQuestion = computed(() => {
+  const fromResult = evidenceResult.value?.question
+  if (fromResult) return String(fromResult)
+  return evidenceQuestion.value
+})
+
+const showEvidenceQuestion = computed(() => Boolean(displayEvidenceQuestion.value))
+
+const evidenceFlatRows = computed<EvidenceRow[]>(() =>
+  Array.isArray(evidenceResult.value?.rows) ? evidenceResult.value.rows : [],
+)
 
 function paperTitle(paper: Paper) {
   return paper.title || paper.original_filename || `Paper ${paper.id}`
@@ -174,11 +209,20 @@ function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
-function formatDate(value?: string) {
+function formatDate(value?: string | null) {
   if (!value) return ''
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function historyItemTitle(item: CompareHistoryItem) {
+  return item.name || '未命名对比'
+}
+
+function historyItemMeta(item: CompareHistoryItem) {
+  const count = Array.isArray(item.paper_ids) ? item.paper_ids.length : 0
+  return `${count} 篇文献 · ${formatDate(item.created_at)}`
 }
 
 function tableHeader(key: string) {
@@ -438,7 +482,7 @@ async function loadEvidenceSilently() {
   }
 }
 
-async function openHistoryItem(item: any) {
+async function openHistoryItem(item: CompareHistoryItem) {
   try {
     compareResult.value = await featuresApi.compareDetail(item.id)
   } catch {
@@ -502,7 +546,7 @@ watch(
   },
 )
 
-async function deleteHistoryItem(item: any) {
+async function deleteHistoryItem(item: CompareHistoryItem) {
   try {
     await ElMessageBox.confirm('确定删除这条对比历史吗？', '删除历史记录', { type: 'warning' })
     await featuresApi.deleteCompare(item.id)
@@ -539,11 +583,11 @@ function openEvidenceSource(evidence: any) {
   emit('sourceClick', source)
 }
 
-function compareCellKey(rowIndex: number, key: string) {
-  return `${tableViewMode.value}-${rowIndex}-${key}`
+function compareCellKey(rowIndex: number | string, key: string) {
+  return `${tableViewMode.value}-${Number(rowIndex)}-${key}`
 }
 
-function isCompareCellExpanded(rowIndex: number, key: string) {
+function isCompareCellExpanded(rowIndex: number | string, key: string) {
   return expandedCompareCells.value.has(compareCellKey(rowIndex, key))
 }
 
@@ -625,12 +669,48 @@ function markCompareNameEdited() {
   isCompareNameAuto.value = false
 }
 
-function toggleCompareCell(rowIndex: number, key: string) {
+function toggleCompareCell(rowIndex: number | string, key: string) {
   const id = compareCellKey(rowIndex, key)
   const next = new Set(expandedCompareCells.value)
   if (next.has(id)) next.delete(id)
   else next.add(id)
   expandedCompareCells.value = next
+}
+
+function getDimensionKey(dimension: EvidenceDimensionGroup) {
+  return String(dimension.dimension_key || '')
+}
+
+function getDimensionRows(dimension: EvidenceDimensionGroup) {
+  return Array.isArray(dimension.rows) ? dimension.rows : []
+}
+
+function getRowEvidences(row: EvidenceRow) {
+  return Array.isArray(row.evidences) ? row.evidences : []
+}
+
+function hasRowEvidences(row: EvidenceRow) {
+  return getRowEvidences(row).length > 0
+}
+
+function evidenceFlatRowKey(row: EvidenceRow) {
+  return String(row.paper_id ?? '')
+}
+
+function dimensionRowGroupKey(dimension: EvidenceDimensionGroup, row: EvidenceRow) {
+  return `${getDimensionKey(dimension)}-${row.paper_id ?? ''}`
+}
+
+function getEvidencePageNumber(evidence: { page_number?: number | string }) {
+  return evidence?.page_number
+}
+
+function getEvidenceSectionTitle(evidence: { section_title?: string }) {
+  return evidence?.section_title
+}
+
+function getEvidenceSnippet(evidence: { snippet?: string }) {
+  return evidence?.snippet ?? ''
 }
 
 function evidenceItemKey(evidence: any, prefix = 'evidence') {
@@ -714,8 +794,8 @@ function evidencePageLabel(page?: number | string) {
             @click="openHistoryItem(item)"
           >
             <div class="compare-item-main">
-              <div class="compare-item-title">{{ item.name || '未命名对比' }}</div>
-              <div class="compare-item-meta">{{ (item.paper_ids || []).length }} 篇文献 · {{ formatDate(item.created_at) }}</div>
+              <div class="compare-item-title">{{ historyItemTitle(item) }}</div>
+              <div class="compare-item-meta">{{ historyItemMeta(item) }}</div>
             </div>
             <button class="compare-item-delete" title="删除" @click.stop="deleteHistoryItem(item)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -847,7 +927,7 @@ function evidencePageLabel(page?: number | string) {
         <div class="result-meta">
           <div class="result-title-row">
             <div>
-              <h3>{{ compareResult?.name || '多文献对比结果' }}</h3>
+              <h3>{{ compareResultTitle }}</h3>
               <p>{{ selectedPapers.map(paperTitle).join(' · ') }}</p>
             </div>
             <div class="table-view-switch" aria-label="对比表展示模式">
@@ -905,7 +985,7 @@ function evidencePageLabel(page?: number | string) {
         </div>
 
         <div v-else class="raw-result">
-          {{ compareResult?.result || compareResult || '暂无结果' }}
+          {{ compareResultBody }}
         </div>
 
         <div class="analysis-sections">
@@ -930,28 +1010,28 @@ function evidencePageLabel(page?: number | string) {
           <div class="evidence-panel-head">
             <h3 class="evidence-panel-title">原文依据</h3>
             <p class="evidence-panel-hint">点击条目可在 PDF 中定位到对应页码并高亮原文</p>
-            <p v-if="evidenceResult?.question || evidenceQuestion" class="evidence-panel-question">
-              {{ evidenceResult?.question || evidenceQuestion }}
+            <p v-if="showEvidenceQuestion" class="evidence-panel-question">
+              {{ displayEvidenceQuestion }}
             </p>
           </div>
 
           <template v-if="evidenceDimensions.length">
             <div
               v-for="dimension in evidenceDimensions"
-              :key="dimension.dimension_key"
+              :key="getDimensionKey(dimension)"
               class="evidence-dimension"
             >
-              <h4>{{ dimension.label || dimensionLabel(dimension.dimension_key) }}</h4>
+              <h4>{{ dimension.label || dimensionLabel(getDimensionKey(dimension)) }}</h4>
 
               <div
-                v-for="row in dimension.rows || []"
-                :key="`${dimension.dimension_key}-${row.paper_id}`"
+                v-for="row in getDimensionRows(dimension)"
+                :key="dimensionRowGroupKey(dimension, row)"
                 class="evidence-group"
               >
                 <p class="evidence-paper-title">{{ row.title }}</p>
                 <div
-                  v-for="evidence in row.evidences || []"
-                  :key="`${dimension.dimension_key}-${evidence.paper_id}-${evidence.page_number}-${evidence.snippet}`"
+                  v-for="evidence in getRowEvidences(row)"
+                  :key="evidenceItemKey(evidence, getDimensionKey(dimension))"
                   class="evidence-item"
                   role="button"
                   tabindex="0"
@@ -960,38 +1040,38 @@ function evidencePageLabel(page?: number | string) {
                 >
                   <div class="evidence-item-head">
                     <span class="evidence-tags">
-                      <em v-if="evidencePageLabel(evidence.page_number)">{{ evidencePageLabel(evidence.page_number) }}</em>
-                      <em v-if="evidenceSectionLabel(evidence.section_title)">{{ evidenceSectionLabel(evidence.section_title) }}</em>
+                      <em v-if="evidencePageLabel(getEvidencePageNumber(evidence))">{{ evidencePageLabel(getEvidencePageNumber(evidence)) }}</em>
+                      <em v-if="evidenceSectionLabel(getEvidenceSectionTitle(evidence))">{{ evidenceSectionLabel(getEvidenceSectionTitle(evidence)) }}</em>
                       <em
                         v-if="shouldShowEvidenceSupport(evidence)"
                         :class="['support-tag', evidenceSupport(evidence)]"
                       >{{ evidenceSupportLabel(evidence) }}</em>
                     </span>
                   </div>
-                  <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, dimension.dimension_key) }">
-                    {{ evidence.snippet }}
+                  <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, getDimensionKey(dimension)) }">
+                    {{ getEvidenceSnippet(evidence) }}
                   </span>
                   <button
                     v-if="shouldShowEvidenceToggle(evidence)"
                     type="button"
                     class="inline-toggle"
-                    @click.stop="toggleEvidenceItem(evidence, dimension.dimension_key)"
+                    @click.stop="toggleEvidenceItem(evidence, getDimensionKey(dimension))"
                   >
-                    {{ isEvidenceExpanded(evidence, dimension.dimension_key) ? '收起' : '展开' }}
+                    {{ isEvidenceExpanded(evidence, getDimensionKey(dimension)) ? '收起' : '展开' }}
                   </button>
                 </div>
-                <div v-if="!(row.evidences || []).length" class="empty-note">
+                <div v-if="!hasRowEvidences(row)" class="empty-note">
                   该文献在此维度暂无原文依据。
                 </div>
               </div>
             </div>
           </template>
           <template v-else>
-            <div v-for="row in evidenceResult?.rows || []" :key="row.paper_id" class="evidence-group">
+            <div v-for="row in evidenceFlatRows" :key="evidenceFlatRowKey(row)" class="evidence-group">
               <p class="evidence-paper-title">{{ row.title }}</p>
               <div
-                v-for="evidence in row.evidences || []"
-                :key="`${evidence.paper_id}-${evidence.page_number}-${evidence.snippet}`"
+                v-for="evidence in getRowEvidences(row)"
+                :key="evidenceItemKey(evidence, 'flat')"
                 class="evidence-item"
                 role="button"
                 tabindex="0"
@@ -1000,8 +1080,8 @@ function evidencePageLabel(page?: number | string) {
               >
                 <div class="evidence-item-head">
                   <span class="evidence-tags">
-                    <em v-if="evidencePageLabel(evidence.page_number)">{{ evidencePageLabel(evidence.page_number) }}</em>
-                    <em v-if="evidenceSectionLabel(evidence.section_title)">{{ evidenceSectionLabel(evidence.section_title) }}</em>
+                    <em v-if="evidencePageLabel(getEvidencePageNumber(evidence))">{{ evidencePageLabel(getEvidencePageNumber(evidence)) }}</em>
+                    <em v-if="evidenceSectionLabel(getEvidenceSectionTitle(evidence))">{{ evidenceSectionLabel(getEvidenceSectionTitle(evidence)) }}</em>
                     <em
                       v-if="shouldShowEvidenceSupport(evidence)"
                       :class="['support-tag', evidenceSupport(evidence)]"
@@ -1009,7 +1089,7 @@ function evidencePageLabel(page?: number | string) {
                   </span>
                 </div>
                 <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, 'flat') }">
-                  {{ evidence.snippet }}
+                  {{ getEvidenceSnippet(evidence) }}
                 </span>
                 <button
                   v-if="shouldShowEvidenceToggle(evidence)"

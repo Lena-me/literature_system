@@ -54,6 +54,15 @@ const emit = defineEmits<{
   (e: 'open-library'): void
 }>()
 
+function isNodeSelected(node: LayoutNode) {
+  return props.selectedPanel.kind === 'node' && String(props.selectedNodeForPanel?.id) === String(node.id)
+}
+
+function nodeSelectedTransform(node: LayoutNode) {
+  if (!isNodeSelected(node)) return undefined
+  return `translate(${node.x} ${node.y}) scale(1.02) translate(${-node.x} ${-node.y})`
+}
+
 const bestEdge = computed(() => {
   return [...props.filteredEdges].sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null
 })
@@ -127,8 +136,6 @@ const viewportTransform = computed(() => {
   const { cx, cy } = contentBounds.value
   return `translate(${panX.value + cx} ${panY.value + cy}) scale(${zoom.value}) translate(${-cx} ${-cy})`
 })
-
-const zoomPercent = computed(() => `${Math.round(zoom.value * 100)}%`)
 
 watch(
   () => [props.layoutNodes.length, props.filteredEdges.length, props.displayState],
@@ -320,12 +327,16 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
       @lostpointercapture="onLostPointerCapture"
     >
       <div class="canvas-toolbar" @click.stop @pointerdown.stop>
-        <button type="button" class="canvas-tool-btn" title="缩小" @click="zoomBy(0.85)">−</button>
-        <span class="canvas-zoom-label">{{ zoomPercent }}</span>
-        <button type="button" class="canvas-tool-btn" title="放大" @click="zoomBy(1.15)">+</button>
-        <button type="button" class="canvas-tool-btn reset" title="适应画布" @click="resetView">适应</button>
+        <button type="button" class="canvas-tool-btn" title="缩小" aria-label="缩小" @click="zoomBy(0.85)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
+        </button>
+        <button type="button" class="canvas-tool-btn" title="放大" aria-label="放大" @click="zoomBy(1.15)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
+        </button>
+        <button type="button" class="canvas-tool-btn" title="适应画布" aria-label="适应画布" @click="resetView">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 5.5V3.5h2M10.5 3.5h2v2M12.5 10.5v2h-2M5.5 12.5h-2v-2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        </button>
       </div>
-      <p class="canvas-hint">滚轮缩放 · 拖拽空白区域平移</p>
 
       <svg
         :viewBox="svgViewBox"
@@ -363,16 +374,18 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
             v-for="node in props.layoutNodes"
             :key="node.id"
             class="node-group"
+            :class="{ 'is-selected': isNodeSelected(node) }"
+            :transform="nodeSelectedTransform(node)"
             :style="{ opacity: props.nodeOpacity(node) }"
             @click.stop="emit('select-node', node)"
             @pointerdown.stop
           >
             <circle
+              v-if="isNodeSelected(node)"
               :cx="node.x"
               :cy="node.y"
-              :r="node.radius + 12"
-              class="node-halo"
-              :class="{ selected: props.selectedPanel.kind === 'node' && props.selectedNodeForPanel?.id === node.id }"
+              :r="node.radius + 3.5"
+              class="node-select-ring"
             />
             <circle
               :cx="node.x"
@@ -405,7 +418,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
       </svg>
 
       <div v-if="!props.filteredEdges.length && props.graphNodes.length > 1" class="canvas-empty-note">
-        当前关系类型下暂无可展示连接，可切换关系类型查看其他关联。
+        当前筛选下暂无可展示的关联，可切换关联类型查看。
       </div>
     </div>
 
@@ -429,13 +442,11 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   position: relative;
   flex: 1;
   min-height: 0;
-  margin: 6px 16px 0;
-  border-radius: 22px;
-  background:
-    radial-gradient(circle at 48% 40%, rgba(20, 184, 166, 0.10), transparent 22%),
-    radial-gradient(circle at 70% 60%, rgba(37, 99, 235, 0.06), transparent 24%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 253, 255, 0.96));
-  border: 1px solid #edf3f8;
+  margin: 0;
+  border-radius: 0;
+  background: #f8fafc;
+  border: none;
+  border-top: 1px solid #eef2f7;
   overflow: hidden;
   cursor: grab;
   touch-action: none;
@@ -447,64 +458,43 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
 
 .canvas-toolbar {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: 10px;
+  right: 10px;
   z-index: 3;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.94);
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(6px);
 }
 
 .canvas-tool-btn {
-  min-width: 28px;
-  height: 28px;
-  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border: none;
-  border-radius: 999px;
-  background: #f8fafc;
-  color: #334155;
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.canvas-tool-btn svg {
+  width: 13px;
+  height: 13px;
 }
 
 .canvas-tool-btn:hover {
-  background: #eef2ff;
+  background: #f1f5f9;
   color: #2563eb;
-}
-
-.canvas-tool-btn.reset {
-  padding: 0 10px;
-  font-size: 12px;
-  font-weight: 750;
-}
-
-.canvas-zoom-label {
-  min-width: 42px;
-  text-align: center;
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.canvas-hint {
-  position: absolute;
-  left: 16px;
-  bottom: 12px;
-  z-index: 2;
-  margin: 0;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.88);
-  color: #94a3b8;
-  font-size: 11px;
-  pointer-events: none;
 }
 
 .svg-shell.compact svg {
@@ -539,13 +529,11 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   position: relative;
   flex: 1;
   min-height: 0;
-  margin: 6px 16px 0;
-  border-radius: 22px;
-  background:
-    radial-gradient(circle at 48% 40%, rgba(20, 184, 166, 0.10), transparent 22%),
-    radial-gradient(circle at 70% 60%, rgba(37, 99, 235, 0.06), transparent 24%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 253, 255, 0.96));
-  border: 1px solid #edf3f8;
+  margin: 0;
+  border-radius: 0;
+  background: #f8fafc;
+  border: none;
+  border-top: 1px solid #eef2f7;
   overflow: hidden;
 }
 
@@ -561,18 +549,14 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
 
 .node-group {
   cursor: pointer;
-  transition: opacity 0.16s;
+  transition: opacity 0.16s ease;
 }
 
-.node-halo {
-  fill: rgba(255, 255, 255, 0.45);
-  stroke: rgba(148, 163, 184, 0.16);
-  stroke-width: 12;
-}
-
-.node-halo.selected {
-  stroke: rgba(37, 99, 235, 0.36);
-  stroke-width: 17;
+.node-select-ring {
+  fill: none;
+  stroke: #2563eb;
+  stroke-width: 2;
+  pointer-events: none;
 }
 
 .node-soft-ring {

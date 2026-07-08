@@ -26,7 +26,7 @@ const features = [
 <template>
   <section class="hero fade-slide">
     <BrandMark />
-    <h1 class="gradient-title">从文献浩海，到精准睿识</h1>
+    <h1 class="gradient-title">万卷纷繁，一瞬睿识</h1>
     <div class="hero-cards">
       <div
         v-for="item in features"

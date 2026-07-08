@@ -1,7 +1,7 @@
 <script setup lang="ts">
 
 import { useAuthStore } from '@/stores/auth'
-import BrandMark from '@/components/common/BrandMark.vue'
+import AuthHeroPanel from '@/components/auth/AuthHeroPanel.vue'
 import { reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
@@ -48,25 +48,7 @@ async function submit() {
     <div class="grid" />
 
     <!-- 左侧区域 -->
-    <section class="hero fade-slide">
-      <BrandMark />
-      <h1 class="gradient-title">把论文变成可问、可比、可复现的知识系统</h1>
-      <p>文献上传、结构化解析、RAG溯源问答、研读报告、多文献对比、知识图谱与复现实验建议的一体化科研工作台。</p >
-      <div class="hero-cards">
-        <div>
-          <b>RAG</b>
-          <span>检索增强生成</span>
-        </div>
-        <div>
-          <b>Graph</b>
-          <span>主题实体网络</span>
-        </div>
-        <div>
-          <b>Agent</b>
-          <span>报告与复现推导</span>
-        </div>
-      </div>
-    </section>
+    <AuthHeroPanel />
 
     <!-- 右侧表单 -->
     <section class="login-card glass fade-slide">

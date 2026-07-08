@@ -43,19 +43,19 @@ function setActiveTopic(id: number | null) {
 <template>
   <aside class="graph-sidebar">
     <div class="sidebar-heading">
-      <h2>图谱工作台</h2>
-      <button class="icon-btn" title="刷新" @click="emit('refresh')">
+      <h2>我的图谱</h2>
+      <button class="icon-btn" title="刷新列表" @click="emit('refresh')">
         <span>↻</span>
       </button>
     </div>
 
     <button class="create-btn sidebar-create" @click="emit('openCreate')">
-      <span>＋</span> 新建文献关系图谱
+      <span>＋</span> 新建图谱
     </button>
 
     <div class="search-box">
       <span class="search-icon">⌕</span>
-      <input v-model="graphSearchModel" placeholder="搜索图谱或研究主题..." />
+      <input v-model="graphSearchModel" placeholder="搜索图谱名称或主题…" />
     </div>
 
     <div class="tabs">
@@ -93,19 +93,19 @@ function setActiveTopic(id: number | null) {
         </div>
         <div class="row-subline">
           <span class="status-dot"></span>
-          <span>{{ item.status === 'failed' ? '生成失败' : '已完成' }}</span>
+          <span>{{ item.status === 'failed' ? '未完成' : '已生成' }}</span>
           <span class="dot-separator">·</span>
-          <span>{{ item.domain_name || '未分类主题' }}</span>
+          <span>{{ item.domain_name || '未分类' }}</span>
         </div>
         <div class="row-meta-line">
-          <span>{{ item.paper_count || 0 }} 篇论文 · {{ item.relation_count ?? item.edge_count ?? 0 }} 条关系</span>
+          <span>{{ item.paper_count || 0 }} 篇 · {{ item.relation_count ?? item.edge_count ?? 0 }} 组关联</span>
           <span class="card-action" @click.stop="emit('deleteGraph', item)">删除</span>
         </div>
       </button>
 
       <div v-if="!filteredGraphs.length" class="empty-small">
-        <strong>暂无图谱</strong>
-        <span>选择多篇论文后可生成本地文献关系图谱。</span>
+        <strong>还没有图谱</strong>
+        <span>选择多篇文献后，可生成研究关联图谱。</span>
       </div>
     </div>
   </aside>
@@ -113,15 +113,16 @@ function setActiveTopic(id: number | null) {
 
 <style scoped>
 .graph-sidebar {
-  width: 246px;
-  min-width: 246px;
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 14px 8px;
-  background: rgba(255, 255, 255, 0.74);
-  border-right: 1px solid rgba(221, 230, 240, 0.86);
-  box-shadow: none;
-  backdrop-filter: blur(10px);
+  padding: 20px 12px;
+  background: #fff;
+  box-shadow: 1px 0 0 0 #e2e8f0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  gap: 12px;
 }
 
 .sidebar-heading,
@@ -407,12 +408,4 @@ function setActiveTopic(id: number | null) {
   border-radius: 999px;
 }
 
-@media (max-width: 1380px) {
-  .graph-sidebar {
-    width: 270px;
-    min-width: 270px;
-    padding-left: 12px;
-    padding-right: 12px;
-  }
-}
 </style>

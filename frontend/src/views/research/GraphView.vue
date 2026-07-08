@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import GraphCanvas from './components/GraphCanvas.vue'
 import GraphRightPanel from './components/GraphRightPanel.vue'
 import GraphWorkbench from './components/GraphWorkbench.vue'
@@ -16,6 +16,13 @@ import type {
 } from '@/api/knowledge'
 import { papersApi } from '@/api/papers'
 import type { KnowledgeDomain, Paper } from '@/types/domain'
+import {
+  displayPaperTitle,
+  paperReadiness,
+  paperReadinessHint,
+  paperReadinessLabel,
+  paperSubtitle,
+} from '@/utils/paperDisplay'
 
 interface LibraryPaper extends Paper {
   abstract?: string | null
@@ -137,16 +144,11 @@ const selectedPapers = computed(() => {
 
 const canCreateInlineGraph = computed(() => selectedPaperIds.value.length >= 2 && !creating.value && !nameLoading.value)
 
-const createButtonHint = computed(() => {
-  if (creating.value) return '正在生成图谱，请稍候…'
+const createProgressLabel = computed(() => {
   const count = selectedPaperIds.value.length
-  if (count < 2) {
-    return count === 0
-      ? '请至少选择 2 篇论文（知识图谱无次数限制）'
-      : `已选 ${count} 篇，还需再选 ${2 - count} 篇`
-  }
-  if (!formName.value.trim()) return '未填写名称时将由 AI 自动生成，也可先点击「AI 生成名称」'
-  return '准备就绪，点击生成文献关系图谱'
+  if (count >= 2) return '可以生成'
+  if (count === 1) return '还差 1 篇'
+  return '待选择'
 })
 
 const yearRange = computed<[number, number]>(() => {
@@ -533,11 +535,21 @@ async function regenerateCurrentGraph() {
 
 async function deleteCurrentGraph(item: GraphListItem) {
   if (deletingGraphIds.value.has(item.id)) return
-  deletingGraphIds.value.add(item.id)
-  if (!window.confirm(`确定删除「${item.name}」吗？该操作不会删除原始论文。`)) {
-    deletingGraphIds.value.delete(item.id)
+  try {
+    await ElMessageBox.confirm(
+      `确定删除「${item.name}」吗？该操作不会删除原始论文。`,
+      '删除知识图谱',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
     return
   }
+
+  deletingGraphIds.value.add(item.id)
   try {
     await knowledgeApi.deleteGraph(item.id)
     graphs.value = graphs.value.filter(g => g.id !== item.id)
@@ -552,12 +564,6 @@ async function deleteCurrentGraph(item: GraphListItem) {
   } finally {
     deletingGraphIds.value.delete(item.id)
   }
-}
-
-function resetGraphView() {
-  graph.value = null
-  selectSummary()
-  router.replace({ query: {} })
 }
 
 function selectNode(node: LiteratureGraphNode) {
@@ -684,7 +690,11 @@ function nodeColor(year?: number | null): string {
 }
 
 function paperTitle(paper: LibraryPaper): string {
-  return paper.title || paper.original_filename || `论文 #${paper.id}`
+  return displayPaperTitle(paper)
+}
+
+function paperMetaLine(paper: LibraryPaper): string {
+  return paperSubtitle(paper)
 }
 
 function defaultGraphName(): string {
@@ -801,16 +811,9 @@ function strengthText(strength?: RelationStrength): string {
 }
 
 function parseStatusText(status?: string | null): string {
-  if (!status) return '未知'
-  const map: Record<string, string> = {
-    parsed: '已解析',
-    completed: '已解析',
-    success: '已解析',
-    parsing: '解析中',
-    pending: '等待解析',
-    failed: '解析失败',
-  }
-  return map[status] || status
+  const label = paperReadinessLabel(status)
+  if (label) return label
+  return paperReadiness(status) === 'ready' ? '可用' : '-'
 }
 
 function delay(ms: number) {
@@ -856,52 +859,56 @@ function delay(ms: number) {
       </svg>
     </button>
 
-    <main class="graph-main">
-      <section class="graph-toolbar">
+    <main class="graph-main" :class="{ 'create-mode': !graph }">
+      <section v-if="graph" class="graph-toolbar">
         <div class="toolbar-copy">
           <div class="title-row compact-title-row">
             <h1>知识图谱</h1>
           </div>
         </div>
-        <div class="toolbar-actions">
-          <button v-if="graph" class="ghost-btn" @click="resetGraphView">返回列表</button>
-          <button class="primary-btn" @click="openCreateDialog">新建图谱</button>
-        </div>
       </section>
 
       <section v-if="!graph" ref="createHomePanelRef" class="create-home-panel">
-        <div class="create-home-shell">
-          <section class="create-paper-card">
+        <div class="create-home-flat">
+          <header class="create-page-bar">
+            <div>
+              <h1>新建研究图谱</h1>
+              <p>从文献库挑选论文，系统将梳理它们之间的研究关联与脉络</p>
+            </div>
+          </header>
+
+          <div class="create-home-body">
+          <div class="create-main-column">
             <header class="create-home-head">
-              <h2>新建图谱</h2>
+              <h2>图谱信息</h2>
             </header>
 
             <div class="create-field-grid">
               <label class="inline-field name-field">
                 <span>图谱名称</span>
                 <div class="name-input-row">
-                  <input v-model="formName" placeholder="例如：RAG 相关论文研究脉络" />
+                  <input v-model="formName" placeholder="例如：医学图像分割研究脉络" />
                   <button
                     type="button"
                     class="ghost-btn name-suggest-btn"
                     :disabled="nameLoading || selectedPaperIds.length < 2"
                     @click="suggestGraphName"
                   >
-                    {{ nameLoading ? '生成中…' : 'AI 生成名称' }}
+                    {{ nameLoading ? '命名中…' : '智能命名' }}
                   </button>
                 </div>
               </label>
               <label class="inline-field">
                 <span>研究主题</span>
-                <input v-model="formTopicName" placeholder="可选，例如：检索增强生成" />
+                <input v-model="formTopicName" placeholder="可选，便于后续分类查找" />
               </label>
             </div>
 
+            <div class="create-section-divider" />
+
             <div class="create-paper-toolbar">
-              <div>
-                <strong>选择论文</strong>
-              </div>
-              <b>已选 {{ selectedPaperIds.length }}</b>
+              <strong>选择文献</strong>
+              <span>已选 {{ selectedPaperIds.length }} 篇</span>
             </div>
 
             <div class="search-box create-paper-search">
@@ -917,71 +924,92 @@ function delay(ms: number) {
                 :class="{ checked: selectedPaperIds.includes(paper.id) }"
               >
                 <input type="checkbox" :checked="selectedPaperIds.includes(paper.id)" @change="togglePaper(paper.id)" />
-                <div>
+                <div class="paper-row-body">
                   <strong>{{ paperTitle(paper) }}</strong>
-                  <span>
-                    {{ normalizeText(paper.authors) || '作者未知' }} · {{ paper.publication_year || paper.year || '年份未知' }} ·
-                    {{ paper.parse_status === 'failed' ? '解析失败，关系解释可能较少' : parseStatusText(paper.parse_status) }}
-                  </span>
+                  <span>{{ paperMetaLine(paper) }}</span>
+                  <em v-if="paperReadinessHint(paper.parse_status)" class="paper-row-hint">
+                    {{ paperReadinessHint(paper.parse_status) }}
+                  </em>
                 </div>
+                <span
+                  v-if="paperReadinessLabel(paper.parse_status)"
+                  class="paper-ready-badge"
+                  :class="paperReadiness(paper.parse_status)"
+                >
+                  {{ paperReadinessLabel(paper.parse_status) }}
+                </span>
               </label>
-              <div v-if="!filteredPapers.length" class="empty-small">暂无可选择论文，请先上传或解析本地文献。</div>
+              <div v-if="!filteredPapers.length" class="empty-small">暂无文献，可前往文献库添加后再回来生成。</div>
             </div>
-          </section>
+          </div>
 
-          <aside class="create-preview-card">
-            <h3>生成预览</h3>
-            <p>将根据所选论文生成局部文献关系网络。</p>
-
+          <aside class="create-side-column">
             <div class="preview-stat-row">
-              <div><b>{{ selectedPaperIds.length }}</b><span>已选论文</span></div>
-              <div><b>{{ selectedPaperIds.length >= 2 ? '可生成' : '待选择' }}</b><span>当前状态</span></div>
+              <div><b>{{ selectedPaperIds.length }}</b><span>已选文献</span></div>
+              <div><b>{{ createProgressLabel }}</b><span>准备情况</span></div>
             </div>
 
             <div class="selected-paper-box">
-              <strong>已选论文</strong>
-              <div v-if="selectedPapers.length" class="selected-paper-list">
-                <button v-for="paper in selectedPapers.slice(0, 6)" :key="paper.id" @click="togglePaper(paper.id)">
+              <strong>已选文献</strong>
+              <TransitionGroup
+                v-if="selectedPapers.length"
+                name="paper-list"
+                tag="div"
+                class="selected-paper-list"
+              >
+                <button
+                  v-for="paper in selectedPapers.slice(0, 6)"
+                  :key="paper.id"
+                  @click="togglePaper(paper.id)"
+                >
                   <span :title="paperTitle(paper)">{{ paperTitle(paper) }}</span>
                   <small>移除</small>
                 </button>
-                <em v-if="selectedPapers.length > 6">另有 {{ selectedPapers.length - 6 }} 篇</em>
-              </div>
-              <p v-else>请选择至少 2 篇论文。</p>
+                <em v-if="selectedPapers.length > 6" key="more">另有 {{ selectedPapers.length - 6 }} 篇</em>
+              </TransitionGroup>
+              <p v-else class="create-empty-note">选择 2 篇及以上文献后，即可生成研究图谱。</p>
             </div>
 
             <div class="create-mode-box">
-              <strong>构建方式</strong>
+              <strong>生成选项</strong>
               <label>
                 <input v-model="includeWeak" type="checkbox" />
-                <span>保留弱关联，适合文献数量较少时查看线索。</span>
+                <span>同时展示关联较弱的文献，便于发现潜在线索</span>
               </label>
             </div>
 
-            <button class="create-submit-btn" :disabled="!canCreateInlineGraph" @click="createGraph">
-              {{ creating ? '正在生成...' : '生成文献关系图谱' }}
-            </button>
-            <button class="create-library-btn" @click="router.push('/library')">去文献库上传 / 解析论文</button>
-
-            <p class="create-help-text">{{ createButtonHint }}</p>
+            <div class="create-action-block">
+              <button class="create-submit-btn" :disabled="!canCreateInlineGraph" @click="createGraph">
+                {{ creating ? '正在生成…' : '开始生成' }}
+              </button>
+              <button class="create-library-btn" @click="router.push('/library')">前往文献库添加论文</button>
+            </div>
           </aside>
+          </div>
         </div>
       </section>
 
-      <section v-else :class="['graph-workspace', `state-${graphDisplayState}`]">
+      <section
+        v-else
+        :class="[
+          'graph-workspace',
+          `state-${graphDisplayState}`,
+          { 'panel-detail': isPaperDetail || isRelationDetail },
+        ]"
+      >
         <div class="graph-canvas-card">
           <div class="canvas-header simplified-header">
             <div class="canvas-title-inline">
               <strong>{{ graphTitle }}</strong>
             </div>
             <div class="filter-row relation-only-filter">
-              <label>关系类型</label>
+              <label>关联类型</label>
               <select v-model="relationFilter">
-                <option value="all">全部关系</option>
+                <option value="all">全部关联</option>
                 <option value="strong">强关联</option>
                 <option value="weak">弱关联</option>
-                <option value="semantic">语义相似</option>
-                <option value="keyword">关键词重合</option>
+                <option value="semantic">语义相近</option>
+                <option value="keyword">关键词相近</option>
                 <option value="method">方法相近</option>
               </select>
             </div>
@@ -1044,6 +1072,7 @@ function delay(ms: number) {
           @open-paper="openPaperFromNode"
           @create-report="createReportFromNode"
           @compare-graph="compareFromGraph"
+          @back-to-overview="selectSummary"
         />
       </section>
     </main>
@@ -1053,18 +1082,18 @@ function delay(ms: number) {
         <div class="create-dialog">
           <header class="dialog-header">
             <div>
-              <p class="eyebrow">创建图谱</p>
-              <h2>新建文献关系图谱</h2>
-              <p>选择一组论文，系统将生成论文之间的关联关系与局部研究脉络。</p>
+              <p class="eyebrow">新建图谱</p>
+              <h2>创建研究图谱</h2>
+              <p>选择文献后，系统将梳理研究关联与脉络。</p>
             </div>
             <button class="icon-btn" @click="closeCreateDialog">×</button>
           </header>
 
           <div class="stepper">
-            <span :class="{ active: wizardStep >= 1 }">1 基本信息</span>
-            <span :class="{ active: wizardStep >= 2 }">2 选择论文</span>
-            <span :class="{ active: wizardStep >= 3 }">3 构建方式</span>
-            <span :class="{ active: wizardStep >= 4 }">4 生成图谱</span>
+            <span :class="{ active: wizardStep >= 1 }">1 图谱信息</span>
+            <span :class="{ active: wizardStep >= 2 }">2 选择文献</span>
+            <span :class="{ active: wizardStep >= 3 }">3 生成选项</span>
+            <span :class="{ active: wizardStep >= 4 }">4 开始生成</span>
           </div>
 
           <section v-if="wizardStep === 1" class="dialog-body">
@@ -1077,7 +1106,7 @@ function delay(ms: number) {
                 :disabled="nameLoading || selectedPaperIds.length < 2"
                 @click="suggestGraphName"
               >
-                {{ nameLoading ? '生成中…' : 'AI 生成名称' }}
+                {{ nameLoading ? '命名中…' : '智能命名' }}
               </button>
             </div>
 
@@ -1097,8 +1126,8 @@ function delay(ms: number) {
           <section v-else-if="wizardStep === 2" class="dialog-body paper-picker">
             <div class="picker-head">
               <div>
-                <h3>选择论文</h3>
-                <p>至少选择 2 篇。未解析论文也可参与快速构建，但解释会较少。</p>
+                <h3>选择文献</h3>
+                <p>至少选择 2 篇。整理中的文献也可加入，关联说明可能较少。</p>
               </div>
               <strong>已选 {{ selectedPaperIds.length }}</strong>
             </div>
@@ -1116,7 +1145,7 @@ function delay(ms: number) {
                 <input type="checkbox" :checked="selectedPaperIds.includes(paper.id)" @change="togglePaper(paper.id)" />
                 <div>
                   <strong>{{ paperTitle(paper) }}</strong>
-                  <span>{{ normalizeText(paper.authors) || '作者未知' }} · {{ paper.publication_year || paper.year || '年份未知' }} · {{ parseStatusText(paper.parse_status) }}</span>
+                  <span>{{ paperMetaLine(paper) }}</span>
                 </div>
               </label>
               <div v-if="!filteredPapers.length" class="empty-small">暂无可选择论文。</div>
@@ -1184,13 +1213,10 @@ function delay(ms: number) {
   --graph-navy: #0f1f3d;
   --graph-text: #182235;
   --graph-muted: #64748b;
-  --graph-line: #e3ebf4;
+  --graph-line: #e2e8f0;
   display: flex;
   height: 100%;
-  min-height: 100vh;
-  background:
-    radial-gradient(circle at 24% 2%, rgba(37, 99, 235, 0.06), transparent 32%),
-    linear-gradient(135deg, #f7faff 0%, #f4f8fb 42%, #f9fbfd 100%);
+  background: #f8fafc;
   color: var(--graph-text);
   overflow: hidden;
   position: relative;
@@ -1199,7 +1225,8 @@ function delay(ms: number) {
 .graph-sidebar-wrapper {
   position: relative;
   flex-shrink: 0;
-  width: 292px;
+  width: 240px;
+  height: 100%;
   overflow: hidden;
   transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -1210,7 +1237,7 @@ function delay(ms: number) {
 
 .module-sidebar-toggle {
   position: absolute;
-  left: 272px;
+  left: 220px;
   top: 18px;
   z-index: 50;
   width: 24px;
@@ -1247,18 +1274,6 @@ function delay(ms: number) {
   color: #0f172a;
   border-color: #cbd5e1;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
-}
-
-.graph-sidebar {
-  width: 292px;
-  min-width: 292px;
-  display: flex;
-  flex-direction: column;
-  padding: 20px 16px;
-  background: rgba(255, 255, 255, 0.82);
-  border-right: 1px solid rgba(207, 216, 227, 0.72);
-  box-shadow: 10px 0 34px rgba(15, 23, 42, 0.035);
-  backdrop-filter: blur(14px);
 }
 
 .sidebar-heading,
@@ -1598,10 +1613,10 @@ h1, h2, h3, p {
 
 .create-btn,
 .primary-btn {
-  background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%);
+  background: var(--graph-blue);
   color: #fff;
-  font-weight: 850;
-  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.22);
+  font-weight: 600;
+  box-shadow: none;
 }
 
 .create-btn {
@@ -1643,66 +1658,107 @@ h1, h2, h3, p {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+  background: #fff;
+}
+
+.graph-main.create-mode {
+  background: #fff;
 }
 
 .graph-toolbar {
-  padding: 18px 24px 16px;
+  padding: 14px 20px;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--graph-line);
+  background: #fff;
 }
-
-.toolbar-actions {
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  flex-shrink: 0;
-}
-
 
 .create-home-panel {
   flex: 1;
   min-height: 0;
   display: flex;
-  align-items: stretch;
-  justify-content: center;
-  padding: 0 22px 22px;
   overflow: hidden;
+  padding: 0;
 }
 
-.create-home-shell {
-  width: min(980px, 100%);
-  display: grid;
-  grid-template-columns: minmax(0, 1.55fr) 300px;
-  gap: 16px;
+.create-home-flat {
+  width: 100%;
+  height: 100%;
   min-height: 0;
-}
-
-.create-paper-card,
-.create-preview-card {
-  min-height: 0;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(221, 230, 240, 0.92);
-  border-radius: 22px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.045);
-}
-
-.create-paper-card {
   display: flex;
   flex-direction: column;
-  padding: 18px;
+  background: #fff;
+  border: none;
+  border-radius: 0;
   overflow: hidden;
+}
+
+.create-page-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--graph-line);
+  background: #fff;
+}
+
+.create-page-bar h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--graph-navy);
+}
+
+.create-page-bar p {
+  margin: 4px 0 0;
+  color: var(--graph-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.create-home-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  overflow: hidden;
+}
+
+.create-main-column,
+.create-side-column {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.create-main-column {
+  padding: 16px 20px;
+}
+
+.create-side-column {
+  padding: 16px 18px;
+  background: #f8fafc;
 }
 
 .create-home-head {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .create-home-head h2 {
   margin: 0;
-  color: #0f1f3d;
-  font-size: 24px;
-  line-height: 1.2;
-  letter-spacing: 0;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.create-section-divider {
+  height: 0;
+  margin: 14px 0 12px;
+  border: none;
+  border-top: 1px solid var(--graph-line);
 }
 
 .create-field-grid {
@@ -1714,21 +1770,29 @@ h1, h2, h3, p {
 
 .inline-field span {
   display: block;
-  margin-bottom: 7px;
-  color: #334155;
-  font-size: 14px;
-  font-weight: 850;
+  margin-bottom: 6px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .inline-field input,
 .create-paper-search input {
   width: 100%;
-  height: 40px;
-  border: 1px solid #dbe6f0;
-  border-radius: 13px;
-  background: #fff;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: #f1f5f9;
   color: #1e293b;
   outline: none;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.inline-field input:focus,
+.create-paper-search input:focus {
+  background: #fff;
+  border-color: var(--graph-blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .inline-field input {
@@ -1749,14 +1813,14 @@ h1, h2, h3, p {
 
 .name-suggest-btn {
   flex-shrink: 0;
-  height: 40px;
+  height: 36px;
   padding: 0 12px;
   white-space: nowrap;
 }
 
 .create-paper-toolbar {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 10px;
@@ -1764,23 +1828,15 @@ h1, h2, h3, p {
 
 .create-paper-toolbar strong,
 .selected-paper-box strong,
-.create-mode-box strong,
-.create-preview-card h3 {
-  color: #14233b;
-  font-size: 14px;
-  font-weight: 850;
+.create-mode-box strong {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .create-paper-toolbar span {
-  display: block;
-  margin-top: 3px;
-  color: #7b8aa0;
+  color: #64748b;
   font-size: 12px;
-}
-
-.create-paper-toolbar b {
-  color: #0f6b83;
-  font-size: 13px;
 }
 
 .create-paper-search {
@@ -1796,16 +1852,55 @@ h1, h2, h3, p {
 
 .inline-paper-option {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: flex-start;
-  padding: 12px 4px;
-  border-bottom: 1px solid #edf3f8;
+  padding: 14px 10px;
+  margin-bottom: 4px;
+  border-radius: 8px;
   cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.inline-paper-option:hover {
+  background-color: #f1f5f9;
+}
+
+.paper-row-body {
+  min-width: 0;
+}
+
+.paper-row-hint {
+  display: block;
+  margin-top: 4px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.4;
+}
+
+.paper-ready-badge {
+  flex-shrink: 0;
+  margin-top: 2px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.paper-ready-badge.processing {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.paper-ready-badge.failed {
+  background: #fee2e2;
+  color: #b91c1c;
 }
 
 .inline-paper-option.checked {
-  background: #f4f7fb;
+  background: #eef2f6;
 }
 
 .inline-paper-option input {
@@ -1816,7 +1911,8 @@ h1, h2, h3, p {
 .inline-paper-option strong {
   display: -webkit-box;
   color: #1e293b;
-  font-size: 13.5px;
+  font-size: 13px;
+  font-weight: 600;
   line-height: 1.42;
   overflow: hidden;
   -webkit-box-orient: vertical;
@@ -1831,36 +1927,23 @@ h1, h2, h3, p {
   line-height: 1.45;
 }
 
-.create-preview-card {
-  display: flex;
-  flex-direction: column;
-  padding: 18px;
-  overflow: hidden;
-}
-
-.create-preview-card h3 {
-  margin: 0 0 8px;
-}
-
-.create-preview-card > p {
-  margin: 0 0 14px;
-  color: #617286;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
 .preview-stat-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 0;
+  margin-bottom: 12px;
+  border: 1px solid var(--graph-line);
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .preview-stat-row div {
-  padding: 12px;
-  border: 1px solid #edf3f8;
-  border-radius: 14px;
-  background: #fbfdff;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.preview-stat-row div + div {
+  border-left: 1px solid var(--graph-line);
 }
 
 .preview-stat-row b,
@@ -1869,31 +1952,39 @@ h1, h2, h3, p {
 }
 
 .preview-stat-row b {
-  color: #0f6b83;
-  font-size: 18px;
+  color: var(--graph-navy);
+  font-size: 16px;
+  font-weight: 600;
 }
 
 .preview-stat-row span {
-  margin-top: 4px;
-  color: #7b8aa0;
-  font-size: 12px;
+  margin-top: 2px;
+  color: var(--graph-muted);
+  font-size: 11px;
 }
 
 .selected-paper-box {
-  margin-bottom: 14px;
+  flex: 1;
+  min-height: 0;
+  margin-bottom: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
-.selected-paper-box p,
-.create-help-text {
-  color: #718096;
-  font-size: 12.5px;
-  line-height: 1.55;
+.create-empty-note {
+  color: var(--graph-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 8px 0 0;
 }
 
 .selected-paper-list {
-  display: grid;
-  gap: 7px;
-  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  margin-top: 8px;
+  overflow-y: auto;
 }
 
 .selected-paper-list button {
@@ -1901,12 +1992,41 @@ h1, h2, h3, p {
   justify-content: space-between;
   gap: 10px;
   padding: 8px 10px;
-  border: 1px solid #edf3f8;
-  border-radius: 12px;
-  background: #fff;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   color: #334155;
   text-align: left;
   cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.selected-paper-list button:hover {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.paper-list-enter-active,
+.paper-list-leave-active {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.paper-list-move {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.paper-list-enter-from {
+  opacity: 0;
+  transform: translateX(15px);
+}
+
+.paper-list-leave-to {
+  opacity: 0;
+  transform: translateX(-15px);
+}
+
+.paper-list-leave-active {
+  position: absolute;
+  width: calc(100% - 4px);
 }
 
 .selected-paper-list span {
@@ -1930,39 +2050,44 @@ h1, h2, h3, p {
 }
 
 .create-mode-box {
-  margin-top: auto;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
   padding-top: 12px;
-  border-top: 1px solid #edf3f8;
+  border-top: 1px solid var(--graph-line);
 }
 
 .create-mode-box label {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 8px;
-  margin-top: 10px;
-  color: #607086;
-  font-size: 12.5px;
-  line-height: 1.55;
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .create-mode-box input {
-  margin-top: 3px;
-  accent-color: #2563eb;
+  margin-top: 2px;
+  accent-color: var(--graph-blue);
+}
+
+.create-action-block {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--graph-line);
 }
 
 .create-submit-btn,
 .create-library-btn {
   width: 100%;
-  height: 42px;
-  border-radius: 13px;
-  font-weight: 850;
+  height: 38px;
+  border-radius: 8px;
+  font-weight: 600;
   cursor: pointer;
 }
 
 .create-submit-btn {
   border: none;
-  background: #2563eb;
+  background: var(--graph-blue);
   color: #fff;
 }
 
@@ -1972,19 +2097,19 @@ h1, h2, h3, p {
 }
 
 .create-library-btn {
-  margin-top: 9px;
-  border: 1px solid #dbe6f0;
+  margin-top: 8px;
+  border: 1px solid var(--graph-line);
   background: #fff;
-  color: #40566c;
-}
-
-.create-help-text {
-  margin: 12px 0 0;
+  color: #475569;
 }
 
 @media (max-width: 1180px) {
-  .create-home-shell {
+  .create-home-body {
     grid-template-columns: 1fr;
+  }
+
+  .create-side-column {
+    border-top: none;
   }
 }
 
@@ -2106,37 +2231,40 @@ h1, h2, h3, p {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 12px;
-  padding: 0 14px 16px;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 0;
+  padding: 0;
   overflow: hidden;
+  background: #fff;
+  border-top: 1px solid var(--graph-line);
 }
 
-.graph-workspace.state-low {
-  grid-template-columns: minmax(0, 1fr) 300px;
+.graph-workspace.panel-detail {
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
 }
 
-.graph-workspace.state-weak {
-  grid-template-columns: minmax(0, 1fr) 300px;
-}
-
+.graph-workspace.state-low,
+.graph-workspace.state-weak,
 .graph-workspace.state-empty {
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns: minmax(0, 1fr) 320px;
 }
 
-.graph-canvas-card,
-.detail-panel {
-  min-height: 0;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(221, 230, 240, 0.92);
-  border-radius: 22px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.045);
+.graph-workspace.state-low.panel-detail,
+.graph-workspace.state-weak.panel-detail,
+.graph-workspace.state-empty.panel-detail {
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
 }
 
 .graph-canvas-card {
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: #fff;
+  border: none;
+  border-right: 1px solid var(--graph-line);
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .canvas-header {
@@ -2210,11 +2338,24 @@ h1, h2, h3, p {
   line-height: 1;
 }
 
-.filter-row select {
+.relation-only-filter select,
+.canvas-header .filter-row select {
   width: 152px;
   height: 38px;
   padding: 0 36px 0 14px;
-  border-radius: 14px;
+  border: 1px solid #dbe6f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #1e293b;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.relation-only-filter select:focus,
+.canvas-header .filter-row select:focus {
+  border-color: rgba(37, 99, 235, 0.55);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12), 0 10px 30px rgba(0, 0, 0, 0.08);
 }
 
 .score-filter {
@@ -2560,8 +2701,9 @@ h1, h2, h3, p {
   display: flex;
   flex-direction: column;
   background: #fff;
-  border-radius: 28px;
-  box-shadow: 0 34px 90px rgba(15, 23, 42, 0.24);
+  border-radius: 12px;
+  border: 1px solid var(--graph-line);
+  box-shadow: none;
   overflow: hidden;
 }
 
@@ -2811,21 +2953,15 @@ h1, h2, h3, p {
 @media (max-width: 1380px) {
   .graph-workspace,
   .graph-workspace.state-low,
-  .graph-workspace.state-empty {
-    grid-template-columns: minmax(0, 1fr) 320px;
-    gap: 12px;
-    padding: 0 14px 16px;
-  }
+  .graph-workspace.state-empty,
   .graph-workspace.state-weak {
-    grid-template-columns: minmax(0, 1fr) 344px;
-    gap: 12px;
-    padding: 0 14px 16px;
+    grid-template-columns: minmax(0, 1fr) 300px;
   }
-  .graph-sidebar {
-    width: 278px;
-    min-width: 278px;
-    padding-left: 14px;
-    padding-right: 14px;
+  .graph-workspace.panel-detail,
+  .graph-workspace.state-low.panel-detail,
+  .graph-workspace.state-weak.panel-detail,
+  .graph-workspace.state-empty.panel-detail {
+    grid-template-columns: minmax(0, 1fr) 340px;
   }
   .toolbar-actions {
     gap: 8px;

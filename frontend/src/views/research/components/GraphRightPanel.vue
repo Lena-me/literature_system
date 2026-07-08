@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type {
   LiteratureGraph,
   LiteratureGraphEdge,
@@ -58,11 +58,29 @@ const emit = defineEmits<{
   (event: 'openPaper', node: LiteratureGraphNode): void
   (event: 'createReport', node: LiteratureGraphNode): void
   (event: 'compareGraph'): void
+  (event: 'backToOverview'): void
 }>()
 
 const selectedNode = computed(() => props.selectedPanel.kind === 'node' ? props.selectedPanel.node : null)
 const selectedEdge = computed(() => props.selectedPanel.kind === 'edge' ? props.selectedPanel.edge : null)
 const isOverview = computed(() => props.panelMode === 'overview')
+const actionRailExpanded = ref(false)
+
+watch(selectedNode, node => {
+  actionRailExpanded.value = false
+})
+
+function toggleActionRail() {
+  actionRailExpanded.value = !actionRailExpanded.value
+}
+
+function runNodeAction(action: 'open' | 'report' | 'compare') {
+  if (!selectedNode.value) return
+  if (action === 'open') emit('openPaper', selectedNode.value)
+  else if (action === 'report') emit('createReport', selectedNode.value)
+  else emit('compareGraph')
+  actionRailExpanded.value = false
+}
 
 const bestEdge = computed(() => [...props.filteredEdges].sort((a, b) => (b.score || 0) - (a.score || 0))[0] || null)
 const bestPairLabel = computed(() => {
@@ -102,18 +120,15 @@ const overviewSummaryText = computed(() => {
 })
 
 const emptyTitle = computed(() => {
-  if (props.totalEdges > 0 && props.filteredEdges.length === 0) return '当前筛选下暂无可见连接'
-  return '当前论文之间关系较弱'
+  if (props.totalEdges > 0 && props.filteredEdges.length === 0) return '当前筛选下暂无可见关联'
+  return '文献之间的关联较弱'
 })
 
 const emptyDescription = computed(() => {
   if (props.totalEdges > 0 && props.filteredEdges.length === 0) {
-    if (props.emptyReason === 'threshold') {
-      return `当前图谱共有 ${props.totalEdges} 条关系，但关系阈值过滤后未显示。`
-    }
-    return `当前图谱共有 ${props.totalEdges} 条关系，但当前筛选条件下未显示。`
+    return '请尝试切换关联类型，或放宽筛选条件。'
   }
-  return '系统暂未找到稳定的论文关系链路。'
+  return '系统暂未发现明显的研究关联，可补充同主题文献后重试。'
 })
 
 const coreNodes = computed(() => {
@@ -145,11 +160,11 @@ function shortTitle(node?: LiteratureGraphNode) {
 
 const relationFilterLabel = computed(() => {
   const labels: Record<string, string> = {
-    all: '全部关系',
+    all: '全部关联',
     strong: '强关联',
     weak: '弱关联',
-    semantic: '语义相似',
-    keyword: '关键词重合',
+    semantic: '语义相近',
+    keyword: '关键词相近',
     method: '方法相近',
   }
   return labels[props.relationFilter] || '当前筛选'
@@ -163,8 +178,9 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 </script>
 
 <template>
-  <aside class="detail-panel">
+  <aside class="detail-panel" :class="{ 'node-detail-mode': !!selectedNode }">
     <template v-if="props.panelMode === 'empty'">
+      <div class="detail-scroll">
       <div class="panel-section hero-summary state-card">
         <p class="eyebrow">当前状态</p>
         <h2>{{ emptyTitle }}</h2>
@@ -172,32 +188,30 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
       </div>
 
       <div v-if="props.totalEdges > 0" class="panel-section">
-        <h3>为什么看不到边</h3>
+        <h3>为什么看不到连线</h3>
         <ul class="reason-list compact-list">
-          <li v-if="props.relationFilter !== 'all'">关系类型筛选为“{{ relationFilterLabel }}”。</li>
-          <li v-if="props.hiddenByThresholdCount">有 {{ props.hiddenByThresholdCount }} 条关系低于当前阈值 {{ props.minScore.toFixed(2) }}。</li>
-          <li v-if="props.hasOnlyWeakEdges">当前关系主要是弱关联，建议保留浅色虚线作为线索。</li>
-          <li v-if="!props.hiddenByThresholdCount && props.relationFilter === 'all'">当前可见关系被筛选条件清空。</li>
+          <li v-if="props.relationFilter !== 'all'">当前筛选为「{{ relationFilterLabel }}」。</li>
+          <li v-if="props.hasOnlyWeakEdges">当前关联整体偏弱，建议保留浅色虚线作为线索。</li>
+          <li v-if="!props.hiddenByThresholdCount && props.relationFilter === 'all'">当前筛选条件下没有可展示的关联。</li>
         </ul>
       </div>
 
       <div v-else class="panel-section">
         <h3>可能原因</h3>
         <ul class="reason-list compact-list">
-          <li>论文主题跨度较大。</li>
-          <li>方法路线或任务设置不同。</li>
-          <li>关键词重合较低。</li>
-          <li>论文数量较少，关系证据不足。</li>
+          <li>文献主题跨度较大</li>
+          <li>研究方法或应用场景不同</li>
+          <li>共同关键词较少</li>
+          <li>文献数量偏少，线索尚不充分</li>
         </ul>
       </div>
 
       <div class="panel-section">
-        <h3>下一步</h3>
+        <h3>建议</h3>
         <ol class="advice-list">
-          <li v-if="props.relationFilter !== 'all'">切换为“全部关系”。</li>
-          <li>降低关系阈值或保留弱关联。</li>
-          <li>继续添加同主题论文。</li>
-          <li>按研究任务或方法路线重新分组。</li>
+          <li v-if="props.relationFilter !== 'all'">切换为「全部关联」查看</li>
+          <li>补充同主题、同任务的文献</li>
+          <li>按研究方向重新分组后再生成</li>
         </ol>
       </div>
 
@@ -207,9 +221,11 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
           <span v-for="kw in overviewKeywords.slice(0, 8)" :key="kw">{{ kw }}</span>
         </div>
       </div>
+      </div>
     </template>
 
     <template v-else-if="isOverview">
+      <div class="detail-scroll">
       <template v-if="props.displayState === 'empty'">
         <div class="panel-section hero-summary state-card">
           <p class="eyebrow">当前状态</p>
@@ -287,17 +303,17 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
       <template v-else-if="props.displayState === 'weak'">
         <div class="panel-section state-summary weak-card">
-          <h3>弱关联图谱</h3>
-          <p>当前论文之间主要是浅层或弱关系，画布以虚线和浅色保留这些线索。</p>
-          <p class="muted">这不代表没有价值，而是需要按任务或方法重新聚焦。</p>
+          <h3>关联线索较少</h3>
+          <p>当前文献之间以浅层关联为主，画布会以虚线保留这些线索。</p>
+          <p class="muted">这不代表没有价值，可按研究方向重新聚焦后再看。</p>
         </div>
 
         <div class="panel-section compact-panel">
           <h3>可能原因</h3>
           <ul class="reason-list compact-list">
-            <li>主题边界较远。</li>
-            <li>关键词重合度较低。</li>
-            <li>研究方法或应用场景差异较大。</li>
+            <li>主题边界较远</li>
+            <li>共同关键词较少</li>
+            <li>方法或应用场景差异较大</li>
           </ul>
         </div>
 
@@ -306,7 +322,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
           <div class="organize-list">
             <span>按研究任务分组</span>
             <span>按方法路线分组</span>
-            <span>重新选择同主题论文</span>
+            <span>补充同主题文献</span>
           </div>
         </div>
 
@@ -326,14 +342,14 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
         </div>
 
         <div class="panel-section">
-          <h3>关系分布</h3>
+          <h3>关联概况</h3>
           <div class="summary-grid compact-stats">
-            <div><b>{{ props.graphStats.paperCount }}</b><span>论文</span></div>
+            <div><b>{{ props.graphStats.paperCount }}</b><span>文献</span></div>
             <div><b>{{ props.graphStats.strongCount }}</b><span>强</span></div>
             <div><b>{{ props.graphStats.mediumCount }}</b><span>中</span></div>
             <div><b>{{ props.graphStats.weakCount }}</b><span>弱</span></div>
           </div>
-          <p class="muted">共识别 {{ props.totalEdges }} 条论文关系，依据相似度、关键词重合和方法/任务线索判断。</p>
+          <p class="muted">共识别 {{ props.totalEdges }} 组研究关联。</p>
         </div>
 
         <div class="panel-section">
@@ -345,7 +361,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
         </div>
 
         <div class="panel-section">
-          <h3>核心论文</h3>
+          <h3>核心文献</h3>
           <button
             v-for="paper in coreNodes"
             :key="paper.id"
@@ -355,11 +371,11 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
             <strong>{{ shortTitle(paper) }}</strong>
             <span>{{ props.formatAuthors(paper.authors) }} · {{ paper.year || '年份未解析' }}</span>
           </button>
-          <p v-if="!coreNodes.length" class="muted">暂无核心论文。</p>
+          <p v-if="!coreNodes.length" class="muted">暂无核心文献。</p>
         </div>
 
         <div v-if="weakNodes.length" class="panel-section">
-          <h3>关联较弱论文</h3>
+          <h3>关联偏弱文献</h3>
           <button
             v-for="paper in weakNodes"
             :key="paper.id"
@@ -367,12 +383,12 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
             @click="emit('selectNodeById', paper.id)"
           >
             <strong>{{ shortTitle(paper) }}</strong>
-            <span>当前只形成弱关联线索</span>
+            <span>目前仅形成浅层线索</span>
           </button>
         </div>
 
         <div class="panel-section">
-          <h3>关系解释</h3>
+          <h3>关联说明</h3>
           <button
             v-for="edge in props.filteredEdges.slice(0, 4)"
             :key="edge.id"
@@ -382,72 +398,87 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
             <span>{{ props.edgeLabel(edge) }} · {{ props.strengthText(edge.strength) }}</span>
             <strong>{{ props.findNode(edge.source)?.label || '论文 A' }} - {{ props.findNode(edge.target)?.label || '论文 B' }}</strong>
           </button>
-          <p v-if="!props.filteredEdges.length" class="muted">暂无可解释关系，可切换关系类型查看其他关联。</p>
+          <p v-if="!props.filteredEdges.length" class="muted">暂无可展示的关联说明，可切换筛选条件查看。</p>
         </div>
       </template>
+      </div>
     </template>
 
     <template v-else-if="selectedNode">
-      <div class="panel-section paper-head">
-        <h2 class="paper-title">{{ selectedNode.title }}</h2>
-        <p>{{ props.formatAuthors(selectedNode.authors) }}</p>
-        <div class="paper-meta-line">
-          <span>{{ selectedNode.year || '年份未解析' }}</span>
-          <span>{{ selectedNode.journal_conf || '来源未知' }}</span>
-          <span>{{ props.parseStatusText(selectedNode.parse_status) }}</span>
+      <div class="detail-scroll node-detail-body">
+        <button type="button" class="back-link node-back-link" @click="emit('backToOverview')">← 返回概览</button>
+
+        <div class="paper-head-flat">
+          <h2 class="paper-title">{{ selectedNode.title }}</h2>
+          <p class="paper-authors">{{ props.formatAuthors(selectedNode.authors) }}</p>
+          <div class="paper-meta-line">
+            <span>{{ selectedNode.year || '年份待补充' }}</span>
+            <span>{{ selectedNode.journal_conf || '来源待补充' }}</span>
+            <span>{{ props.parseStatusText(selectedNode.parse_status) }}</span>
+          </div>
         </div>
+
+        <div class="tag-list compact">
+          <span v-for="kw in selectedNode.keywords || []" :key="kw">{{ kw }}</span>
+          <span v-if="!(selectedNode.keywords || []).length" class="tag-muted">暂无关键词</span>
+        </div>
+
+        <section class="detail-block">
+          <h3>摘要</h3>
+          <p class="long-text readable-text">{{ selectedNode.abstract || '该论文暂无摘要信息。' }}</p>
+        </section>
+
+        <section class="detail-block detail-block-last">
+          <h3>研究要点</h3>
+          <dl class="paper-points-flat">
+            <div class="point-row">
+              <dt>研究问题</dt>
+              <dd>{{ selectedNode.research_question || '-' }}</dd>
+            </div>
+            <div class="point-row">
+              <dt>方法</dt>
+              <dd>{{ selectedNode.method || '-' }}</dd>
+            </div>
+            <div class="point-row">
+              <dt>主要结果</dt>
+              <dd>{{ selectedNode.main_results || '-' }}</dd>
+            </div>
+          </dl>
+        </section>
       </div>
 
-      <div class="tag-list compact">
-        <span v-for="kw in selectedNode.keywords || []" :key="kw">{{ kw }}</span>
-        <span v-if="!(selectedNode.keywords || []).length">暂无关键词</span>
-      </div>
-
-      <div class="paper-abstract-block plain-abstract">
-        <h3>摘要</h3>
-        <p class="long-text">{{ selectedNode.abstract || '该论文暂无摘要信息。' }}</p>
-      </div>
-
-      <div class="panel-section">
-        <h3>研究要点</h3>
-        <dl class="paper-points">
-          <dt>研究问题</dt><dd>{{ selectedNode.research_question || '暂无抽取结果' }}</dd>
-          <dt>方法</dt><dd>{{ selectedNode.method || '暂无抽取结果' }}</dd>
-          <dt>主要结果</dt><dd>{{ selectedNode.main_results || '暂无抽取结果' }}</dd>
-        </dl>
-      </div>
-
-      <div class="panel-section">
-        <h3>相关论文</h3>
+      <div
+        class="detail-action-rail"
+        :class="{ expanded: actionRailExpanded }"
+        aria-label="快捷操作"
+      >
         <button
-          v-for="edge in props.relatedEdgesForNode(selectedNode)"
-          :key="edge.id"
-          class="related-paper"
-          @click="emit('selectEdge', edge)"
+          type="button"
+          class="detail-action-rail-handle"
+          :aria-expanded="actionRailExpanded"
+          aria-label="展开或收起快捷操作"
+          @click.stop="toggleActionRail"
         >
-          <strong>{{ props.otherNodeTitle(edge, selectedNode) }}</strong>
-          <span>{{ props.edgeLabel(edge) }} · {{ props.strengthText(edge.strength) }}</span>
+          <span class="handle-bar" />
+          <span class="handle-bar" />
+          <span class="handle-bar" />
         </button>
-        <p v-if="!props.relatedEdgesForNode(selectedNode).length" class="muted">当前筛选下暂无关联论文，可切换为全部关系查看弱关联线索。</p>
-      </div>
-
-      <div class="panel-section">
-        <h3>操作</h3>
-        <div class="action-row">
-          <button @click="emit('openPaper', selectedNode)">打开论文</button>
-          <button @click="emit('createReport', selectedNode)">生成研读报告</button>
-          <button @click="emit('compareGraph')">加入多文献对比</button>
+        <div class="detail-action-rail-menu">
+          <button type="button" class="detail-action-tab" @click="runNodeAction('open')">打开论文原文</button>
+          <button type="button" class="detail-action-tab" @click="runNodeAction('report')">生成研读报告</button>
+          <button type="button" class="detail-action-tab" @click="runNodeAction('compare')">加入多文献对比</button>
         </div>
       </div>
     </template>
 
     <template v-else-if="selectedEdge">
-      <div class="panel-section edge-head">
+      <header class="detail-topbar edge-topbar">
+        <button type="button" class="back-link" @click="emit('backToOverview')">← 返回概览</button>
         <p class="eyebrow">关系解释</p>
-        <h2>关系解释</h2>
-        <p>{{ props.strengthText(selectedEdge.strength) }} · 强度 {{ selectedEdge.score.toFixed(2) }}</p>
-      </div>
+        <h2 class="edge-title">{{ props.strengthText(selectedEdge.strength) }} · 强度 {{ selectedEdge.score.toFixed(2) }}</h2>
+      </header>
 
+      <div class="detail-scroll">
       <div class="edge-papers">
         <button @click="emit('selectNodeById', selectedEdge.source)">
           {{ props.findNode(selectedEdge.source)?.title || '论文 A' }}
@@ -490,10 +521,11 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
       <div class="panel-section">
         <h3>操作</h3>
-        <div class="action-row">
-          <button @click="emit('selectEdge', selectedEdge)">查看证据</button>
-          <button @click="emit('compareGraph')">加入对比</button>
+        <div class="action-stack inline-actions">
+          <button type="button" class="action-secondary" @click="emit('selectEdge', selectedEdge)">查看证据</button>
+          <button type="button" class="action-secondary" @click="emit('compareGraph')">加入对比</button>
         </div>
+      </div>
       </div>
     </template>
   </aside>
@@ -501,15 +533,283 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 <style scoped>
 .detail-panel {
+  --graph-blue: #2563eb;
   min-height: 0;
-  padding: 12px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   word-break: break-word;
-  background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(221, 230, 240, 0.92);
-  border-radius: 22px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.045);
+  background: #fff;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   font-size: 13.5px;
+}
+
+.detail-panel.node-detail-mode {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.detail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 18px 20px;
+}
+
+.detail-topbar {
+  flex-shrink: 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.edge-topbar .edge-title {
+  margin: 6px 0 0;
+  color: #14233b;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.back-link:hover {
+  color: #2563eb;
+}
+
+.node-back-link {
+  margin-bottom: 12px;
+}
+
+.detail-action-rail {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  z-index: 30;
+  pointer-events: auto;
+}
+
+.detail-action-rail-handle,
+.detail-action-rail-menu {
+  pointer-events: auto;
+}
+
+.detail-action-rail-handle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 18px;
+  min-height: 96px;
+  padding: 12px 0;
+  border: none;
+  border-radius: 10px 0 0 10px;
+  background: #dbeafe;
+  cursor: pointer;
+  box-shadow: -2px 0 10px rgba(37, 99, 235, 0.12);
+  transition: background 0.15s ease;
+}
+
+.detail-action-rail-handle:hover {
+  background: #bfdbfe;
+}
+
+.detail-action-rail-handle .handle-bar {
+  display: block;
+  width: 3px;
+  height: 16px;
+  border-radius: 999px;
+  background: #2563eb;
+  opacity: 0.85;
+}
+
+.detail-action-rail-menu {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 8px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 136px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px 0 0 10px;
+  box-shadow: -8px 0 28px rgba(15, 23, 42, 0.1);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) translateX(12px);
+  transition:
+    transform 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.24s ease;
+}
+
+.detail-action-rail.expanded .detail-action-rail-menu {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(-50%) translateX(0);
+}
+
+.detail-action-tab {
+  padding: 9px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.detail-action-tab:hover {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.node-detail-body {
+  grid-column: 1;
+  grid-row: 1;
+  position: relative;
+  z-index: 1;
+  min-height: 0;
+  padding-right: 16px;
+}
+
+.detail-block {
+  padding-bottom: 0;
+  margin-bottom: 20px;
+  border-bottom: none;
+}
+
+.detail-block:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.detail-block h3 {
+  margin: 0 0 12px;
+  padding-left: 10px;
+  border-left: 3px solid var(--graph-blue);
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.section-hint {
+  margin: 0 0 12px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.paper-head-flat {
+  margin-bottom: 12px;
+}
+
+.paper-authors {
+  margin: 0 0 10px;
+  color: #506173;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.paper-points-flat {
+  margin: 0;
+}
+
+.point-row {
+  margin-bottom: 16px;
+  padding: 0;
+}
+
+.point-row:last-child {
+  margin-bottom: 0;
+}
+
+.point-row dt {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 3px solid var(--graph-blue);
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.point-row dd {
+  margin: 0;
+  color: #334155;
+  font-size: 13.5px;
+  line-height: 1.8;
+}
+
+.action-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.action-primary,
+.action-secondary {
+  width: 100%;
+  min-height: 40px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.action-primary {
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.action-primary:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.action-secondary {
+  border: 1px solid #dbe7f3;
+  background: #fff;
+  color: #2563eb;
+}
+
+.action-secondary:hover {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.inline-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tag-muted {
+  background: #f1f5f9 !important;
+  color: #94a3b8 !important;
 }
 
 .eyebrow {
@@ -521,18 +821,33 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 }
 
 .panel-section {
-  padding: 12px 13px;
-  margin-bottom: 10px;
-  border-radius: 15px;
-  background: #fbfdff;
-  border: 1px solid #edf3f8;
+  padding: 0 0 14px;
+  margin-bottom: 14px;
+  border: none;
+  border-bottom: 1px solid #edf3f8;
+  border-radius: 0;
+  background: transparent;
+}
+
+.panel-section:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 .hero-summary,
 .paper-head,
-.edge-head {
-  background: linear-gradient(135deg, #f7fbff, #f8fffd);
-  border-color: #e0edf5;
+.edge-head,
+.state-summary,
+.low-summary,
+.normal-summary,
+.weak-card,
+.emphasis-section,
+.progress-card,
+.organize-section {
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 .panel-section h2,
@@ -551,22 +866,16 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   line-height: 1.25;
 }
 
-.state-summary,
-.hero-summary,
-.low-summary,
-.normal-summary,
-.weak-card {
-  background: #fbfdff;
-  border-color: #e6edf5;
-  box-shadow: none;
-}
-
 .state-summary h3 {
   margin: 0 0 10px;
   color: #1a2a42;
   font-size: 14px;
   line-height: 1.25;
   font-weight: 800;
+}
+
+.weak-card {
+  border-bottom: 1px solid #edf3f8;
 }
 
 .paper-head .tag-list {
@@ -598,12 +907,6 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   font-size: 13px;
   line-height: 1.6;
 }
-
-.weak-card {
-  border-color: #ecd6b3;
-  background: #fdfaf4;
-}
-
 
 .panel-section p {
   margin-top: 0;
@@ -659,9 +962,9 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 .summary-grid div,
 .two-metrics div {
-  padding: 11px;
-  border-radius: 14px;
-  background: #fff;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f8fafc;
   border: 1px solid #edf3f8;
 }
 
@@ -719,21 +1022,20 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 .related-paper,
 .relation-line-item {
   width: 100%;
-  padding: 10px 11px;
-  margin-top: 7px;
+  padding: 10px 12px;
+  margin-top: 8px;
   text-align: left;
-  border-radius: 13px;
-  background: #fff;
+  border-radius: 6px;
+  background: #f8fafc;
   color: #1e293b;
   border: 1px solid #edf3f8;
-  transition: border 0.16s, transform 0.16s, box-shadow 0.16s;
+  transition: border-color 0.16s, background 0.16s;
 }
 
 .related-paper:hover,
 .relation-line-item:hover {
-  transform: translateY(-1px);
-  border-color: #c8d9ea;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  border-color: #bfdbfe;
+  background: #eff6ff;
 }
 
 .related-paper strong,
@@ -766,10 +1068,14 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 }
 
 .long-text {
-  margin: 0;
+  margin: 0 0 16px;
   color: #46586b;
-  line-height: 1.75;
+  line-height: 1.8;
   white-space: pre-wrap;
+}
+
+.readable-text:last-child {
+  margin-bottom: 0;
 }
 
 .paper-points {
@@ -828,9 +1134,9 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 .edge-papers button {
   min-height: 66px;
-  padding: 10px;
-  border-radius: 14px;
-  background: #fff;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f8fafc;
   color: #1e293b;
   border: 1px solid #dce5ee;
   line-height: 1.45;
@@ -841,11 +1147,11 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   line-height: 1.65;
 }
 
-.detail-panel::-webkit-scrollbar {
+.detail-scroll::-webkit-scrollbar {
   width: 6px;
 }
 
-.detail-panel::-webkit-scrollbar-thumb {
+.detail-scroll::-webkit-scrollbar-thumb {
   background: #cbd5e1;
   border-radius: 999px;
 }
@@ -981,7 +1287,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 .organize-list span {
   padding: 8px 10px;
-  border-radius: 12px;
+  border-radius: 6px;
   background: #f4f8fb;
   color: #344960;
   font-size: 12.5px;
