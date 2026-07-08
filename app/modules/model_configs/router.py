@@ -30,7 +30,7 @@ from app.services.model_config_service import (
 from app.services.model_monitor_service import attach_today_stats, build_model_detail
 from app.utils.json_utils import dumps, loads
 
-router = APIRouter(prefix='/model-configs', tags=['????'])
+router = APIRouter(prefix='/model-configs', tags=['模型管理'])
 
 
 class ModelConfigUpdateIn(BaseModel):
@@ -40,7 +40,7 @@ class ModelConfigUpdateIn(BaseModel):
     api_endpoint: str | None = None
     config: dict[str, Any] | None = None
     is_active: bool | None = None
-    scenario: Literal['parse', 'qa', 'report', 'tagging'] | None = None
+    scenario: Literal['parse', 'qa', 'report', 'tagging', 'monthly_report'] | None = None
     is_primary: bool | None = None
 
 
@@ -51,7 +51,7 @@ def _encryption_secret(settings: Settings) -> str:
 def _require_secret(settings: Settings) -> str:
     secret = _encryption_secret(settings)
     if not secret:
-        raise HTTPException(400, '??? MODEL_CONFIG_SECRET_KEY ? SECRET_KEY????? API Key')
+        raise HTTPException(400, '未配置 MODEL_CONFIG_SECRET_KEY 或 SECRET_KEY，无法保存 API Key')
     return secret
 
 
@@ -201,7 +201,7 @@ async def get_active_llm_runtime(
         return {
             'configured': False,
             'scenario': scenario,
-            'message': '????????????????????',
+            'message': '请在管理后台为该场景配置并启用大语言模型',
         }
     return {
         'configured': True,
@@ -226,7 +226,7 @@ async def get_model_detail(
 ):
     detail = await build_model_detail(db, model_id)
     if not detail:
-        raise HTTPException(status_code=404, detail='???????')
+        raise HTTPException(status_code=404, detail='模型配置不存在')
     settings = get_settings()
     obj = await db.get(ModelConfig, model_id)
     secret = _encryption_secret(settings)
@@ -247,7 +247,7 @@ async def update_model_config(
 ):
     obj = await db.get(ModelConfig, model_id)
     if not obj:
-        raise HTTPException(status_code=404, detail='???????')
+        raise HTTPException(status_code=404, detail='模型配置不存在')
 
     settings = get_settings()
     values = data.model_dump(exclude_unset=True)

@@ -15,7 +15,8 @@ from app.services.audit_service import audit_action, audit_action_standalone
 from app.services.auth_service import LoginGuard, VerificationCodeService
 
 class UpdateProfileIn(BaseModel):
-    username: str
+    username: str | None = None
+    signature: str | None = None
 
 router = APIRouter(prefix='/auth', tags=['认证'])
 
@@ -158,30 +159,68 @@ async def reset_password(data: ResetPasswordIn, request: Request, db: AsyncSessi
 
 @router.put('/profile')
 async def update_profile(data: UpdateProfileIn, request: Request, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    username = data.username.strip()
-    if not username:
-        raise HTTPException(400, '用户名不能为空')
-    if len(username) < 2 or len(username) > 20:
-        raise HTTPException(400, '用户名长度必须在2-20个字符之间')
+    changes = {}
     
-    exists = (
-        await db.execute(
-            select(User).where(User.username == username, User.id != user.id)
-        )
-    ).scalar_one_or_none()
+    if data.username is not None:
+        username = data.username.strip()
+        if not username:
+            raise HTTPException(400, '用户名不能为空')
+        if len(username) < 2 or len(username) > 20:
+            raise HTTPException(400, '用户名长度必须在2-20个字符之间')
+        
+        exists = (
+            await db.execute(
+                select(User).where(User.username == username, User.id != user.id)
+            )
+        ).scalar_one_or_none()
+        
+        if exists:
+            raise HTTPException(400, '该用户名已被使用')
+        
+        old_username = user.username
+        user.username = username
+        changes['username'] = {'old': old_username, 'new': username}
     
-    if exists:
-        raise HTTPException(400, '该用户名已被使用')
+    if data.signature is not None:
+        user.signature = data.signature.strip()[:200]
+        changes['signature'] = user.signature
     
-    old_username = user.username
-    user.username = username
+    if not changes:
+        raise HTTPException(400, '请提供要修改的内容')
+    
     await audit_action(
         db,
         user_id=user.id,
         module='auth',
         operation_type='update_profile',
-        content={'old_username': old_username, 'new_username': username},
+        content=changes,
         request=request,
     )
     await db.commit()
-    return {'message': '用户名修改成功', 'username': username}
+    return {'message': '修改成功', **{k: v['new'] if isinstance(v, dict) else v for k, v in changes.items()}}
+
+
+class ChangePasswordIn(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@router.put('/change-password')
+async def change_password(data: ChangePasswordIn, request: Request, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    if not verify_password(data.old_password, user.password_hash):
+        raise HTTPException(400, '旧密码不正确')
+    
+    if len(data.new_password) < 6:
+        raise HTTPException(400, '新密码长度至少为6位')
+    
+    user.password_hash = get_password_hash(data.new_password)
+    await audit_action(
+        db,
+        user_id=user.id,
+        module='auth',
+        operation_type='change_password',
+        content={'user_id': user.id},
+        request=request,
+    )
+    await db.commit()
+    return {'message': '密码修改成功'}

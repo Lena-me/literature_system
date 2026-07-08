@@ -1,4 +1,4 @@
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
@@ -6,14 +6,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user
 from app.db.mysql import get_db
 from app.models import User, LearningDuration
+from app.models.entities import BEIJING_TZ
 from app.schemas import UserOut
 
 router = APIRouter(prefix='/users', tags=['用户'])
 
 
 async def _bump_learning_duration(db: AsyncSession, user_id: int) -> int:
-    """同一用户同一天仅保留一条记录；合并历史重复行并 +1 分钟。"""
+    """同一用户同一天仅保留一条记录；合并历史重复行并 +1 分钟。
+    时间窗口去重：距离上次更新不足 55 秒时不增加，避免多标签页/频繁刷新导致重复计数。
+    """
     today = date.today()
+    now = datetime.now(BEIJING_TZ)
     year, week, _ = today.isocalendar()
     week_of_year = f'{year}-W{week:02d}'
     month_of_year = today.strftime('%Y-%m')
@@ -33,6 +37,13 @@ async def _bump_learning_duration(db: AsyncSession, user_id: int) -> int:
             record.duration_minutes += sum(r.duration_minutes for r in rows[1:])
             for duplicate in rows[1:]:
                 await db.delete(duplicate)
+
+        # 时间窗口去重：55秒内的重复请求不增加
+        if record.updated_at:
+            updated_at_aware = record.updated_at if record.updated_at.tzinfo else record.updated_at.replace(tzinfo=BEIJING_TZ)
+            if (now - updated_at_aware).total_seconds() < 55:
+                return record.duration_minutes
+
         record.duration_minutes += 1
         return record.duration_minutes
 

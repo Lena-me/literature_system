@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { LiteratureGraphEdge, LiteratureGraphNode } from '@/api/knowledge'
 
 interface LayoutNode extends LiteratureGraphNode {
@@ -72,11 +72,181 @@ const bestSharedKeywords = computed(() => {
 
 const paperKeywords = computed(() => props.singlePaper?.keywords?.slice(0, 8) || [])
 
-const svgViewBox = computed(() => {
-  if (props.displayState === 'weak') return '245 95 470 410'
-  if (props.displayState === 'low') return '125 55 700 490'
-  return '95 18 800 570'
+const canvasRef = ref<HTMLElement | null>(null)
+const panX = ref(0)
+const panY = ref(0)
+const zoom = ref(1)
+const isPanning = ref(false)
+const panMoved = ref(false)
+const panStart = ref({ x: 0, y: 0, panX: 0, panY: 0 })
+const activePointerId = ref<number | null>(null)
+
+const MIN_ZOOM = 0.35
+const MAX_ZOOM = 3
+
+const contentBounds = computed(() => {
+  const nodes = props.layoutNodes
+  if (!nodes.length) {
+    return { minX: 0, minY: 0, maxX: 960, maxY: 640, width: 960, height: 640, cx: 480, cy: 320 }
+  }
+
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+
+  for (const node of nodes) {
+    const labelPad = node.radius + 34
+    minX = Math.min(minX, node.x - node.radius - 24)
+    maxX = Math.max(maxX, node.x + node.radius + 24)
+    minY = Math.min(minY, node.y - node.radius - 24)
+    maxY = Math.max(maxY, node.y + labelPad)
+  }
+
+  const width = Math.max(320, maxX - minX)
+  const height = Math.max(240, maxY - minY)
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width,
+    height,
+    cx: (minX + maxX) / 2,
+    cy: (minY + maxY) / 2,
+  }
 })
+
+const svgViewBox = computed(() => {
+  const bounds = contentBounds.value
+  const pad = props.layoutNodes.length > 8 ? 56 : 40
+  return `${bounds.minX - pad} ${bounds.minY - pad} ${bounds.width + pad * 2} ${bounds.height + pad * 2}`
+})
+
+const viewportTransform = computed(() => {
+  const { cx, cy } = contentBounds.value
+  return `translate(${panX.value + cx} ${panY.value + cy}) scale(${zoom.value}) translate(${-cx} ${-cy})`
+})
+
+const zoomPercent = computed(() => `${Math.round(zoom.value * 100)}%`)
+
+watch(
+  () => [props.layoutNodes.length, props.filteredEdges.length, props.displayState],
+  () => resetView(),
+)
+
+function resetView() {
+  panX.value = 0
+  panY.value = 0
+  zoom.value = 1
+}
+
+function clampZoom(value: number) {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
+}
+
+function zoomBy(factor: number) {
+  zoom.value = clampZoom(zoom.value * factor)
+}
+
+function pixelDeltaToSvg(dx: number, dy: number) {
+  const svg = canvasRef.value?.querySelector('svg')
+  if (!svg) return { dx, dy }
+  const rect = svg.getBoundingClientRect()
+  const [, , vbWidth, vbHeight] = svgViewBox.value.split(' ').map(Number)
+  if (!rect.width || !rect.height) return { dx, dy }
+  return {
+    dx: (dx / rect.width) * vbWidth,
+    dy: (dy / rect.height) * vbHeight,
+  }
+}
+
+function onWheel(event: WheelEvent) {
+  event.preventDefault()
+  const factor = event.deltaY > 0 ? 0.92 : 1.08
+  zoom.value = clampZoom(zoom.value * factor)
+}
+
+function onWindowPointerEnd(event: PointerEvent) {
+  if (activePointerId.value != null && event.pointerId !== activePointerId.value) return
+  endPan()
+}
+
+function bindPanWindowListeners() {
+  window.addEventListener('pointerup', onWindowPointerEnd)
+  window.addEventListener('pointercancel', onWindowPointerEnd)
+}
+
+function unbindPanWindowListeners() {
+  window.removeEventListener('pointerup', onWindowPointerEnd)
+  window.removeEventListener('pointercancel', onWindowPointerEnd)
+}
+
+function endPan() {
+  if (!isPanning.value) return
+  isPanning.value = false
+  if (activePointerId.value != null && canvasRef.value) {
+    try {
+      canvasRef.value.releasePointerCapture(activePointerId.value)
+    } catch {
+      // ignore if capture was already released
+    }
+  }
+  activePointerId.value = null
+  unbindPanWindowListeners()
+}
+
+function onPanStart(event: PointerEvent) {
+  if (event.button !== 0) return
+  const target = event.target as Element | null
+  if (target?.closest('.node-group') || target?.closest('.edge-line') || target?.closest('.canvas-toolbar')) return
+
+  isPanning.value = true
+  panMoved.value = false
+  activePointerId.value = event.pointerId
+  panStart.value = {
+    x: event.clientX,
+    y: event.clientY,
+    panX: panX.value,
+    panY: panY.value,
+  }
+
+  bindPanWindowListeners()
+  try {
+    canvasRef.value?.setPointerCapture(event.pointerId)
+  } catch {
+    // pointer capture may fail in some browsers; window listeners still clean up
+  }
+}
+
+function onPanMove(event: PointerEvent) {
+  if (!isPanning.value) return
+  if (activePointerId.value != null && event.pointerId !== activePointerId.value) return
+  const dx = event.clientX - panStart.value.x
+  const dy = event.clientY - panStart.value.y
+  if (Math.abs(dx) > 4 || Math.abs(dy) > 4) panMoved.value = true
+  const delta = pixelDeltaToSvg(dx, dy)
+  panX.value = panStart.value.panX + delta.dx
+  panY.value = panStart.value.panY + delta.dy
+}
+
+function onPanEnd(event: PointerEvent) {
+  if (activePointerId.value != null && event.pointerId !== activePointerId.value) return
+  endPan()
+}
+
+function onLostPointerCapture() {
+  endPan()
+}
+
+onBeforeUnmount(() => {
+  endPan()
+})
+
+function onCanvasClick() {
+  if (panMoved.value) return
+  emit('select-summary')
+}
 
 function compactText(value?: string | null, fallback = '暂无抽取结果') {
   const text = (value || '').trim()
@@ -133,17 +303,42 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
 
   <template v-else>
     <div
+      ref="canvasRef"
       class="svg-shell"
-      :class="{ loading: props.loading, compact: props.displayState === 'low', weak: props.displayState === 'weak' }"
-      @click="emit('select-summary')"
+      :class="{
+        loading: props.loading,
+        compact: props.displayState === 'low',
+        weak: props.displayState === 'weak',
+        panning: isPanning,
+      }"
+      @wheel.prevent="onWheel"
+      @click="onCanvasClick"
+      @pointerdown="onPanStart"
+      @pointermove="onPanMove"
+      @pointerup="onPanEnd"
+      @pointercancel="onPanEnd"
+      @lostpointercapture="onLostPointerCapture"
     >
-      <svg :viewBox="svgViewBox" role="img" aria-label="文献关系图谱">
+      <div class="canvas-toolbar" @click.stop @pointerdown.stop>
+        <button type="button" class="canvas-tool-btn" title="缩小" @click="zoomBy(0.85)">−</button>
+        <span class="canvas-zoom-label">{{ zoomPercent }}</span>
+        <button type="button" class="canvas-tool-btn" title="放大" @click="zoomBy(1.15)">+</button>
+        <button type="button" class="canvas-tool-btn reset" title="适应画布" @click="resetView">适应</button>
+      </div>
+      <p class="canvas-hint">滚轮缩放 · 拖拽空白区域平移</p>
+
+      <svg
+        :viewBox="svgViewBox"
+        role="img"
+        aria-label="文献关系图谱"
+      >
         <defs>
           <filter id="nodeShadow" x="-40%" y="-40%" width="180%" height="180%">
             <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.16" />
           </filter>
         </defs>
 
+        <g :transform="viewportTransform">
         <g class="edges-layer">
           <line
             v-for="edge in props.layoutEdges"
@@ -159,6 +354,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
             stroke-linecap="round"
             class="edge-line"
             @click.stop="emit('select-edge', edge)"
+            @pointerdown.stop
           />
         </g>
 
@@ -169,6 +365,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
             class="node-group"
             :style="{ opacity: props.nodeOpacity(node) }"
             @click.stop="emit('select-node', node)"
+            @pointerdown.stop
           >
             <circle
               :cx="node.x"
@@ -204,6 +401,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
             <title>{{ node.title }}&#10;{{ props.formatAuthors(node.authors) }}&#10;本地中心性：{{ node.centrality ?? 0 }}</title>
           </g>
         </g>
+        </g>
       </svg>
 
       <div v-if="!props.filteredEdges.length && props.graphNodes.length > 1" class="canvas-empty-note">
@@ -227,8 +425,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
 </template>
 
 <style scoped>
-.svg-shell,
-.graph-empty-state {
+.svg-shell {
   position: relative;
   flex: 1;
   min-height: 0;
@@ -240,6 +437,74 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 253, 255, 0.96));
   border: 1px solid #edf3f8;
   overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+
+.svg-shell.panning {
+  cursor: grabbing;
+}
+
+.canvas-toolbar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+.canvas-tool-btn {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.canvas-tool-btn:hover {
+  background: #eef2ff;
+  color: #2563eb;
+}
+
+.canvas-tool-btn.reset {
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.canvas-zoom-label {
+  min-width: 42px;
+  text-align: center;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.canvas-hint {
+  position: absolute;
+  left: 16px;
+  bottom: 12px;
+  z-index: 2;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #94a3b8;
+  font-size: 11px;
+  pointer-events: none;
 }
 
 .svg-shell.compact svg {
@@ -267,6 +532,21 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   height: 100%;
   min-height: 530px;
   display: block;
+  user-select: none;
+}
+
+.graph-empty-state {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 6px 16px 0;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 48% 40%, rgba(20, 184, 166, 0.10), transparent 22%),
+    radial-gradient(circle at 70% 60%, rgba(37, 99, 235, 0.06), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 253, 255, 0.96));
+  border: 1px solid #edf3f8;
+  overflow: hidden;
 }
 
 .edge-line {

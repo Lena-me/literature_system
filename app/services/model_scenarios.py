@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from typing import Literal
 
-ScenarioId = Literal['parse', 'qa', 'report', 'tagging']
+ScenarioId = Literal['parse', 'qa', 'report', 'tagging', 'monthly_report']
 
 MODEL_SCENARIOS: list[dict[str, str]] = [
     {'id': 'parse', 'name': '文献结构化提取'},
     {'id': 'qa', 'name': '实时知识问答'},
     {'id': 'report', 'name': '科研综述生成'},
     {'id': 'tagging', 'name': '智能标签分类'},
+    {'id': 'monthly_report', 'name': '月度报告总结'},
 ]
 
 SCENARIO_IDS = {item['id'] for item in MODEL_SCENARIOS}

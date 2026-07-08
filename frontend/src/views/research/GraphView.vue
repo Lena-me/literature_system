@@ -228,8 +228,9 @@ const layoutNodes = computed<LayoutNode[]>(() => {
   const core = [...nodes].sort((a, b) => (b.centrality || 0) - (a.centrality || 0))[0]
   const coreId = nodes.length > 5 && totalEdges.value > 0 ? String(core.id) : ''
   const ringNodes = coreId ? sorted.filter(n => String(n.id) !== coreId) : sorted
-  const radiusX = nodes.length <= 5 ? 240 : 300
-  const radiusY = nodes.length <= 5 ? 180 : 210
+  const count = nodes.length
+  const radiusX = count <= 5 ? 240 : count <= 8 ? 300 : count <= 12 ? 360 : count <= 16 ? 430 : 500
+  const radiusY = count <= 5 ? 180 : count <= 8 ? 210 : count <= 12 ? 260 : count <= 16 ? 310 : 360
 
   const positioned: LayoutNode[] = []
   if (coreId) {

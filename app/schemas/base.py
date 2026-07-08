@@ -256,7 +256,7 @@ class ModelConfigIn(BaseModel):
     api_endpoint: str | None = None
     config: dict[str, Any] | None = None
     is_active: bool = True
-    scenario: Literal['parse', 'qa', 'report', 'tagging'] | None = None
+    scenario: Literal['parse', 'qa', 'report', 'tagging', 'monthly_report'] | None = None
     is_primary: bool = False
 
 class SchedulerConfigIn(BaseModel):

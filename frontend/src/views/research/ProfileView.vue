@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref, watch, computed } from 'vue'
+import { onMounted, ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { usePaperStore } from '@/stores/papers'
 import { featuresApi } from '@/api/features'
 import { authApi } from '@/api/auth'
 import * as echarts from 'echarts'
+import MarkdownIt from 'markdown-it'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
+
+const md = new MarkdownIt({ breaks: true, html: false })
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -21,8 +24,26 @@ const learningDuration = ref<any>(null)
 const showPhoneModal = ref(false)
 const showEmailModal = ref(false)
 const showUsernameModal = ref(false)
+const showPasswordModal = ref(false)
+const sidebarCollapsed = ref(false)
+const heatmapMode = ref<'upload' | 'focus'>('upload')
+const reportLoading = ref(false)
+const reportLoadingText = ref('正在生成报告...')
+const monthlyReportData = ref<any>(null)
+const reportSummaryRef = ref<HTMLElement | null>(null)
+const loadingPhrases = [
+  'AI 正在翻阅你本月挑灯夜读的文献...',
+  '正在分析你的知识图谱结构...',
+  '复盘本月科研问答记录中...',
+  '提炼你的研究脉络与进展...',
+  '正在生成个性化学习建议...',
+  '马上就好，AI正在推敲措辞...',
+]
 const editUsername = ref('')
-
+const oldPassword = ref('')
+const newPassword = ref('')
+const confirmPassword = ref('')
+const passwordError = ref('')
 const usernameError = ref('')
 
 const overview = ref<any>({ 
@@ -33,28 +54,13 @@ const overview = ref<any>({
   recent_records:[],
   keyword_cloud: {},
   upload_heatmap: { months: [], data: {}, max_value: 1 },
+  focus_heatmap: { months: [], data: {}, max_value: 1 },
   knowledge_domains: { count: 0, top_domains: [], tag_frequency: {}, cross_domain_rate: 0, total_papers: 0, cross_domain_papers: 0, sub_domain_granularity: 0 },
   deep_research_outputs: { reports: 0, comparisons: 0, graphs: 0 },
   question_traceability: { unique_paper_sources: 0 },
   keyword_evolution: { years: [], keywords: [] },
   recommended_domain: ''
 })
-
-const chartRef = ref<HTMLDivElement | null>(null)
-const chartInstance = ref<echarts.ECharts | null>(null)
-
-const colors = [
-  '#6366f1',
-  '#8b5cf6',
-  '#ec4899',
-  '#f43f5e',
-  '#f97316',
-  '#eab308',
-  '#22c55e',
-  '#14b8a6',
-  '#06b6d4',
-  '#3b82f6',
-]
 
 function validateUsername() {
   const name = editUsername.value.trim()
@@ -93,99 +99,36 @@ async function updateUsername() {
   }
 }
 
-function renderStreamgraph() {
-  if (!chartRef.value) return
-  if (chartInstance.value) {
-    chartInstance.value.dispose()
+async function updatePassword() {
+  if (!oldPassword.value) {
+    passwordError.value = '请输入旧密码'
+    return
   }
-  chartInstance.value = echarts.init(chartRef.value)
-
-  const evolution = overview.value.keyword_evolution || { years: ['2024', '2025', '2026'], keywords: [] }
-  const years = evolution.years
-  const keywords = evolution.keywords.slice(0, 8)
-
-  const series: any[] = keywords.map((kw: { keyword: string; data: { year: string; value: number }[] }, index: number) => ({
-    name: kw.keyword,
-    type: 'line',
-    stack: 'total',
-    smooth: true,
-    lineStyle: { width: 0 },
-    showSymbol: false,
-    areaStyle: {
-      opacity: 0.8,
-      color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-        { offset: 0, color: colors[index % colors.length] },
-        { offset: 1, color: colors[index % colors.length] + '20' }
-      ])
-    },
-    emphasis: {
-      focus: 'series'
-    },
-    data: kw.data.map((d: any) => d.value)
-  }))
-
-  chartInstance.value.setOption({
-    backgroundColor: 'transparent',
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: {
-        type: 'cross',
-        label: {
-          backgroundColor: '#6a7985'
-        }
-      },
-      formatter: (params: any) => {
-        let result = `<div style="font-weight:bold;margin-bottom:8px;">${years[params[0].dataIndex]}</div>`
-        let total = 0
-        params.forEach((p: any) => {
-          total += p.value
-          if (p.value > 0) {
-            result += `<div style="display:flex;justify-content:space-between;gap:20px;margin:4px 0;">
-              <span style="color:${p.color};">● ${p.seriesName}</span>
-              <span style="font-weight:bold;">${p.value}</span>
-            </div>`
-          }
-        })
-        result += `<div style="border-top:1px solid #eee;margin-top:8px;padding-top:8px;font-weight:bold;">总计: ${total}</div>`
-        return result
-      }
-    },
-    legend: {
-      data: keywords.map((kw: { keyword: string; data: { year: string; value: number }[] }) => kw.keyword),
-      bottom: 0,
-      textStyle: {
-        fontSize: 12,
-        color: '#64748b'
-      },
-      itemWidth: 12,
-      itemHeight: 12
-    },
-    grid: {
-      left: '3%',
-      right: '4%',
-      top: '8%',
-      bottom: '20%',
-      containLabel: true
-    },
-    xAxis: {
-      type: 'category',
-      boundaryGap: false,
-      data: years,
-      axisLine: { lineStyle: { color: '#e2e8f0' } },
-      axisLabel: { color: '#64748b', fontSize: 13 }
-    },
-    yAxis: {
-      type: 'value',
-      axisLine: { show: false },
-      axisTick: { show: false },
-      splitLine: { lineStyle: { color: '#f1f5f9' } },
-      axisLabel: { color: '#94a3b8', fontSize: 12 }
-    },
-    series
-  })
+  if (!newPassword.value) {
+    passwordError.value = '请输入新密码'
+    return
+  }
+  if (newPassword.value.length < 6) {
+    passwordError.value = '新密码长度至少为6位'
+    return
+  }
+  if (newPassword.value !== confirmPassword.value) {
+    passwordError.value = '两次输入的密码不一致'
+    return
+  }
+  passwordError.value = ''
+  try {
+    await authApi.changePassword({ old_password: oldPassword.value, new_password: newPassword.value })
+    showPasswordModal.value = false
+    oldPassword.value = ''
+    newPassword.value = ''
+    confirmPassword.value = ''
+  } catch (error: any) {
+    passwordError.value = error.response?.data?.detail || '修改失败'
+  }
 }
 
-// ============ 知识域覆盖雷达图模态框 ============
+// ============ 学科覆盖雷达图模态框 ============
 const showDomainModal = ref(false)
 const selectedDomainIndex = ref(0)
 const radarChartRef = ref<HTMLDivElement | null>(null)
@@ -230,24 +173,182 @@ function renderRadarChart() {
     return
   }
 
-  // 取前 8 个子领域，避免雷达图过于拥挤
   const subDomains = domain.sub_domains.slice(0, 8)
-  const totalSubFreq = subDomains.reduce((sum: number, s: any) => sum + s.frequency, 0)
+  const maxFreq = Math.max(...subDomains.map((s: any) => s.frequency), 1)
 
-  // 计算每个子领域的相对占比（百分比）
+  const radarColors = ['#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f97316']
+  const color = domain.is_interdisciplinary ? '#8b5cf6' : radarColors[selectedDomainIndex.value % radarColors.length]
+
+  if (domain.is_interdisciplinary) {
+    const count = subDomains.length
+    const allSubDomains = subDomains
+
+    const minF = Math.min(...allSubDomains.map((s: any) => s.frequency))
+    const maxF = maxFreq
+    const freqRange = maxF - minF || 1
+
+    const scatterData = allSubDomains.map((sd: any, i: number) => {
+      const baseAngle = (i / count) * 360
+      const angleJitter = (Math.random() - 0.5) * 40
+      const angle = (baseAngle + angleJitter + 360) % 360
+
+      const freqRatio = (sd.frequency - minF) / freqRange
+      const radiusBase = 75 - freqRatio * 50
+      const stagger = (i % 3) * 4
+      const radius = Math.max(22, Math.min(78, radiusBase + stagger))
+
+      const size = Math.max(6, Math.min(18, sd.frequency * 2.5 + 6))
+
+      return {
+        value: [radius, angle],
+        name: sd.name,
+        symbolSize: size,
+        frequency: sd.frequency,
+        papers: sd.papers || []
+      }
+    })
+
+    radarChartInstance.value.setOption({
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'item',
+        formatter: (params: any) => {
+          const name = params.name
+          if (!name || name === '用户') return ''
+          const data = params.data || {}
+          const freq = data.frequency
+          const papers: string[] = data.papers || []
+          let html = `<div style="font-weight:600;font-size:13px;margin-bottom:4px;">${name}</div>`
+          if (freq != null) {
+            html += `<div style="color:#8b5cf6;font-weight:600;font-size:12px;margin-bottom:${papers.length > 0 ? '6px' : '0'};">${freq}篇</div>`
+          }
+          if (papers.length > 0) {
+            const list = papers.slice(0, 8).map((t: string) =>
+              `<div style="padding:2px 0;font-size:12px;color:#475569;border-bottom:1px solid #f1f5f9;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">· ${t}</div>`
+            ).join('')
+            html += `<div style="margin-top:2px;">${list}</div>`
+          }
+          return html
+        }
+      },
+      polar: {
+        center: ['50%', '50%'],
+        radius: '88%',
+        axisLine: {
+          show: true,
+          lineStyle: { color: '#e2e8f0', width: 1 }
+        },
+        splitLine: {
+          show: true,
+          lineStyle: { color: '#e2e8f0', type: 'dashed', width: 1 }
+        },
+        splitArea: {
+          show: true,
+          areaStyle: {
+            color: ['rgba(139, 92, 246, 0.02)', 'rgba(139, 92, 246, 0.04)', 'rgba(139, 92, 246, 0.06)', 'rgba(139, 92, 246, 0.08)', 'rgba(139, 92, 246, 0.1)']
+          }
+        }
+      },
+      angleAxis: {
+        type: 'value',
+        min: 0,
+        max: 360,
+        show: false
+      },
+      radiusAxis: {
+        type: 'value',
+        min: 0,
+        max: 100,
+        show: false
+      },
+      series: [
+        {
+          name: '用户',
+          type: 'scatter',
+          coordinateSystem: 'polar',
+          data: [{
+            value: [0, 0],
+            name: '用户',
+            symbol: 'circle',
+            symbolSize: 18,
+            itemStyle: {
+              color: '#8b5cf6',
+              borderColor: '#fff',
+              borderWidth: 3,
+              shadowBlur: 10,
+              shadowColor: 'rgba(139, 92, 246, 0.4)'
+            },
+            label: {
+              show: true,
+              formatter: '用户',
+              color: '#8b5cf6',
+              fontSize: 11,
+              fontWeight: 600,
+              offset: [0, 14]
+            }
+          }],
+          z: 20
+        },
+        {
+          name: domain.name,
+          type: 'scatter',
+          coordinateSystem: 'polar',
+          data: scatterData,
+          symbol: 'circle',
+          itemStyle: {
+            color: '#8b5cf6',
+            borderColor: '#fff',
+            borderWidth: 2,
+            shadowBlur: 8,
+            shadowColor: 'rgba(139, 92, 246, 0.4)'
+          },
+          label: {
+            show: true,
+            position: 'bottom',
+            formatter: (params: any) => params.name,
+            color: '#475569',
+            fontSize: 11,
+            fontWeight: 500,
+            distance: 4
+          },
+          emphasis: {
+            scale: true,
+            itemStyle: {
+              shadowBlur: 18,
+              shadowColor: 'rgba(139, 92, 246, 0.6)',
+              borderWidth: 3
+            },
+            label: {
+              fontSize: 12,
+              fontWeight: 600
+            }
+          },
+          z: 10
+        }
+      ]
+    })
+    return
+  }
+
   const indicators = subDomains.map((s: any) => ({
     name: s.name,
-    max: 100
+    max: maxFreq
   }))
 
-  const values = subDomains.map((s: any) => {
-    const ratio = totalSubFreq > 0 ? (s.frequency / totalSubFreq) * 100 : 0
-    return Number(ratio.toFixed(1))
-  })
+  const values = subDomains.map((s: any) => s.frequency)
 
-  // 主色：顶级学科频次越高用越饱和的蓝色
-  const radarColors = ['#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f97316']
-  const color = radarColors[selectedDomainIndex.value % radarColors.length]
+  if (indicators.length < 3) {
+    const placeholders = ['基础理论', '应用技术', '交叉研究']
+    let added = 0
+    for (const ph of placeholders) {
+      if (indicators.length >= 3) break
+      if (!indicators.find((i: any) => i.name === ph)) {
+        indicators.push({ name: ph, max: maxFreq })
+        values.push(0)
+        added++
+      }
+    }
+  }
 
   radarChartInstance.value.setOption({
     backgroundColor: 'transparent',
@@ -259,9 +360,10 @@ function renderRadarChart() {
         let html = `<div style="font-weight:bold;margin-bottom:6px;color:${color};">${domain.name}</div>`
         if (Array.isArray(val)) {
           val.forEach((v: number, i: number) => {
+            if (i >= subDomains.length) return
             html += `<div style="display:flex;justify-content:space-between;gap:20px;margin:3px 0;">
               <span>${indicators[i].name}</span>
-              <span style="font-weight:bold;">${v}%</span>
+              <span style="font-weight:bold;">${v}篇</span>
             </div>`
           })
         }
@@ -279,7 +381,6 @@ function renderRadarChart() {
         fontSize: 12,
         fontWeight: 500,
         formatter: (name: string) => {
-          // 标签名过长则换行
           return name.length > 6 ? name.slice(0, 6) + '\n' + name.slice(6) : name
         }
       },
@@ -352,8 +453,14 @@ function selectMonth(month: string) {
   showCalendar.value = false
 }
 
+const currentHeatmap = computed(() => 
+  heatmapMode.value === 'upload' 
+    ? overview.value.upload_heatmap 
+    : overview.value.focus_heatmap
+)
+
 const heatmapRows = computed(() => {
-  const data = overview.value.upload_heatmap?.data || {}
+  const data = currentHeatmap.value?.data || {}
   const monthData = data[currentMonth.value] || []
   
   const parts = currentMonth.value.split('-')
@@ -395,7 +502,7 @@ const heatmapRows = computed(() => {
 
 const getCellColor = (day: number | null, count: number) => {
   if (day === null) return 'transparent'
-  const maxValue = overview.value.upload_heatmap?.max_value || 1
+  const maxValue = currentHeatmap.value?.max_value || 1
   if (count === 0) return '#e8f4fd'
   if (count <= Math.ceil(maxValue * 0.25)) return '#a5d8ff'
   if (count <= Math.ceil(maxValue * 0.5)) return '#69c0ff'
@@ -403,11 +510,13 @@ const getCellColor = (day: number | null, count: number) => {
   return '#1971c2'
 }
 
-const currentMonthUploads = computed(() => {
-  const data = overview.value.upload_heatmap?.data || {}
+const currentMonthTotal = computed(() => {
+  const data = currentHeatmap.value?.data || {}
   const monthData = data[currentMonth.value] || []
   return monthData.reduce((sum: number, count: number) => sum + count, 0)
 })
+
+const heatmapUnit = computed(() => heatmapMode.value === 'upload' ? '篇' : '分钟')
 
 const calendarYears = computed(() => {
   const years = new Set<string>()
@@ -445,13 +554,75 @@ onMounted(async () => {
   try {
     overview.value = await featuresApi.overview()
     overview.value.records = overview.value.records || overview.value.recent_records || []
-    setTimeout(renderStreamgraph, 100)
   } catch { /* ignore */ }
 })
 
-watch(() => overview.value.keyword_evolution, () => {
-  setTimeout(renderStreamgraph, 50)
+const renderedReportSummary = computed(() => {
+  const summary = monthlyReportData.value?.summary
+  if (!summary) return ''
+  try {
+    return md.render(summary)
+  } catch {
+    return summary.replace(/\n/g, '<br/>')
+  }
 })
+
+async function generateMonthlyReport() {
+  reportLoading.value = true
+  monthlyReportData.value = null
+
+  // 滚动加载文案
+  const phraseInterval = setInterval(() => {
+    const idx = Math.floor(Math.random() * loadingPhrases.length)
+    reportLoadingText.value = loadingPhrases[idx]
+  }, 2000)
+  reportLoadingText.value = loadingPhrases[0]
+
+  try {
+    const result = await featuresApi.monthlyReport(currentMonth.value)
+    monthlyReportData.value = result
+    await nextTick()
+    if (reportSummaryRef.value) {
+      reportSummaryRef.value.scrollTop = 0
+    }
+  } catch (error: any) {
+    console.error('生成月度报告失败:', error)
+    monthlyReportData.value = {
+      summary: '报告生成失败：' + (error?.response?.data?.detail || error?.message || '未知错误'),
+    }
+  } finally {
+    clearInterval(phraseInterval)
+    reportLoading.value = false
+  }
+}
+
+function exportReport(format: 'md' | 'txt') {
+  const summary = monthlyReportData.value?.summary
+  if (!summary) return
+  const month = monthlyReportData.value?.month || currentMonth.value
+
+  let content: string
+  let mimeType: string
+  let ext: string
+  if (format === 'md') {
+    content = summary
+    mimeType = 'text/markdown'
+    ext = 'md'
+  } else {
+    // strip markdown for txt
+    content = summary.replace(/[#*_`>~\[\]()|]/g, '')
+    mimeType = 'text/plain'
+    ext = 'txt'
+  }
+
+  const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `月度科研学习报告_${month}.${ext}`
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 function logout() {
   auth.logout()
@@ -477,13 +648,13 @@ function logout() {
                   <line x1="12" y1="2" x2="12" y2="8.5"/>
                 </svg>
               </div>
-              <div class="stat-title">知识域覆盖</div>
+              <div class="stat-title">学科覆盖</div>
               <div class="click-hint">点击查看 →</div>
             </div>
             <div class="domain-stats-row">
               <div class="domain-stat-main">
                 <div class="stat-value-large">{{ overview.knowledge_domains?.count || 0 }}</div>
-                <div class="stat-label-large">顶级学科</div>
+                <div class="stat-label-large">学科领域</div>
               </div>
               <div class="domain-stat-divider"></div>
               <div class="domain-stat-side">
@@ -493,7 +664,7 @@ function logout() {
               <div class="domain-stat-divider"></div>
               <div class="domain-stat-side">
                 <div class="domain-side-value">{{ (crossDomainRate * 100).toFixed(1) }}%</div>
-                <div class="domain-side-label">跨学科触达</div>
+                <div class="domain-side-label">领域跨度</div>
               </div>
             </div>
             <div class="domain-list">
@@ -520,70 +691,125 @@ function logout() {
             </div>
             <div class="output-grid">
               <div class="output-item">
-                <span class="output-icon-text">📝</span>
                 <span class="output-value">{{ overview.deep_research_outputs?.reports || 0 }}</span>
                 <span class="output-label">研读报告</span>
               </div>
               <div class="output-item">
-                <span class="output-icon-text">🧠</span>
                 <span class="output-value">{{ overview.deep_research_outputs?.comparisons || 0 }}</span>
                 <span class="output-label">对比卡片</span>
               </div>
               <div class="output-item">
-                <span class="output-icon-text">🗺️</span>
                 <span class="output-value">{{ overview.deep_research_outputs?.graphs || 0 }}</span>
                 <span class="output-label">知识图谱</span>
               </div>
             </div>
           </div>
 
-          <div class="stat-card-new trace-card">
+          <div class="stat-card-new output-card">
             <div class="stat-header">
-              <div class="stat-icon trace-icon">
+              <div class="stat-icon output-icon">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10"/>
-                  <circle cx="12" cy="12" r="4"/>
-                  <line x1="12" y1="2" x2="12" y2="6"/>
-                  <line x1="12" y1="18" x2="12" y2="22"/>
-                  <line x1="4.93" y1="4.93" x2="7.07" y2="7.07"/>
-                  <line x1="16.93" y1="16.93" x2="19.07" y2="19.07"/>
-                  <line x1="2" y1="12" x2="6" y2="12"/>
-                  <line x1="18" y1="12" x2="22" y2="12"/>
-                  <line x1="6.01" y1="17.99" x2="4.99" y2="19.01"/>
-                  <line x1="17.99" y1="6.01" x2="19.01" y2="4.99"/>
+                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                  <polyline points="10 9 9 9 8 9"/>
                 </svg>
               </div>
-              <div class="stat-title">提问溯源性</div>
+              <div class="stat-title">学习成果</div>
             </div>
-            <div class="stat-value-large">{{ overview.question_traceability?.unique_paper_sources || 0 }}</div>
-            <div class="stat-label-large">来源</div>
-            <div class="trace-chart">
-              <div class="trace-ring">
-                <div class="ring-inner"></div>
+            <div class="output-grid">
+              <div class="output-item">
+                <span class="output-value">{{ learningDuration?.today || learningOverview?.today_minutes || 0 }}</span>
+                <span class="output-label">今日专注时长</span>
+              </div>
+              <div class="output-item">
+                <span class="output-value">{{ overview.knowledge_domains?.core_papers || 0 }}</span>
+                <span class="output-label">累计解析文献</span>
+              </div>
+              <div class="output-item">
+                <span class="output-value">{{ overview.knowledge_domains?.count || 0 }}</span>
+                <span class="output-label">学科覆盖</span>
               </div>
             </div>
           </div>
         </div>
 
         <section class="grid2">
-          <div class="card">
+          <div class="card monthly-report-card">
             <div class="card-header">
-              <h3>知识域演进河流图</h3>
+              <div class="header-top">
+                <h3>月度科研学习报告</h3>
+                <div v-if="monthlyReportData?.summary" class="report-header-actions">
+                  <button class="export-btn" @click="exportReport('md')">导出 MD</button>
+                  <button class="export-btn" @click="exportReport('txt')">导出 TXT</button>
+                </div>
+              </div>
             </div>
-            <div ref="chartRef" class="chart" />
-            <div v-if="overview.recommended_domain" class="recommended-domain">
-              <div class="recommend-icon">💡</div>
-              <div class="recommend-content">
-                <div class="recommend-label">AI推荐关联</div>
-                <div class="recommend-domain">{{ overview.recommended_domain }}</div>
+            <div class="monthly-report-body">
+              <p class="report-desc">综合本月上传文献、研读报告、知识图谱、问答数据，自动生成 AI 总结</p>
+
+              <!-- 未生成状态 -->
+              <div v-if="!monthlyReportData?.summary && !reportLoading" class="report-empty-state">
+                <!-- 数据源概览 -->
+                <div class="report-sources">
+                  <div class="report-source-item">
+                    <span class="source-icon">📄</span>
+                    <span class="source-value">{{ monthlyReportData?.paper_count ?? overview.paper_count ?? 0 }}篇</span>
+                    <span class="source-label">上传文献</span>
+                  </div>
+                  <div class="report-source-item">
+                    <span class="source-icon">📊</span>
+                    <span class="source-value">{{ monthlyReportData?.report_count ?? overview.report_count ?? 0 }}份</span>
+                    <span class="source-label">研读报告</span>
+                  </div>
+                  <div class="report-source-item">
+                    <span class="source-icon">🔗</span>
+                    <span class="source-value">{{ monthlyReportData?.graph_count ?? overview.deep_research_outputs?.graphs ?? 0 }}个</span>
+                    <span class="source-label">知识图谱</span>
+                  </div>
+                  <div class="report-source-item">
+                    <span class="source-icon">💬</span>
+                    <span class="source-value">{{ monthlyReportData?.qa_count ?? overview.qa_count ?? 0 }}次</span>
+                    <span class="source-label">AI问答</span>
+                  </div>
+                </div>
+
+                <!-- 生成按钮 -->
+                <button
+                  class="generate-report-btn"
+                  :disabled="reportLoading"
+                  @click="generateMonthlyReport"
+                >
+                  <svg v-if="reportLoading" class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" opacity="0.25" />
+                    <path d="M12 2a10 10 0 019.95 9" />
+                  </svg>
+                  {{ reportLoading ? reportLoadingText : '生成本月报告' }}
+                </button>
+              </div>
+
+              <!-- 加载状态 -->
+              <div v-else-if="reportLoading" class="report-loading">
+                <svg class="spinner-large" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" opacity="0.25" />
+                  <path d="M12 2a10 10 0 019.95 9" />
+                </svg>
+                <p class="loading-text">{{ reportLoadingText }}</p>
+              </div>
+
+              <!-- AI总结结果 -->
+              <div v-else class="report-summary">
+                <div class="report-summary-content" ref="reportSummaryRef" v-html="renderedReportSummary"></div>
               </div>
             </div>
           </div>
 
           <div class="card">
             <div class="card-header">
-              <h3>文献上传热力图</h3>
-              <div class="month-nav">
+              <div class="header-top">
+                <h3>热力图</h3>
+                <div class="month-nav">
                 <button 
                   class="nav-btn" 
                   :class="{ disabled: !canPrev }"
@@ -604,9 +830,22 @@ function logout() {
                 >
                   <ArrowRight />
                 </button>
+                </div>
               </div>
             </div>
             <div class="heatmap-container">
+              <div class="heatmap-toggle">
+                <button 
+                  class="toggle-btn" 
+                  :class="{ active: heatmapMode === 'upload' }"
+                  @click="heatmapMode = 'upload'"
+                >文献上传</button>
+                <button 
+                  class="toggle-btn" 
+                  :class="{ active: heatmapMode === 'focus' }"
+                  @click="heatmapMode = 'focus'"
+                >专注时间</button>
+              </div>
               <div class="heatmap-header">
                 <div class="weekday-labels">
                   <span v-for="day in weekDays" :key="day" class="weekday-label">{{ day }}</span>
@@ -621,86 +860,74 @@ function logout() {
                       class="cell"
                       :class="{ empty: !cell.day }"
                       :style="{ backgroundColor: getCellColor(cell.day, cell.count) }"
-                      :title="cell.date ? `${cell.date}: ${cell.count} 篇` : ''"
+                      :title="cell.date ? `${cell.date}: ${cell.count} ${heatmapUnit}` : ''"
                     ></div>
                   </div>
                 </div>
               </div>
               <div class="month-summary">
-                <span class="summary-text">{{ currentMonth }} 共上传 {{ currentMonthUploads }} 篇文献</span>
+                <span class="summary-text">{{ currentMonth }} 共{{ heatmapMode === 'upload' ? '上传' : '专注' }} {{ currentMonthTotal }} {{ heatmapUnit }}</span>
               </div>
             </div>
           </div>
         </section>
       </div>
 
-      <div class="profile-sidebar">
-        <div class="profile-card">
-          <div class="avatar-circle">{{ user.username?.slice(0, 1)?.toUpperCase() }}</div>
-          <div class="profile-info">
-            <h2>{{ user.name || user.username }}</h2>
-            <div class="meta-row">
-              <span v-if="user.email">{{ user.email }}</span>
-              <span v-if="user.phone">{{ maskPhone(user.phone) }}</span>
-              <span>注册时间 {{ user.created_at ? new Date(user.created_at).toLocaleDateString('zh-CN') : '-' }}</span>
+      <div class="profile-sidebar" :class="{ collapsed: sidebarCollapsed }">
+        <button class="sidebar-toggle" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? '展开' : '收起'">
+          <svg v-if="sidebarCollapsed" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+          <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </button>
+
+        <div class="sidebar-content">
+          <div class="profile-card">
+            <div class="avatar-wrapper">
+              <div class="avatar-box">{{ user.username?.slice(0, 1)?.toUpperCase() }}</div>
+            </div>
+            <div class="profile-info">
+              <h2>{{ user.name || user.username }}</h2>
+              <div class="research-tags">
+                <span v-for="tag in overview.research_interests?.slice(0, 3) || []" :key="tag" class="research-tag">{{ tag }}</span>
+              </div>
             </div>
           </div>
-          <button class="logout-btn" @click="logout">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-            退出登录
-          </button>
-        </div>
 
-        <div class="section">
-          <h3>学习概览</h3>
-        </div>
-
-        <div class="stats-row">
-          <div class="stat-card-small">
-            <div class="stat-value">{{ paperCount }}</div>
-            <div class="stat-label">上传文献</div>
-          </div>
-          <div class="stat-card-small">
-            <div class="stat-value">{{ completedCount }}</div>
-            <div class="stat-label">已解析</div>
-          </div>
-        </div>
-
-        <div v-if="learningOverview || learningDuration" class="section">
-          <div class="overview-grid">
-            <div class="kv"><span>连续学习</span><b>{{ learningOverview?.streak_days || 0 }} 天</b></div>
-            <div class="kv"><span>今日学习</span><b>{{ learningDuration?.today || learningOverview?.today_minutes || 0 }} 分钟</b></div>
-          </div>
-        </div>
-
-        <div class="section">
-          <h3>帐号信息</h3>
-          <div class="info-list">
-            <div class="info-row">
-              <span>用户名</span>
-              <div class="info-right">
-                <b>{{ user.username }}</b>
-                <button class="edit-btn" @click="editUsername = user.username; showUsernameModal = true" title="编辑用户名">
+          <div class="sidebar-section">
+            <h3>账号设置</h3>
+            <div class="settings-list">
+              <div class="settings-item" @click="editUsername = user.username; showUsernameModal = true">
+                <span class="settings-label">用户名</span>
+                <div class="settings-right">
+                  <span>{{ user.username }}</span>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
-                </button>
+                </div>
               </div>
-            </div>
-            <div class="info-row">
-              <span>邮箱</span>
-              <div class="info-right">
-                <b>{{ user.email || '未设置' }}</b>
-                <button class="arrow-btn" @click="showEmailModal = true">
+              <div class="settings-item" @click="showEmailModal = true">
+                <span class="settings-label">邮箱</span>
+                <div class="settings-right">
+                  <span>{{ user.email || '未设置' }}</span>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                </button>
+                </div>
               </div>
-            </div>
-            <div class="info-row">
-              <span>手机</span>
-              <div class="info-right">
-                <b>{{ user.phone ? maskPhone(user.phone) : '未设置' }}</b>
-                <button class="arrow-btn" @click="showPhoneModal = true">
+              <div class="settings-item" @click="showPhoneModal = true">
+                <span class="settings-label">手机</span>
+                <div class="settings-right">
+                  <span>{{ user.phone ? maskPhone(user.phone) : '未设置' }}</span>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                </button>
+                </div>
+              </div>
+              <div class="settings-item" @click="showPasswordModal = true">
+                <span class="settings-label">修改密码</span>
+                <div class="settings-right">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                </div>
+              </div>
+              <div class="settings-item logout-item" @click="logout">
+                <span class="settings-label">退出登录</span>
               </div>
             </div>
           </div>
@@ -743,6 +970,31 @@ function logout() {
     </Teleport>
 
     <Teleport to="body">
+      <div v-if="showPasswordModal" class="modal-overlay" @click.self="showPasswordModal = false">
+        <div class="modal-content" @click.stop>
+          <h4>修改密码</h4>
+          <div class="pwd-field">
+            <label>旧密码</label>
+            <input v-model="oldPassword" type="password" class="modal-input" placeholder="请输入旧密码" />
+          </div>
+          <div class="pwd-field">
+            <label>新密码</label>
+            <input v-model="newPassword" type="password" class="modal-input" placeholder="请输入新密码（至少6位）" />
+          </div>
+          <div class="pwd-field">
+            <label>确认新密码</label>
+            <input v-model="confirmPassword" type="password" class="modal-input" placeholder="请再次输入新密码" />
+          </div>
+          <span v-if="passwordError" class="modal-error">{{ passwordError }}</span>
+          <div class="modal-actions">
+            <button class="modal-cancel" @click="showPasswordModal = false">取消</button>
+            <button class="modal-confirm" @click="updatePassword">确认修改</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
       <div v-if="showCalendar" class="calendar-overlay" @click="showCalendar = false">
         <div class="calendar-popup" @click.stop>
           <div class="calendar-header">
@@ -774,9 +1026,8 @@ function logout() {
         <div class="domain-modal-popup" @click.stop>
           <div class="domain-modal-header">
             <div class="domain-modal-title">
-              <span class="domain-modal-icon">🎯</span>
               <div>
-                <h4>知识域覆盖详情</h4>
+                <h4>学科覆盖详情</h4>
                 <p>基于 {{ totalDomainPapers }} 篇文献的学科标签分析</p>
               </div>
             </div>
@@ -785,7 +1036,7 @@ function logout() {
 
           <div class="domain-modal-body">
             <aside class="domain-sidebar">
-              <div class="sidebar-title">顶级学科</div>
+              <div class="sidebar-title">学科领域</div>
               <button
                 v-for="(domain, index) in domainList"
                 :key="domain.name"
@@ -812,8 +1063,8 @@ function logout() {
                 <div class="sub-domain-table">
                   <div class="table-header">
                     <span>子领域</span>
-                    <span>频次</span>
-                    <span>占比</span>
+                    <span class="header-right">频次</span>
+                    <span class="header-right">占比</span>
                   </div>
                   <div
                     v-for="sub in selectedDomain.sub_domains"
@@ -839,7 +1090,7 @@ function logout() {
               <span class="footer-value">{{ subDomainGranularity }}</span>
             </div>
             <div class="footer-stat">
-              <span class="footer-label">跨学科触达率</span>
+              <span class="footer-label">领域跨度</span>
               <span class="footer-value">{{ (crossDomainRate * 100).toFixed(1) }}%</span>
               <span class="footer-sub">({{ crossDomainPapers }}/{{ totalDomainPapers }} 篇)</span>
             </div>
@@ -873,12 +1124,54 @@ function logout() {
 }
 
 .profile-sidebar {
-  width: 320px;
+  width: 280px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  overflow-y: auto;
+  gap: 14px;
+  overflow: hidden;
+  align-self: flex-start;
+  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.profile-sidebar.collapsed {
+  width: 44px;
+  gap: 0;
+}
+
+.sidebar-toggle {
+  align-self: flex-end;
+  padding: 8px;
+  border: none;
+  background: var(--academic-panel);
+  border-radius: 8px;
+  color: var(--academic-text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle:hover {
+  color: var(--academic-primary);
+  background: var(--academic-border);
+}
+
+.sidebar-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 1200px;
+  opacity: 1;
+  overflow: hidden;
+  transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.profile-sidebar.collapsed .sidebar-content {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+  gap: 0;
 }
 
 .page-title {
@@ -925,11 +1218,6 @@ function logout() {
 .output-icon {
   background: linear-gradient(135deg, #ec489915, #f43f5e15);
   color: #ec4899;
-}
-
-.trace-icon {
-  background: linear-gradient(135deg, #22c55e15, #14b8a615);
-  color: #22c55e;
 }
 
 .stat-title {
@@ -1077,29 +1365,6 @@ function logout() {
   color: var(--academic-text-muted);
 }
 
-.trace-chart {
-  display: flex;
-  justify-content: center;
-  margin-top: 8px;
-}
-
-.trace-ring {
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
-  background: conic-gradient(#22c55e 60%, #e2e8f0 60%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.ring-inner {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: var(--academic-panel);
-}
-
 .grid2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1121,9 +1386,15 @@ function logout() {
 .card-header {
   flex-shrink: 0;
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.header-top {
+  display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
 }
 
 .card > div:last-child {
@@ -1140,40 +1411,275 @@ function logout() {
   margin: 0;
 }
 
-.chart {
-  height: 340px;
+/* ============ 月度科研学习报告 ============ */
+.monthly-report-card .card-header {
+  margin-bottom: 12px;
+}
+
+.report-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.report-header-actions .export-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+}
+
+.monthly-report-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  justify-content: flex-start !important;
+}
+
+.report-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--academic-text-muted);
+  line-height: 1.6;
+  flex-shrink: 0;
+}
+
+.report-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
   flex: 1;
   min-height: 0;
 }
 
-.recommended-domain {
-  display: flex;
-  align-items: center;
+.report-sources {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px;
-  padding: 12px 16px;
-  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  width: 100%;
+}
+
+.report-source-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 8px;
   border-radius: 12px;
-  margin-top: 12px;
+  background: var(--academic-canvas);
 }
 
-.recommend-icon {
-  font-size: 20px;
+.source-icon {
+  font-size: 22px;
 }
 
-.recommend-content {
-  flex: 1;
+.source-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--academic-text-main);
 }
 
-.recommend-label {
-  font-size: 12px;
-  color: #92400e;
-  margin-bottom: 2px;
+.source-label {
+  font-size: 11px;
+  color: var(--academic-text-muted);
 }
 
-.recommend-domain {
+.generate-report-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 32px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--academic-primary), var(--academic-primary-hover));
+  color: #fff;
   font-size: 14px;
   font-weight: 600;
-  color: #78350f;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.3);
+}
+
+.generate-report-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(139, 92, 246, 0.4);
+}
+
+.generate-report-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.report-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.spinner-large {
+  animation: spin 1s linear infinite;
+  color: var(--academic-primary);
+  width: 36px;
+  height: 36px;
+}
+
+.loading-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--academic-text-muted);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.report-summary {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.report-summary-content {
+  font-size: 13px;
+  color: var(--academic-text-body);
+  line-height: 1.8;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+  background: var(--academic-canvas);
+  border-radius: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--academic-border) transparent;
+}
+
+.report-summary-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.report-summary-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.report-summary-content::-webkit-scrollbar-thumb {
+  background: var(--academic-border);
+  border-radius: 3px;
+}
+
+.report-summary-content::-webkit-scrollbar-thumb:hover {
+  background: var(--academic-text-muted);
+}
+
+.report-summary-content :deep(h2) {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--academic-text-main);
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--academic-primary);
+  display: inline-block;
+}
+
+.report-summary-content :deep(h2):first-child {
+  margin-top: 0;
+}
+
+.report-summary-content :deep(h3) {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--academic-text-main);
+  margin: 14px 0 6px;
+}
+
+.report-summary-content :deep(h3):first-child {
+  margin-top: 0;
+}
+
+.report-summary-content :deep(p) {
+  margin: 8px 0;
+  text-align: justify;
+}
+
+.report-summary-content :deep(ul),
+.report-summary-content :deep(ol) {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.report-summary-content :deep(li) {
+  margin: 4px 0;
+}
+
+.report-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 18px;
+  border: 1px solid var(--academic-border);
+  border-radius: 8px;
+  background: var(--academic-canvas);
+  color: var(--academic-text-body);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.export-btn:hover {
+  border-color: var(--academic-primary);
+  color: var(--academic-primary);
+  background: rgba(139, 92, 246, 0.06);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.1);
+}
+
+.heatmap-toggle {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.toggle-btn {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--academic-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+}
+
+.toggle-btn:hover {
+  color: var(--academic-text-main);
+}
+
+.toggle-btn.active {
+  background: var(--academic-primary);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.35);
+  transform: translateY(-1px);
 }
 
 .month-nav {
@@ -1185,9 +1691,9 @@ function logout() {
 .nav-btn {
   width: 32px;
   height: 32px;
-  border: 1px solid var(--academic-border);
+  border: none;
   border-radius: 6px;
-  background: var(--academic-canvas);
+  background: transparent;
   color: var(--academic-text-main);
   display: flex;
   align-items: center;
@@ -1197,9 +1703,7 @@ function logout() {
 }
 
 .nav-btn:hover:not(.disabled) {
-  background: var(--academic-primary);
-  color: #fff;
-  border-color: var(--academic-primary);
+  background: rgba(139, 92, 246, 0.1);
 }
 
 .nav-btn.disabled {
@@ -1209,10 +1713,10 @@ function logout() {
 
 .month-btn {
   padding: 6px 16px;
-  border: 1px solid var(--academic-border);
+  border: none;
   border-radius: 6px;
-  background: var(--academic-primary);
-  color: #fff;
+  background: #fff;
+  color: var(--academic-text-main);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -1234,8 +1738,9 @@ function logout() {
 .heatmap-container {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   align-items: center;
+  padding: 16px;
 }
 
 .heatmap-header {
@@ -1311,31 +1816,43 @@ function logout() {
 }
 
 .profile-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  padding: 24px;
+  gap: 8px;
+  padding: 20px 24px;
   border-radius: 22px;
   background: var(--academic-panel);
   border: 1px solid var(--academic-border);
   box-shadow: var(--shadow-soft);
+  overflow: hidden;
 }
 
-.avatar-circle {
+
+
+.avatar-wrapper {
+  position: relative;
+  z-index: 1;
+}
+
+.avatar-box {
   width: 64px;
   height: 64px;
-  border-radius: 20px;
+  border-radius: 14px;
   display: grid;
   place-items: center;
   background: linear-gradient(135deg, var(--academic-primary), var(--academic-primary-hover));
   color: #fff;
   font-size: 26px;
   font-weight: 800;
-  flex-shrink: 0;
+  border: 3px solid var(--academic-panel);
+  box-shadow: 0 4px 16px rgba(139, 92, 246, 0.3);
 }
 
 .profile-info {
+  position: relative;
+  z-index: 1;
   text-align: center;
 }
 
@@ -1345,154 +1862,127 @@ function logout() {
   color: var(--academic-text-main);
 }
 
-.meta-row {
+.research-tags {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--academic-text-muted);
+  flex-wrap: nowrap;
   justify-content: center;
-}
-
-.logout-btn {
-  padding: 10px 18px;
-  border-radius: 12px;
-  border: 1px solid var(--academic-border);
-  background: var(--academic-panel);
-  color: var(--academic-text-body);
-  font-size: 13px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  transition: all 0.15s;
-  flex-shrink: 0;
-}
-
-.logout-btn:hover {
-  background: rgba(239, 68, 68, 0.06);
-  color: var(--danger);
-  border-color: var(--danger);
-}
-
-.section {
-  margin-bottom: 8px;
-}
-
-.section h3 {
-  font-size: 15px;
-  color: var(--academic-text-main);
-  margin: 0 0 12px;
-  font-weight: 600;
-}
-
-.stats-row {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.stat-card-small {
-  padding: 16px;
-  border-radius: 14px;
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  text-align: center;
-  box-shadow: var(--shadow-soft);
-}
-
-.stat-value {
-  font-size: 24px;
-  font-weight: 800;
-  color: var(--academic-primary);
-}
-
-.stat-label {
-  font-size: 12px;
-  color: var(--academic-text-muted);
-  margin-top: 4px;
-}
-
-.overview-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-}
-
-.kv {
-  padding: 14px 18px;
-  border-radius: 14px;
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-}
-
-.kv span {
-  font-size: 12px;
-  color: var(--academic-text-muted);
-  display: block;
-}
-
-.kv b {
-  font-size: 18px;
-  color: var(--academic-text-main);
-  margin-top: 2px;
-  display: block;
-}
-
-.info-list {
-  border-radius: 16px;
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
+  gap: 5px;
+  margin-top: 6px;
   overflow: hidden;
 }
 
-.info-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--academic-border);
-}
-
-.info-row:last-child {
-  border-bottom: none;
-}
-
-.info-row span {
-  font-size: 13px;
-  color: var(--academic-text-muted);
-}
-
-.info-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.info-right b {
-  font-size: 13px;
+.research-tag {
+  padding: 4px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  background-color: #f5f6fa;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
   color: var(--academic-text-body);
+  font-size: 11px;
   font-weight: 500;
 }
 
-.edit-btn {
-  width: 24px;
-  height: 24px;
-  border: none;
-  background: transparent;
-  color: var(--academic-text-muted);
-  cursor: pointer;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.sidebar-section {
+  margin-top: 14px;
+  padding: 16px 20px;
+  border-radius: 16px;
+  background: var(--academic-panel);
+  border: 1px solid var(--academic-border);
 }
 
-.edit-btn:hover {
+.sidebar-section h3 {
+  font-size: 14px;
+  color: var(--academic-text-main);
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.settings-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 0;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.settings-item:not(:last-child) {
+  border-bottom: 1px solid var(--academic-border);
+}
+
+.settings-item:hover {
+  background: rgba(139, 92, 246, 0.04);
+  margin: 0 -16px;
+  padding-left: 16px;
+  padding-right: 16px;
+  border-radius: 8px;
+}
+
+.settings-icon {
+  font-size: 16px;
+}
+
+.settings-label {
+  flex: 1;
+  font-size: 13px;
+  color: var(--academic-text-body);
+}
+
+.settings-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--academic-text-muted);
+}
+
+.logout-item {
+  color: var(--danger);
+}
+
+.logout-item .settings-label {
+  color: var(--danger);
+}
+
+.sidebar-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.sidebar-stat-item {
+  padding: 8px 8px;
+  border-radius: 10px;
+  background: var(--academic-panel);
+  border: 1px solid var(--academic-border);
+  text-align: center;
+}
+
+.sidebar-stat-value {
+  display: block;
+  font-size: 19px;
+  font-weight: 700;
   color: var(--academic-primary);
-  background: var(--academic-primary-light);
+  line-height: 1.2;
+}
+
+.sidebar-stat-label {
+  display: block;
+  font-size: 10px;
+  color: var(--academic-text-muted);
+  margin-top: 1px;
 }
 
 .arrow-btn {
@@ -1519,25 +2009,40 @@ function logout() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  animation: modalFadeIn 0.2s ease;
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .modal-content {
   background: #fff;
-  border-radius: 12px;
-  padding: 24px;
-  min-width: 280px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  border-radius: 16px;
+  padding: 28px 32px;
+  min-width: 420px;
+  max-width: 480px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.18);
+  animation: modalSlideUp 0.25s ease;
+}
+
+@keyframes modalSlideUp {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
 .modal-content h4 {
-  margin: 0 0 16px;
-  font-size: 16px;
+  margin: 0 0 20px;
+  font-size: 18px;
   color: var(--academic-text-main);
+  font-weight: 700;
 }
 
 .modal-content p {
@@ -1548,12 +2053,25 @@ function logout() {
 
 .modal-input {
   width: 100%;
-  padding: 10px 14px;
+  padding: 12px 16px;
   border: 1px solid var(--academic-border);
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 14px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   box-sizing: border-box;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.modal-textarea {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--academic-border);
+  border-radius: 10px;
+  font-size: 14px;
+  margin-bottom: 10px;
+  box-sizing: border-box;
+  resize: vertical;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .modal-error {
@@ -1566,40 +2084,70 @@ function logout() {
 .modal-input:focus {
   outline: none;
   border-color: var(--academic-primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.modal-textarea:focus {
+  outline: none;
+  border-color: var(--academic-primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
 }
 
 .modal-actions {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   justify-content: flex-end;
+  margin-top: 8px;
 }
 
 .modal-close, .modal-cancel {
-  padding: 8px 16px;
+  padding: 10px 22px;
   border: 1px solid var(--academic-border);
-  border-radius: 8px;
+  border-radius: 10px;
   background: #fff;
   color: var(--academic-text-body);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.2s;
 }
 
 .modal-close:hover, .modal-cancel:hover {
   background: var(--academic-canvas);
+  border-color: #cbd5e1;
 }
 
 .modal-confirm {
-  padding: 8px 16px;
+  padding: 10px 22px;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--academic-primary);
   color: #fff;
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.2s;
 }
 
 .modal-confirm:hover {
   background: var(--academic-primary-hover);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+}
+
+.pwd-field {
+  margin-bottom: 12px;
+}
+
+.pwd-field label {
+  display: block;
+  font-size: 13px;
+  color: var(--academic-text-body);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.pwd-field .modal-input {
+  margin-bottom: 0;
 }
 
 .calendar-overlay {
@@ -1682,7 +2230,7 @@ function logout() {
 
 .month-cell {
   padding: 10px;
-  border: 1px solid var(--academic-border);
+  border: none;
   border-radius: 6px;
   background: var(--academic-canvas);
   color: var(--academic-text-main);
@@ -1692,17 +2240,16 @@ function logout() {
 }
 
 .month-cell:hover {
-  border-color: var(--academic-primary);
+  background: rgba(139, 92, 246, 0.08);
   color: var(--academic-primary);
 }
 
 .month-cell.active {
   background: var(--academic-primary);
   color: #fff;
-  border-color: var(--academic-primary);
 }
 
-/* ============ 知识域覆盖雷达图模态框 ============ */
+/* ============ 学科覆盖雷达图模态框 ============ */
 .domain-modal-overlay {
   position: fixed;
   inset: 0;
@@ -1890,8 +2437,9 @@ function logout() {
 .table-row {
   display: grid;
   grid-template-columns: 1fr 80px 80px;
-  padding: 10px 14px;
+  padding: 12px 14px;
   align-items: center;
+  min-height: 44px;
 }
 
 .table-header {
@@ -1901,6 +2449,10 @@ function logout() {
   color: var(--academic-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.header-right {
+  text-align: right;
 }
 
 .table-row {
@@ -1915,17 +2467,22 @@ function logout() {
 .sub-name {
   font-weight: 500;
   color: var(--academic-text-main);
+  display: flex;
+  align-items: center;
+  min-height: 24px;
 }
 
 .sub-freq {
   color: var(--academic-text-body);
   text-align: right;
+  line-height: 24px;
 }
 
 .sub-ratio {
   color: var(--academic-primary);
   font-weight: 600;
   text-align: right;
+  line-height: 24px;
 }
 
 .domain-modal-footer {
