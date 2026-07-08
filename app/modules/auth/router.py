@@ -16,7 +16,6 @@ from app.services.auth_service import LoginGuard, VerificationCodeService
 
 class UpdateProfileIn(BaseModel):
     username: str | None = None
-    signature: str | None = None
 
 router = APIRouter(prefix='/auth', tags=['认证'])
 
@@ -180,10 +179,6 @@ async def update_profile(data: UpdateProfileIn, request: Request, db: AsyncSessi
         old_username = user.username
         user.username = username
         changes['username'] = {'old': old_username, 'new': username}
-    
-    if data.signature is not None:
-        user.signature = data.signature.strip()[:200]
-        changes['signature'] = user.signature
     
     if not changes:
         raise HTTPException(400, '请提供要修改的内容')

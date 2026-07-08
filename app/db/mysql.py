@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import contextmanager
 
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy import create_engine
 
 from app.core.config import get_settings
 from app.db.base import Base
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
+_SCHEMA_LOCK_NAME = 'literature_schema_init'
+_SCHEMA_LOCK_TIMEOUT = 45
+_SCHEMA_INIT_RETRIES = 5
 
 # ============================================================================
 # FastAPI 异步引擎 — mysql+aiomysql://
@@ -152,60 +157,129 @@ def celery_db():
         session.close()
 
 
-async def migrate_model_config_schema() -> None:
+async def migrate_model_config_schema(conn) -> None:
     """为已有库补齐 model_configs 的场景路由字段。"""
-    from sqlalchemy import text
-
-    async with engine.begin() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT COLUMN_NAME
-                    FROM information_schema.COLUMNS
-                    WHERE TABLE_SCHEMA = DATABASE()
-                      AND TABLE_NAME = 'model_configs'
-                      AND COLUMN_NAME IN ('scenario', 'is_primary')
-                    """
-                )
-            )
-        ).all()
-        existing = {row[0] for row in rows}
-
-        if 'scenario' not in existing:
-            await conn.execute(text("ALTER TABLE model_configs ADD COLUMN scenario VARCHAR(30) NOT NULL DEFAULT 'default'"))
-        if 'is_primary' not in existing:
-            await conn.execute(
-                text('ALTER TABLE model_configs ADD COLUMN is_primary TINYINT(1) NOT NULL DEFAULT 0')
-            )
-
+    table_exists = (
         await conn.execute(
             text(
                 """
-                UPDATE model_configs
-                SET scenario = 'qa', is_primary = 1
-                WHERE model_type = 'llm'
-                  AND (scenario IS NULL OR scenario = '')
+                SELECT 1
+                FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'model_configs'
+                LIMIT 1
                 """
             )
         )
+    ).first()
+    if not table_exists:
+        return
+
+    rows = (
         await conn.execute(
             text(
                 """
-                UPDATE model_configs
-                SET scenario = 'default'
-                WHERE model_type <> 'llm'
-                  AND (scenario IS NULL OR scenario = '')
+                SELECT COLUMN_NAME
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'model_configs'
+                  AND COLUMN_NAME IN ('scenario', 'is_primary')
                 """
             )
         )
+    ).all()
+    existing = {row[0] for row in rows}
+
+    if 'scenario' not in existing:
+        await conn.execute(text("ALTER TABLE model_configs ADD COLUMN scenario VARCHAR(30) NOT NULL DEFAULT 'default'"))
+    if 'is_primary' not in existing:
+        await conn.execute(
+            text('ALTER TABLE model_configs ADD COLUMN is_primary TINYINT(1) NOT NULL DEFAULT 0')
+        )
+
+    await conn.execute(
+        text(
+            """
+            UPDATE model_configs
+            SET scenario = 'qa', is_primary = 1
+            WHERE model_type = 'llm'
+              AND (scenario IS NULL OR scenario = '')
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE model_configs
+            SET scenario = 'default'
+            WHERE model_type <> 'llm'
+              AND (scenario IS NULL OR scenario = '')
+            """
+        )
+    )
+
+    if 'scenario' not in existing:
         await conn.execute(
             text("ALTER TABLE model_configs MODIFY COLUMN scenario VARCHAR(30) NOT NULL DEFAULT 'default'")
         )
 
 
+def _mysql_errno(exc: Exception) -> int | None:
+    orig = getattr(exc, 'orig', None)
+    args = getattr(orig, 'args', None)
+    if args and len(args) >= 1 and isinstance(args[0], int):
+        return args[0]
+    return None
+
+
+def _is_transient_schema_error(exc: Exception) -> bool:
+    err_no = _mysql_errno(exc)
+    if err_no in {1684, 1205, 1213}:
+        return True
+    message = str(exc).lower()
+    return 'being modified by concurrent ddl' in message or 'metadata lock' in message
+
+
+async def _acquire_schema_lock(conn) -> None:
+    for attempt in range(_SCHEMA_INIT_RETRIES):
+        result = await conn.execute(
+            text(f"SELECT GET_LOCK('{_SCHEMA_LOCK_NAME}', {_SCHEMA_LOCK_TIMEOUT})")
+        )
+        if result.scalar() == 1:
+            return
+        await asyncio.sleep(0.3 * (attempt + 1))
+    raise RuntimeError('无法获取数据库 schema 初始化锁，请稍后重试')
+
+
+async def _release_schema_lock(conn) -> None:
+    await conn.execute(text(f"SELECT RELEASE_LOCK('{_SCHEMA_LOCK_NAME}')"))
+
+
 async def create_all_tables() -> None:
     """FastAPI startup 时建表（幂等）。"""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await migrate_model_config_schema()
+    last_error: Exception | None = None
+
+    for attempt in range(_SCHEMA_INIT_RETRIES):
+        try:
+            async with engine.begin() as conn:
+                await _acquire_schema_lock(conn)
+                try:
+                    await conn.run_sync(Base.metadata.create_all)
+                    await migrate_model_config_schema(conn)
+                finally:
+                    await _release_schema_lock(conn)
+            return
+        except OperationalError as exc:
+            last_error = exc
+            if not _is_transient_schema_error(exc) or attempt + 1 >= _SCHEMA_INIT_RETRIES:
+                raise
+            logger.warning(
+                'schema init retry %s/%s after transient mysql error: %s',
+                attempt + 1,
+                _SCHEMA_INIT_RETRIES,
+                exc,
+            )
+            await asyncio.sleep(0.5 * (attempt + 1))
+
+    if last_error:
+        raise last_error

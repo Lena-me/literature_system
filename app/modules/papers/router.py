@@ -11,7 +11,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from minio.error import S3Error
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -69,13 +70,34 @@ async def _create_paper_from_bytes(db: AsyncSession, user: User, filename: str, 
     if not filename or not filename.lower().endswith('.pdf'):
         raise HTTPException(400, '仅支持 PDF 文件')
 
-    await QuotaService().check_upload(db, user, len(data))
+    user_id = user.id
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            return await _create_paper_from_bytes_once(db, user_id, filename, data)
+        except OperationalError as exc:
+            await db.rollback()
+            err_no = getattr(getattr(exc, 'orig', None), 'args', [None])[0]
+            if err_no != 1213 and '1213' not in str(exc):
+                raise
+            last_error = exc
+            if attempt >= 2:
+                raise HTTPException(503, '上传繁忙，请稍后重试') from exc
+            await asyncio.sleep(0.08 * (attempt + 1))
 
-    object_key = f'{user.id}/{uuid4().hex}.pdf'
+    if last_error:
+        raise last_error
+    raise HTTPException(500, '上传失败')
+
+
+async def _create_paper_from_bytes_once(db: AsyncSession, user_id: int, filename: str, data: bytes) -> Paper:
+    await QuotaService().check_upload(db, user_id, len(data))
+
+    object_key = f'{user_id}/{uuid4().hex}.pdf'
     MinioStorage().put_pdf(object_key, data)
 
     paper = Paper(
-        user_id=user.id,
+        user_id=user_id,
         original_filename=filename,
         file_size=len(data),
         file_path=f'minio://paper-pdf/{object_key}',
@@ -87,17 +109,21 @@ async def _create_paper_from_bytes(db: AsyncSession, user: User, filename: str, 
 
     task = ParseTask(
         paper_id=paper.id,
-        user_id=user.id,
+        user_id=user_id,
         task_type='document_parse',
         status='queued',
         priority=5,
     )
     db.add(task)
-    user.paper_upload_count += 1
+    await db.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(paper_upload_count=User.paper_upload_count + 1)
+    )
 
     await audit_action(
         db,
-        user_id=user.id,
+        user_id=user_id,
         module='papers',
         operation_type='upload',
         content={
@@ -116,7 +142,7 @@ async def _create_paper_from_bytes(db: AsyncSession, user: User, filename: str, 
     )
     await asyncio.to_thread(
         publish_parse_status,
-        user.id,
+        user_id,
         paper.id,
         'queued',
         title=paper.title or paper.original_filename,
@@ -158,7 +184,7 @@ async def init_chunk_upload(
     if not data.filename.lower().endswith('.pdf'):
         raise HTTPException(400, '仅支持 PDF 文件')
 
-    await QuotaService().check_upload(db, user, data.total_size)
+    await QuotaService().check_upload(db, user.id, data.total_size)
 
     upload_id = uuid4().hex
     meta = data.model_dump() | {'user_id': user.id, 'received': []}
@@ -547,7 +573,7 @@ async def reparse_paper(paper_id: int, db: AsyncSession = Depends(get_db), user:
     if not paper or paper.user_id != user.id or paper.is_deleted:
         raise HTTPException(404, '文献不存在')
 
-    await QuotaService().check_upload(db, user, paper.file_size)
+    await QuotaService().check_upload(db, user.id, paper.file_size)
     paper.parse_status = 'queued'
     task = ParseTask(paper_id=paper.id, user_id=user.id, task_type='document_parse', status='queued')
     db.add(task)
