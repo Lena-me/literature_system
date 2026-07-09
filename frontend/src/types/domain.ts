@@ -102,6 +102,8 @@ export interface ChatMessage {
   streamFlow?: StreamFlow
   /** 用户中止生成 */
   cancelled?: boolean
+  /** 前端流式占位标识，用于避免并发提问时 patch 错位 */
+  clientStreamId?: string
 }
 export interface RelatedVisual {
   id: number

@@ -248,6 +248,8 @@ onMounted(async () => {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  --notebook-content-max-width: 860px;
+  --notebook-content-gutter: 16px;
 }
 
 .chat-body {

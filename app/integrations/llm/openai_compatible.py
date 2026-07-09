@@ -207,8 +207,8 @@ class OpenAICompatibleLLM:
                             if usage_tokens > 0:
                                 tokens = usage_tokens
                             delta = obj['choices'][0].get('delta') or {}
-                            reasoning = delta.get('reasoning_content') or ''
-                            content = delta.get('content') or ''
+                            reasoning = delta.get('reasoning_content') or delta.get('reasoning') or ''
+                            content = delta.get('content') or delta.get('text') or ''
                             streamed_chars += len(reasoning) + len(content)
                             if reasoning:
                                 yield ('reasoning', reasoning)
@@ -232,4 +232,11 @@ class OpenAICompatibleLLM:
         finally:
             if not tokens and streamed_chars:
                 tokens = _estimate_tokens('x' * streamed_chars)
+            if success and streamed_chars == 0:
+                logger.warning(
+                    'LLM stream_chat returned zero tokens model=%s config_id=%s url=%s',
+                    cfg.model_name,
+                    cfg.config_id,
+                    cfg.base_url,
+                )
             _record_call(cfg, success=success, tokens=tokens, latency_ms=(time.perf_counter() - started) * 1000)

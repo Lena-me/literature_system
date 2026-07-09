@@ -98,10 +98,10 @@ function askQuestion(q: string) {
 
 <style scoped>
 .suggested-questions {
-  padding: 0 24px 10px;
-  max-width: 800px;
+  padding: 0 var(--notebook-content-gutter, 16px) 10px;
+  max-width: var(--notebook-content-max-width, 860px);
   margin: 0 auto;
-  width: 100%;
+  width: calc(100% - 2 * var(--notebook-content-gutter, 16px));
 }
 
 .sq-header {

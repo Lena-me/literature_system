@@ -62,17 +62,47 @@ async def _iter_sse_with_keepalive(
     *,
     interval: float = 20.0,
 ) -> AsyncIterator[str]:
-    """长链路 QA 在检索/LLM 首 token 前可能长时间无事件，定期发送 SSE 注释避免代理超时断连。"""
-    iterator = source.__aiter__()
-    while True:
+    """长链路 QA 在检索/LLM 首 token 前可能长时间无事件，定期发送 SSE 注释避免代理超时断连。
+
+    使用后台生产者 + 队列：图节点内部长时间阻塞时，主循环仍可按时发送 keepalive。
+    """
+    queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    producer_error: list[BaseException] = []
+
+    async def _producer() -> None:
         try:
-            event = await asyncio.wait_for(iterator.__anext__(), timeout=interval)
-        except asyncio.TimeoutError:
-            yield ': keepalive\n\n'
-            continue
-        except StopAsyncIteration:
-            break
-        yield _sse_data(event)
+            async for event in source:
+                await queue.put(event)
+        except BaseException as exc:
+            producer_error.append(exc)
+            raise
+        finally:
+            await queue.put(None)
+
+    producer_task = asyncio.create_task(_producer())
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=interval)
+            except asyncio.TimeoutError:
+                yield ': keepalive\n\n'
+                continue
+
+            if event is None:
+                break
+            yield _sse_data(event)
+
+        if producer_error:
+            exc = producer_error[0]
+            if not isinstance(exc, asyncio.CancelledError):
+                yield _sse_data({'type': 'error', 'error': str(exc)})
+    finally:
+        if not producer_task.done():
+            producer_task.cancel()
+            try:
+                await producer_task
+            except asyncio.CancelledError:
+                pass
 
 
 @router.post('/ask')

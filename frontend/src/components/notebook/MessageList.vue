@@ -267,6 +267,12 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
             :content="m.content"
             :paper-links="m.external_refs"
           />
+          <p
+            v-else-if="!notebook.isStreaming || !isLastAssistant(i, m)"
+            class="assistant-empty-hint"
+          >
+            （暂无回答内容，请点击下方重新生成）
+          </p>
         </div>
 
         <ToolArtifacts v-if="shouldShowArtifacts(m, i)" :artifacts="m.artifacts!" />
@@ -353,10 +359,10 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 24px 32px;
+  padding: 8px var(--notebook-content-gutter, 16px) 32px;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
 }
 
@@ -366,7 +372,13 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
   flex-shrink: 0;
 }
 
-.empty-state { text-align: center; padding: 60px 24px; max-width: 480px; }
+.empty-state {
+  text-align: center;
+  padding: 60px 24px;
+  max-width: var(--notebook-content-max-width, 860px);
+  width: 100%;
+  margin: 0 auto;
+}
 .spark { font-size: 48px; color: var(--academic-primary); margin-bottom: 12px; }
 .empty-state h3 { font-size: 18px; color: var(--academic-text-main); margin: 0 0 8px; }
 .empty-state p { font-size: 14px; color: var(--academic-text-muted); line-height: 1.65; }
@@ -377,7 +389,8 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
    ======================================== */
 .message {
   width: 100%;
-  margin: 16px 0;
+  max-width: var(--notebook-content-max-width, 860px);
+  margin: 16px auto;
   display: flex;
   flex-direction: column;
 }
@@ -406,11 +419,27 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
 }
 
 .assistant-bubble {
-  max-width: 92%;
+  width: 100%;
+  max-width: 100%;
   background: var(--bg-surface);
   border: 1px solid var(--border-light);
   border-radius: 4px 20px 20px 20px;
   color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.assistant-bubble :deep(.markdown-body) {
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.assistant-empty-hint {
+  margin: 0;
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--academic-text-muted);
+  line-height: 1.5;
 }
 
 .msg-actions {
@@ -452,7 +481,7 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
   color: var(--academic-primary);
 }
 
-.sources-section { margin-top: 10px; width: 100%; max-width: 800px; }
+.sources-section { margin-top: 10px; width: 100%; }
 .sources-head { font-size: 12px; color: var(--academic-text-muted); margin-bottom: 10px; padding-left: 2px; }
 
 .paper-group {

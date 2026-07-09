@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { qaApi } from '@/api/qa'
 
 import type { ChatMessage, KnowledgeDomain, QAToolArtifact, SessionDetail, SessionPaper, SessionSummary, Source, StreamFlow, StreamStage } from '@/types/domain'
@@ -78,6 +79,7 @@ export const useNotebookStore = defineStore('notebook', () => {
   const detailCache = new Map<number, SessionDetail>()
   let switchAbortController: AbortController | null = null
   const streamAbortControllers = new Map<number, AbortController>()
+  const sendingSessionIds = new Set<number>()
 
   function isSessionStreaming(sessionId: number | null | undefined): boolean {
     return sessionId != null && streamingSessionIds.value.has(sessionId)
@@ -316,31 +318,44 @@ export const useNotebookStore = defineStore('notebook', () => {
   function mergeStreamWithRemote(
     local: ChatMessage[],
     remote: ChatMessage[],
-    assistantIndex: number,
+    localAssistant?: ChatMessage,
   ): ChatMessage[] {
     if (!remote.length) return local
-    const localAssistant = local[assistantIndex]
+
+    const assistant =
+      localAssistant?.role === 'assistant'
+        ? localAssistant
+        : [...local].reverse().find(m => m.role === 'assistant')
+
     const lastRemote = remote[remote.length - 1]
     const hasRemoteAssistant = lastRemote?.role === 'assistant'
-    const localText = `${localAssistant?.content || ''}\n${localAssistant?.reasoning || ''}`.trim()
 
-    if (!hasRemoteAssistant && localAssistant?.role === 'assistant' && localText) {
-      return [...remote, { ...localAssistant }]
+    // 后端尚未持久化 assistant 时，保留本地占位（含失败/中断提示）
+    if (!hasRemoteAssistant && assistant) {
+      return [...remote, { ...assistant }]
     }
 
-    if (hasRemoteAssistant && localAssistant?.role === 'assistant') {
+    if (hasRemoteAssistant && assistant) {
       const merged = [...remote]
       const ri = merged.length - 1
       const rm = merged[ri]
       merged[ri] = {
         ...rm,
-        content: rm.content || localAssistant.content || '',
-        reasoning: rm.reasoning || localAssistant.reasoning || '',
-        sources: rm.sources?.length ? rm.sources : localAssistant.sources,
-        artifacts: rm.artifacts?.length ? rm.artifacts : localAssistant.artifacts,
-        external_refs: rm.external_refs?.length ? rm.external_refs : localAssistant.external_refs,
+        content: rm.content || assistant.content || '',
+        reasoning: rm.reasoning || assistant.reasoning || '',
+        sources: rm.sources?.length ? rm.sources : assistant.sources,
+        artifacts: rm.artifacts?.length ? rm.artifacts : assistant.artifacts,
+        external_refs: rm.external_refs?.length ? rm.external_refs : assistant.external_refs,
       }
       return merged
+    }
+
+    // 远端只有 user、本地也没有可合并的 assistant：补一条可见提示
+    if (!hasRemoteAssistant && remote[remote.length - 1]?.role === 'user') {
+      return [
+        ...remote,
+        { role: 'assistant', content: '（回答生成中断，请点击下方重新生成）' },
+      ]
     }
 
     return remote
@@ -349,11 +364,11 @@ export const useNotebookStore = defineStore('notebook', () => {
   async function syncMessagesFromApi(
     targetSessionId: number,
     localSnapshot: ChatMessage[],
-    assistantIndex: number,
+    localAssistant?: ChatMessage,
   ) {
     try {
       const remote = attachArtifactsToMessages(await qaApi.messages(targetSessionId, 100))
-      const merged = mergeStreamWithRemote(localSnapshot, remote, assistantIndex)
+      const merged = mergeStreamWithRemote(localSnapshot, remote, localAssistant)
       applyMessagesForSession(targetSessionId, merged)
     } catch (e) {
       console.warn('[notebook] sync messages failed, keep local stream', e)
@@ -444,7 +459,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     const abortController = new AbortController()
     streamAbortControllers.set(sessionId, abortController)
 
-    const assistantIndex = activeMessages.value.length
+    const clientStreamId = `${sessionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     activeMessages.value.push({
       role: 'assistant',
       content: '',
@@ -453,6 +468,7 @@ export const useNotebookStore = defineStore('notebook', () => {
       streamStage: 'classifying',
       streamFlow: undefined,
       reasoningExpanded: true,
+      clientStreamId,
     })
     syncMessagesToCache(sessionId, [...activeMessages.value])
     bumpScroll(true)
@@ -460,16 +476,25 @@ export const useNotebookStore = defineStore('notebook', () => {
     const getStreamMessages = (): ChatMessage[] =>
       messageCache.get(sessionId) || (activeSessionId.value === sessionId ? activeMessages.value : [])
 
+    const findAssistantIndex = (msgs: ChatMessage[]) =>
+      msgs.findIndex(m => m.role === 'assistant' && m.clientStreamId === clientStreamId)
+
+    const getAssistantSnapshot = (msgs: ChatMessage[]) => {
+      const idx = findAssistantIndex(msgs)
+      return idx >= 0 ? msgs[idx] : undefined
+    }
+
     const patchAssistant = (patch: Partial<ChatMessage>) => {
       const msgs = [...getStreamMessages()]
-      const current = msgs[assistantIndex]
-      if (!current || current.role !== 'assistant') return
-      msgs[assistantIndex] = { ...current, ...patch }
+      const idx = findAssistantIndex(msgs)
+      if (idx < 0) return
+      msgs[idx] = { ...msgs[idx], ...patch }
       applyMessagesForSession(sessionId, msgs)
     }
 
     let aborted = false
     let receivedDone = false
+    let streamCancelled = false
     let streamInterrupted = false
     let streamSessionId = sessionId
     let pendingStreamArtifacts: QAToolArtifact[] = []
@@ -495,8 +520,7 @@ export const useNotebookStore = defineStore('notebook', () => {
             patchAssistant({ sources: event.sources })
           }
           if (event.type === 'status' && event.stage) {
-            const msgs = getStreamMessages()
-            const current = msgs[assistantIndex]
+            const current = getAssistantSnapshot(getStreamMessages())
             const stage = event.stage as StreamStage
             const streamFlow: StreamFlow | undefined = inferStreamFlow(
               stage,
@@ -505,8 +529,7 @@ export const useNotebookStore = defineStore('notebook', () => {
             patchAssistant({ streamStage: stage, streamFlow })
           }
           if (event.type === 'delta' && event.content) {
-            const msgs = getStreamMessages()
-            const current = msgs[assistantIndex]
+            const current = getAssistantSnapshot(getStreamMessages())
             const channel = event.channel || 'content'
             if (channel === 'reasoning') {
               patchAssistant({
@@ -528,23 +551,45 @@ export const useNotebookStore = defineStore('notebook', () => {
           if (event.type === 'done') {
             receivedDone = true
             if (event.cancelled) {
-              patchAssistant({ streamStage: undefined, streamFlow: undefined, reasoningExpanded: false })
+              streamCancelled = true
+              const current = getAssistantSnapshot(getStreamMessages())
+              const partial = `${current?.content || ''}\n${current?.reasoning || ''}`.trim()
+              patchAssistant({
+                streamStage: undefined,
+                streamFlow: undefined,
+                reasoningExpanded: false,
+                cancelled: true,
+                content: partial || '（连接中断，请点击下方重新生成）',
+              })
               return
             }
-            const msgs = getStreamMessages()
-            const current = msgs[assistantIndex]
+            const current = getAssistantSnapshot(getStreamMessages())
             const finalArtifacts = event.artifacts?.length
               ? event.artifacts
               : pendingStreamArtifacts.length
                 ? pendingStreamArtifacts
                 : current?.artifacts
+            const answer = event.answer || current?.content || ''
+            const reasoning = event.reasoning ?? current?.reasoning ?? ''
+            const hasContent = `${answer}\n${reasoning}`.trim()
+            if (!hasContent && !event.message_id) {
+              patchAssistant({
+                streamStage: undefined,
+                streamFlow: undefined,
+                reasoningExpanded: false,
+                content: '（未能生成有效回答，请检查模型配置或点击重新生成）',
+                sources: event.sources?.length ? event.sources : current?.sources,
+                artifacts: finalArtifacts,
+              })
+              return
+            }
             patchAssistant({
               streamStage: undefined,
               streamFlow: undefined,
               reasoningExpanded: false,
               id: event.message_id ?? current?.id,
-              content: event.answer || current?.content || '',
-              reasoning: event.reasoning ?? current?.reasoning ?? '',
+              content: answer,
+              reasoning,
               sources: event.sources?.length ? event.sources : current?.sources,
               artifacts: finalArtifacts,
               external_refs: event.external_refs != null ? event.external_refs : current?.external_refs,
@@ -553,7 +598,14 @@ export const useNotebookStore = defineStore('notebook', () => {
           }
           if (event.type === 'stream_interrupted') {
             streamInterrupted = true
-            patchAssistant({ streamStage: undefined, streamFlow: undefined, reasoningExpanded: false })
+            const current = getAssistantSnapshot(getStreamMessages())
+            const partial = `${current?.content || ''}\n${current?.reasoning || ''}`.trim()
+            patchAssistant({
+              streamStage: undefined,
+              streamFlow: undefined,
+              reasoningExpanded: false,
+              content: partial || '（回答生成中断，请点击下方重新生成）',
+            })
           }
           if (event.type === 'error') {
             patchAssistant({
@@ -571,8 +623,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     } catch (e: any) {
       if (e?.name === 'AbortError') {
         aborted = true
-        const msgs = getStreamMessages()
-        const current = msgs[assistantIndex]
+        const current = getAssistantSnapshot(getStreamMessages())
         const partial = (current?.content || '').trim()
         patchAssistant({
           streamStage: undefined,
@@ -598,15 +649,31 @@ export const useNotebookStore = defineStore('notebook', () => {
       markSessionStreaming(sessionId, false)
 
       const cachedMsgs = getStreamMessages()
-      const finalMsg = cachedMsgs[assistantIndex]
-      if (finalMsg?.role === 'assistant' && finalMsg.streamStage) {
+      const finalMsg = getAssistantSnapshot(cachedMsgs)
+      if (finalMsg?.streamStage) {
         patchAssistant({ streamStage: undefined, streamFlow: undefined, reasoningExpanded: false })
       }
 
+      // 流结束但无内容时补一条可见提示，避免气泡被同步逻辑吞掉
+      const tailMsg = getAssistantSnapshot(getStreamMessages())
+      if (
+        !aborted
+        && tailMsg
+        && !tailMsg.cancelled
+        && !`${tailMsg.content || ''}\n${tailMsg.reasoning || ''}`.trim()
+      ) {
+        patchAssistant({
+          content: streamInterrupted || streamCancelled || !receivedDone
+            ? '（回答生成中断，请点击下方重新生成）'
+            : '（未能生成有效回答，请点击下方重新生成）',
+        })
+      }
+
       const refreshedMsgs = getStreamMessages()
+      const localAssistant = getAssistantSnapshot(refreshedMsgs)
 
       if (!aborted) {
-        await syncMessagesFromApi(streamSessionId, refreshedMsgs, assistantIndex)
+        await syncMessagesFromApi(streamSessionId, refreshedMsgs, localAssistant)
       } else {
         syncMessagesToCache(sessionId, refreshedMsgs)
       }
@@ -626,7 +693,11 @@ export const useNotebookStore = defineStore('notebook', () => {
 
   async function sendMessage(text: string, mentionedIds?: number[] | null) {
     if (!text.trim() || !activeSessionId.value) return
-    if (isSessionStreaming(activeSessionId.value)) return
+    const sid = activeSessionId.value
+    if (sendingSessionIds.has(sid) || isSessionStreaming(sid)) {
+      ElMessage.warning('正在生成回答，请稍候')
+      return
+    }
 
     const question = text.trim()
     const isFirstMessage = activeMessages.value.length === 0
@@ -634,7 +705,7 @@ export const useNotebookStore = defineStore('notebook', () => {
     const paperIds = mentionedIds && mentionedIds.length > 0
       ? mentionedIds
       : (activeSources.value.length > 0 ? activeSources.value.map(p => p.id) : null)
-    recordLearningEvent('ai_message', paperIds?.[0], { question: question.slice(0, 100), session_id: activeSessionId.value })
+    recordLearningEvent('ai_message', paperIds?.[0], { question: question.slice(0, 100), session_id: sid })
 
     // 若正在编辑某条用户消息，先删 tail 再发送
     if (editingMessageId.value) {
@@ -642,12 +713,17 @@ export const useNotebookStore = defineStore('notebook', () => {
       return
     }
 
-    await runAskStream({
-      question,
-      mentionedIds,
-      isFirstMessage,
-      appendUserMessage: true,
-    })
+    sendingSessionIds.add(sid)
+    try {
+      await runAskStream({
+        question,
+        mentionedIds,
+        isFirstMessage,
+        appendUserMessage: true,
+      })
+    } finally {
+      sendingSessionIds.delete(sid)
+    }
   }
 
   /** 判断标题是否为默认/空（需要自动生成） */

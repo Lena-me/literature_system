@@ -332,7 +332,8 @@ function openPaper(paperId: number) {
 }
 
 .dock-shell {
-  max-width: 860px;
+  width: calc(100% - 2 * var(--notebook-content-gutter, 16px));
+  max-width: var(--notebook-content-max-width, 860px);
   margin: 0 auto;
   border-radius: 20px 20px 0 0;
   border: 1px solid var(--border-light);

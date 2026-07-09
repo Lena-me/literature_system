@@ -486,6 +486,10 @@ async def generate_node(state: AgentState, config: RunnableConfig, writer: Strea
     # 推理模型可能只流式输出 reasoning 通道，正文为空
     if not answer.strip() and reasoning.strip():
         answer = reasoning
+    if not answer.strip() and not reasoning.strip() and not is_cancelled(deps, state):
+        msg = '模型未返回任何内容，请检查管理后台 LLM 配置与 API 连通性'
+        writer({'type': 'error', 'error': msg})
+        raise RuntimeError(msg)
     citable = state.get('citable_ranked') or []
     result = {
         'answer': answer,
@@ -499,10 +503,6 @@ async def generate_node(state: AgentState, config: RunnableConfig, writer: Strea
 
 async def persist_node(state: AgentState, config: RunnableConfig, writer: StreamWriter) -> dict:
     deps = get_deps(config)
-    if is_cancelled(deps, state):
-        writer({'type': 'done', 'session_id': state.get('session_id'), 'cancelled': True})
-        return {'message_id': None, 'cited_sources': [], 'cancelled': True}
-
     session_id = state.get('session_id')
     if not session_id:
         raise ValueError('缺少 session_id')
@@ -510,9 +510,14 @@ async def persist_node(state: AgentState, config: RunnableConfig, writer: Stream
     answer = (state.get('answer') or '').strip()
     reasoning = (state.get('reasoning') or '').strip()
     content_to_save = answer or reasoning
+
+    if is_cancelled(deps, state) and not content_to_save:
+        writer({'type': 'error', 'error': '问答连接中断，请检查网络后点击重新生成'})
+        return {'message_id': None, 'cited_sources': [], 'cancelled': True}
+
     if not content_to_save:
         logger.warning('persist_node: empty answer and reasoning, session_id=%s', session_id)
-        writer({'type': 'done', 'session_id': session_id, 'message_id': None})
+        writer({'type': 'error', 'error': '模型未返回有效内容，请稍后重试'})
         return {'message_id': None, 'cited_sources': [], 'external_refs': []}
 
     cited_sources = list(state.get('cited_sources') or [])

@@ -112,6 +112,8 @@ class QAOrchestrator:
 
         session_emitted = False
 
+        terminal_sent = False
+
 
 
         try:
@@ -141,6 +143,10 @@ class QAOrchestrator:
                         if event.get('type') == 'session':
 
                             session_emitted = True
+
+                        if event.get('type') in ('done', 'error'):
+
+                            terminal_sent = True
 
                         yield event
 
@@ -172,7 +178,21 @@ class QAOrchestrator:
 
             cancel_ctrl['cancelled'] = True
 
-            yield {'type': 'done', 'cancelled': True, 'session_id': session_id}
+            logger.warning(
+
+                'QAOrchestrator.ask_stream cancelled session_id=%s',
+
+                session_id,
+
+            )
+
+            yield {
+
+                'type': 'error',
+
+                'error': '问答连接中断，请检查网络后点击重新生成',
+
+            }
 
             return
 
@@ -183,6 +203,28 @@ class QAOrchestrator:
             logger.error('QAOrchestrator.ask_stream failed: %s', exc, exc_info=True)
 
             yield {'type': 'error', 'error': str(exc)}
+
+            return
+
+
+
+        if not terminal_sent:
+
+            logger.error(
+
+                'QAOrchestrator.ask_stream finished without terminal event session_id=%s',
+
+                session_id,
+
+            )
+
+            yield {
+
+                'type': 'error',
+
+                'error': '问答流程未返回结果，请检查 LLM 配置、向量库与网络连接后重试',
+
+            }
 
 
 
