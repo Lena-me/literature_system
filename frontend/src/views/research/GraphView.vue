@@ -879,7 +879,7 @@ function delay(ms: number) {
 <template>
   <div class="literature-graph-page">
     <div
-      class="graph-sidebar-wrapper"
+      class="graph-sidebar-wrapper module-sidebar-wrapper"
       :class="{ collapsed: sidebarCollapsed }"
       @mouseenter="sidebarHovered = true"
       @mouseleave="sidebarHovered = false"
@@ -893,7 +893,6 @@ function delay(ms: number) {
         :filtered-graphs="filteredGraphs"
         :current-graph-id="graph?.id ?? null"
         :format-date="formatDate"
-        @refresh="loadGraphs"
         @open-create="openCreateDialog"
         @open-graph="openGraph"
         @delete-graph="deleteCurrentGraph"
@@ -940,9 +939,9 @@ function delay(ms: number) {
 
             <div class="create-field-grid">
               <label class="inline-field name-field">
-                <span>图谱名称</span>
+                <span class="module-field-label">图谱名称</span>
                 <div class="name-input-row">
-                  <input v-model="formName" placeholder="例如：医学图像分割研究脉络" />
+                  <input v-model="formName" class="module-field" placeholder="例如：医学图像分割研究脉络" />
                   <button
                     type="button"
                     class="ghost-btn name-suggest-btn"
@@ -954,8 +953,8 @@ function delay(ms: number) {
                 </div>
               </label>
               <label class="inline-field">
-                <span>研究主题</span>
-                <input v-model="formTopicName" placeholder="可选，便于后续分类查找" />
+                <span class="module-field-label">研究主题</span>
+                <input v-model="formTopicName" class="module-field" placeholder="可选，便于后续分类查找" />
               </label>
             </div>
 
@@ -966,9 +965,9 @@ function delay(ms: number) {
               <span>已选 {{ selectedPaperIds.length }} 篇</span>
             </div>
 
-            <div class="search-box create-paper-search">
+            <div class="module-search-box create-paper-search">
               <span class="search-icon">⌕</span>
-              <input v-model="paperSearch" placeholder="搜索标题、作者或关键词" />
+              <input v-model="paperSearch" class="module-field module-field--search" placeholder="搜索标题、作者或关键词" />
             </div>
 
             <div class="inline-paper-list slim-scroll">
@@ -1281,57 +1280,7 @@ function delay(ms: number) {
 }
 
 .graph-sidebar-wrapper {
-  position: relative;
-  flex-shrink: 0;
-  width: 240px;
   height: 100%;
-  overflow: hidden;
-  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.graph-sidebar-wrapper.collapsed {
-  width: 0;
-}
-
-.module-sidebar-toggle {
-  position: absolute;
-  left: 220px;
-  top: 18px;
-  z-index: 50;
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-light);
-  border-radius: 50%;
-  background: #fff;
-  color: var(--text-secondary);
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
-  opacity: 0;
-  transform: translateX(-4px);
-  transition: opacity 0.2s ease, transform 0.2s ease, color 0.15s, left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  pointer-events: none;
-}
-
-.module-sidebar-toggle.visible {
-  opacity: 1;
-  transform: translateX(0);
-  pointer-events: auto;
-}
-
-.module-sidebar-toggle.collapsed {
-  left: 12px;
-  opacity: 1;
-  transform: translateX(0);
-  pointer-events: auto;
-}
-
-.module-sidebar-toggle:hover {
-  color: var(--text-heading);
-  border-color: var(--border-light);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
 }
 
 .sidebar-heading,
@@ -1375,14 +1324,14 @@ h1, h2, h3, p {
 .graph-toolbar h1,
 .dialog-header h2 {
   margin: 0;
-  color: #0f1f3d;
-  font-weight: 850;
-  letter-spacing: -0.04em;
+  color: var(--text-heading);
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .sidebar-heading h2 {
-  font-size: 22px;
-  line-height: 1.18;
+  font-size: 16px;
+  line-height: 1.3;
 }
 
 .graph-toolbar h1 {
@@ -1816,7 +1765,7 @@ h1, h2, h3, p {
 .create-home-head h2 {
   margin: 0;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.3;
 }
@@ -1835,35 +1784,9 @@ h1, h2, h3, p {
   margin-bottom: 16px;
 }
 
-.inline-field span {
-  display: block;
-  margin-bottom: 6px;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .inline-field input,
 .create-paper-search input {
   width: 100%;
-  height: 36px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: var(--border-lighter);
-  color: #1e293b;
-  outline: none;
-  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.inline-field input:focus,
-.create-paper-search input:focus {
-  background: #fff;
-  border-color: var(--graph-blue);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
-
-.inline-field input {
-  padding: 0 12px;
 }
 
 .name-input-row {
@@ -1880,7 +1803,7 @@ h1, h2, h3, p {
 
 .name-suggest-btn {
   flex-shrink: 0;
-  height: 36px;
+  height: 34px;
   padding: 0 12px;
   white-space: nowrap;
 }
@@ -2146,7 +2069,7 @@ h1, h2, h3, p {
 .create-submit-btn,
 .create-library-btn {
   width: 100%;
-  height: 38px;
+  height: 34px;
   border-radius: 8px;
   font-weight: 600;
   cursor: pointer;

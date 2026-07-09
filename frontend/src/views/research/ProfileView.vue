@@ -5,9 +5,11 @@ import { useAuthStore } from '@/stores/auth'
 import { usePaperStore } from '@/stores/papers'
 import { featuresApi } from '@/api/features'
 import { authApi } from '@/api/auth'
+import { resolveAvatarUrl } from '@/utils/avatar'
+import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import MarkdownRenderer from '@/components/common/MarkdownRenderer.vue'
-import { NODE_PALETTE } from '@/utils/graphColors'
+import { CHART_COLORS } from '@/utils/graphColors'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -44,6 +46,46 @@ const newPassword = ref('')
 const confirmPassword = ref('')
 const passwordError = ref('')
 const usernameError = ref('')
+const avatarInputRef = ref<HTMLInputElement | null>(null)
+const avatarUploading = ref(false)
+const avatarVersion = ref(0)
+
+const avatarDisplayUrl = computed(() =>
+  resolveAvatarUrl(auth.user, avatarVersion.value || undefined),
+)
+
+function triggerAvatarUpload() {
+  if (avatarUploading.value) return
+  avatarInputRef.value?.click()
+}
+
+async function onAvatarSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+    ElMessage.warning('仅支持 JPG、PNG、WebP、GIF 格式')
+    return
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    ElMessage.warning('头像不能超过 2MB')
+    return
+  }
+
+  avatarUploading.value = true
+  try {
+    const res = await authApi.uploadAvatar(file)
+    if (auth.user) auth.user.avatar_url = res.avatar_url
+    avatarVersion.value = Date.now()
+    ElMessage.success('头像已更新')
+  } catch {
+    /* 错误由 http 拦截器提示 */
+  } finally {
+    avatarUploading.value = false
+  }
+}
 
 const overview = ref<any>({ 
   paper_count:0, 
@@ -196,7 +238,7 @@ const roseLegendDomains = computed(() =>
   primaryCoverageDomains.value.slice(0, 4).map((d: any, i: number) => ({
     name: d.name,
     frequency: d.frequency,
-    color: [NODE_PALETTE.slate, NODE_PALETTE.teal, NODE_PALETTE.blue, NODE_PALETTE.indigo][i % 4],
+    color: CHART_COLORS[i % CHART_COLORS.length],
   })),
 )
 
@@ -265,16 +307,9 @@ function renderRoseChart(
   }
 
   const sorted = [...domains].sort((a, b) => b.frequency - a.frequency)
-  const palette = [
-    NODE_PALETTE.slate,
-    NODE_PALETTE.teal,
-    NODE_PALETTE.blue,
-    NODE_PALETTE.indigo,
-    '#bfdbfe',
-    '#b8aea4',
-  ]
 
   instance.setOption({
+    color: [...CHART_COLORS],
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
@@ -299,7 +334,7 @@ function renderRoseChart(
       data: sorted.map((d, i) => ({
         name: d.name,
         value: d.frequency,
-        itemStyle: { color: palette[i % palette.length] },
+        itemStyle: { color: CHART_COLORS[i % CHART_COLORS.length] },
       })),
       animationDuration: 600,
       animationEasing: 'cubicOut',
@@ -343,16 +378,16 @@ function buildRadarOption(domain: any, isCompact: boolean) {
       radius: isCompact ? '50%' : '64%',
       nameGap: isCompact ? 10 : 8,
       axisName: {
-        color: '#7a7268',
+        color: '#64748b',
         fontSize: isCompact ? 11 : 11,
         fontWeight: 500,
         lineHeight: 15,
         padding: [2, 4],
         formatter: (name: string) => formatRadarAxisName(name, isCompact ? 4 : 5),
       },
-      splitLine: { lineStyle: { color: '#ebe6de' } },
-      splitArea: { show: true, areaStyle: { color: ['#fff', '#faf8f5'] } },
-      axisLine: { lineStyle: { color: '#e8e4dc' } },
+      splitLine: { lineStyle: { color: '#e2e8f0' } },
+      splitArea: { show: true, areaStyle: { color: ['#fff', '#f8fafc'] } },
+      axisLine: { lineStyle: { color: '#e2e8f0' } },
     },
     series: [{
       name: domain.name,
@@ -360,7 +395,7 @@ function buildRadarOption(domain: any, isCompact: boolean) {
       data: [{
         value: values,
         name: domain.name,
-        areaStyle: { color: 'rgba(91, 143, 185, 0.14)' },
+        areaStyle: { color: 'rgba(37, 99, 235, 0.12)' },
         lineStyle: { color, width: 2 },
         itemStyle: { color, borderColor: '#fff', borderWidth: 2 },
         symbolSize: isCompact ? 5 : 6,
@@ -503,11 +538,20 @@ const heatmapRows = computed(() => {
 const getCellColor = (day: number | null, count: number) => {
   if (day === null) return 'transparent'
   const maxValue = currentHeatmap.value?.max_value || 1
-  if (count === 0) return '#f1f5f9'
+
+  if (heatmapMode.value === 'focus') {
+    if (count === 0) return '#ecfdf5'
+    if (count <= Math.ceil(maxValue * 0.25)) return '#d1fae5'
+    if (count <= Math.ceil(maxValue * 0.5)) return '#6ee7b7'
+    if (count <= Math.ceil(maxValue * 0.75)) return '#10b981'
+    return '#0f766e'
+  }
+
+  if (count === 0) return '#eff6ff'
   if (count <= Math.ceil(maxValue * 0.25)) return '#dbeafe'
-  if (count <= Math.ceil(maxValue * 0.5)) return '#bfdbfe'
+  if (count <= Math.ceil(maxValue * 0.5)) return '#93c5fd'
   if (count <= Math.ceil(maxValue * 0.75)) return '#3b82f6'
-  return '#2563eb'
+  return '#1d4ed8'
 }
 
 const currentMonthTotal = computed(() => {
@@ -546,14 +590,17 @@ const reportHighlights = computed(() => [
   {
     label: '研读报告',
     value: overview.value.deep_research_outputs?.reports || overview.value.report_count || 0,
+    tone: 'tone-report',
   },
   {
     label: '知识图谱',
     value: overview.value.deep_research_outputs?.graphs || 0,
+    tone: 'tone-graph',
   },
   {
     label: '跨学科占比',
     value: `${heroMetrics.value.domainSpan}%`,
+    tone: 'tone-cross',
   },
 ])
 
@@ -561,7 +608,7 @@ const domainDoughnutStyle = computed(() => {
   const domains = (overview.value.knowledge_domains?.top_domains || []).slice(0, 5)
   const total = domains.reduce((sum: number, d: any) => sum + d.frequency, 0)
   if (!total) return { background: 'var(--border-light)' }
-  const colors = ['var(--el-color-primary-hover)', 'var(--el-color-primary)', 'var(--text-secondary)', 'var(--text-tertiary)', 'var(--border-light)']
+  const colors = ['#2563eb', '#10b981', '#6366f1', '#f59e0b', '#94a3b8']
   let acc = 0
   const stops = domains.map((d: any, i: number) => {
     const pct = (d.frequency / total) * 100
@@ -637,6 +684,7 @@ const monthsForYear = (year: string) => {
 onMounted(async () => {
   window.addEventListener('resize', handleChartResize)
 
+  await auth.loadMe().catch(() => {})
   await store.load()
   paperCount.value = store.list.length
   completedCount.value = store.list.filter(
@@ -755,8 +803,27 @@ function logout() {
     <!-- 左栏：身份名片 -->
     <aside class="profile-col profile-col--left">
       <section class="profile-card identity-card">
-        <div class="avatar-wrapper">
-          <div class="avatar-box">{{ user.username?.slice(0, 1)?.toUpperCase() }}</div>
+        <div
+          class="avatar-wrapper"
+          :class="{ 'is-uploading': avatarUploading }"
+          role="button"
+          tabindex="0"
+          title="点击更换头像"
+          @click="triggerAvatarUpload"
+          @keydown.enter.prevent="triggerAvatarUpload"
+        >
+          <input
+            ref="avatarInputRef"
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            hidden
+            @change="onAvatarSelected"
+          />
+          <img v-if="avatarDisplayUrl" :src="avatarDisplayUrl" class="avatar-image" alt="用户头像">
+          <div v-else class="avatar-box">{{ user.username?.slice(0, 1)?.toUpperCase() }}</div>
+          <div class="avatar-upload-mask">
+            <span>{{ avatarUploading ? '上传中…' : '更换头像' }}</span>
+          </div>
         </div>
         <div class="profile-identity-text">
           <h2>{{ user.name || user.username }}</h2>
@@ -794,9 +861,9 @@ function logout() {
       <section class="heatmap-compact profile-card heatmap-card--left">
         <div class="heatmap-card-head">
           <h3>科研热力</h3>
-          <div class="heatmap-mode-row heatmap-mode-row--inline">
-            <button type="button" class="heatmap-mode-btn" :class="{ active: heatmapMode === 'upload' }" @click="heatmapMode = 'upload'">上传</button>
-            <button type="button" class="heatmap-mode-btn" :class="{ active: heatmapMode === 'focus' }" @click="heatmapMode = 'focus'">专注</button>
+          <div class="heatmap-mode-row heatmap-mode-row--inline" :class="`heatmap-mode-row--${heatmapMode}`">
+            <button type="button" class="heatmap-mode-btn heatmap-mode-btn--upload" :class="{ active: heatmapMode === 'upload' }" @click="heatmapMode = 'upload'">上传</button>
+            <button type="button" class="heatmap-mode-btn heatmap-mode-btn--focus" :class="{ active: heatmapMode === 'focus' }" @click="heatmapMode = 'focus'">专注</button>
           </div>
         </div>
         <div class="heatmap-calendar">
@@ -822,7 +889,7 @@ function logout() {
 
     <!-- 中栏：月度报告 & 技能图谱 -->
     <main class="profile-col profile-col--center">
-      <section class="report-editorial profile-card report-editorial--always">
+      <section class="report-editorial profile-card report-editorial--always monthly-report-card">
         <div class="report-editorial-head">
           <div class="report-month-nav">
             <button type="button" class="nav-btn" :class="{ disabled: !canPrev }" :disabled="!canPrev" @click="prevMonth">
@@ -849,12 +916,14 @@ function logout() {
           </div>
         </div>
 
-        <h3 class="report-header-title">{{ reportEditorialTitle }}</h3>
-        <p class="report-header-sub">{{ reportLoading ? reportLoadingText : reportSubtitle }}</p>
+        <div class="report-title-container">
+          <h3 class="report-header-title">{{ reportEditorialTitle }}</h3>
+          <p class="report-header-sub">{{ reportLoading ? reportLoadingText : reportSubtitle }}</p>
+        </div>
 
         <div class="report-highlights">
           <div v-for="item in reportHighlights" :key="item.label" class="report-highlight">
-            <span class="report-highlight-value">{{ item.value }}</span>
+            <span class="report-highlight-value" :class="item.tone">{{ item.value }}</span>
             <span class="report-highlight-label">{{ item.label }}</span>
           </div>
         </div>
@@ -885,7 +954,7 @@ function logout() {
             >详情</button>
           </div>
           <div ref="mainRoseChartRef" class="skill-chart skill-chart--rose" />
-          <div v-if="roseLegendDomains.length" class="skill-domain-legend skill-domain-legend--stack">
+          <div v-if="roseLegendDomains.length" class="skill-domain-legend">
             <span
               v-for="item in roseLegendDomains"
               :key="item.name"
@@ -1140,13 +1209,13 @@ function logout() {
   background: #ffffff;
   border-radius: 14px;
   padding: 16px;
-  border: 1px solid rgba(226, 232, 240, 0.4);
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+  border: 1px solid #e2e8f0;
+  box-shadow: var(--shadow-card);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .profile-card:hover {
-  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
 }
 
 /* ============ 左栏身份名片 ============ */
@@ -1158,6 +1227,7 @@ function logout() {
 }
 
 .avatar-wrapper {
+  position: relative;
   width: 80px;
   height: 80px;
   border-radius: 50%;
@@ -1166,6 +1236,38 @@ function logout() {
   overflow: hidden;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
   margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.avatar-wrapper.is-uploading {
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+.avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.avatar-upload-mask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.avatar-wrapper:hover .avatar-upload-mask,
+.avatar-wrapper:focus-visible .avatar-upload-mask {
+  opacity: 1;
 }
 
 .avatar-box {
@@ -1195,11 +1297,12 @@ function logout() {
 }
 
 .profile-tag {
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: var(--bg-surface);
-  color: var(--text-main);
-  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -1319,12 +1422,26 @@ function logout() {
   padding: 16px 18px;
   background: var(--bg-canvas);
   border-color: rgba(226, 232, 240, 0.35);
-  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.01), 0 4px 16px rgba(15, 23, 42, 0.04);
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.01), var(--shadow-card);
   min-height: 0;
 }
 
+.monthly-report-card.report-editorial.profile-card {
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  padding: 32px 40px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
+}
+
 .report-editorial.profile-card:hover {
-  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.01), 0 4px 16px rgba(15, 23, 42, 0.04);
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.01), var(--shadow-card);
+}
+
+.monthly-report-card.report-editorial.profile-card:hover {
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
 }
 
 .report-editorial:hover {
@@ -1335,11 +1452,14 @@ function logout() {
   transform: none;
 }
 
+.monthly-report-card.report-editorial--always:hover {
+  transform: translateY(-2px);
+}
+
 .report-detail-inline {
   width: 100%;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(226, 232, 240, 0.9);
+  margin-top: 20px;
+  padding-top: 8px;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1400,7 +1520,7 @@ function logout() {
 .report-editorial .nav-btn:hover:not(.disabled),
 .report-editorial .month-btn:hover,
 .report-editorial .btn-ghost:hover:not(:disabled) {
-  background: rgba(243, 240, 233, 0.85);
+  background: rgba(239, 246, 255, 0.85);
   border-color: rgba(59, 130, 246, 0.4);
   color: var(--text-main);
 }
@@ -1423,24 +1543,18 @@ function logout() {
   flex-wrap: wrap;
 }
 
+.report-title-container {
+  border-left: 4px solid #2563eb;
+  padding-left: 12px;
+  margin-bottom: 24px;
+}
+
 .report-header-title {
   margin: 0;
   font-family: Georgia, 'Source Han Serif CN', 'Noto Serif SC', serif;
   color: var(--text-main);
   font-size: 20px;
   font-weight: 600;
-  position: relative;
-  padding-bottom: 6px;
-}
-
-.report-header-title::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 40px;
-  height: 2px;
-  background: var(--academic-primary);
 }
 
 .report-header-sub {
@@ -1465,11 +1579,23 @@ function logout() {
 }
 
 .report-highlight-value {
-  font-size: 24px;
+  font-size: 36px;
   font-weight: 800;
-  color: var(--academic-primary);
+  font-family: 'Inter', system-ui, sans-serif;
   line-height: 1;
   letter-spacing: -0.02em;
+}
+
+.report-highlight-value.tone-report {
+  color: #2563eb;
+}
+
+.report-highlight-value.tone-graph {
+  color: #10b981;
+}
+
+.report-highlight-value.tone-cross {
+  color: #f59e0b;
 }
 
 .report-highlight-label {
@@ -1589,29 +1715,19 @@ function logout() {
 .skill-domain-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 6px;
-  margin-top: 4px;
+  gap: 6px 12px;
+  margin-top: 8px;
   flex-shrink: 0;
-}
-
-.skill-domain-legend--stack {
-  flex-direction: column;
-  gap: 2px;
-}
-
-.skill-domain-legend--stack .skill-domain-legend-item {
-  max-width: 100%;
 }
 
 .skill-domain-legend-item {
   display: inline-flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 5px;
-  max-width: calc(50% - 5px);
   font-size: 11px;
   color: var(--text-muted);
   line-height: 1.35;
-  word-break: break-all;
+  white-space: nowrap;
 }
 
 .skill-domain-legend-item i {
@@ -1640,8 +1756,8 @@ function logout() {
 .card-surface {
   background: #fff;
   border-radius: 16px;
-  border: 1px solid rgba(226, 232, 240, 0.4);
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+  border: 1px solid #e2e8f0;
+  box-shadow: var(--shadow-card);
 }
 
 .dashboard-header {
@@ -1916,9 +2032,17 @@ function logout() {
 }
 
 .heatmap-mode-btn.active {
-  background: #2563eb;
   color: #fff;
-  box-shadow: 0 2px 8px rgba(91, 168, 217, 0.28);
+}
+
+.heatmap-mode-btn--upload.active {
+  background: #2563eb;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.28);
+}
+
+.heatmap-mode-btn--focus.active {
+  background: #10b981;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.28);
 }
 
 .heatmap-calendar {
@@ -2152,34 +2276,68 @@ function logout() {
 }
 
 .report-summary-content {
-  font-size: 12.5px;
-  color: var(--text-primary);
-  line-height: 1.58;
+  --notebook-line: 32px;
+  font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', serif;
+  font-size: 16px;
+  color: #334155;
+  line-height: var(--notebook-line);
+  text-align: justify;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  padding: 4px 8px 20px;
+  background-color: #f8fafc;
+  background-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--notebook-line) - 1px),
+    rgba(37, 99, 235, 0.14) calc(var(--notebook-line) - 1px),
+    rgba(37, 99, 235, 0.14) var(--notebook-line)
+  );
+  background-size: 100% var(--notebook-line);
+  background-attachment: local;
+  border-radius: 6px;
   scrollbar-width: thin;
   scrollbar-color: var(--graph-line) transparent;
 }
 
 .report-summary-content :deep(h2) {
-  font-size: 14px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 16px;
   font-weight: 700;
   color: var(--text-heading);
-  margin: 0 0 6px;
-  padding-bottom: 5px;
-  border-bottom: 1px solid var(--graph-line);
+  text-align: left;
+  border-bottom: none;
+  padding: 0 0 8px;
+  margin: 0 0 12px;
+  background: #f8fafc;
+  line-height: 1.5;
 }
 
 .report-summary-content :deep(h3) {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-heading);
-  margin: 10px 0 4px;
+  margin: 8px 0 4px;
+  background: #f8fafc;
+  line-height: 1.5;
 }
 
 .report-summary-content :deep(p) {
-  margin: 5px 0;
+  font-size: inherit;
+  line-height: var(--notebook-line);
+  color: inherit;
+  letter-spacing: 0.01em;
+  margin: 0 0 0;
+  text-align: justify;
+  text-indent: 2em;
+}
+
+.report-summary-content :deep(strong) {
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.08);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-weight: 600;
 }
 
 .report-summary-content :deep(ul),
@@ -2459,13 +2617,13 @@ function logout() {
 }
 
 .profile-tag {
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--graph-muted);
-  background: var(--bg-canvas);
-  border: 1px solid var(--graph-line);
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
 }
 
 .profile-settings {
@@ -2584,7 +2742,15 @@ function logout() {
 
   .report-highlights {
     grid-template-columns: 1fr;
-    gap: 12px;
+    gap: 10px;
+  }
+
+  .monthly-report-card.report-editorial.profile-card {
+    padding: 24px 20px;
+  }
+
+  .report-highlight-value {
+    font-size: 28px;
   }
 }
 
@@ -2592,10 +2758,6 @@ function logout() {
   .report-editorial-head {
     flex-direction: column;
     align-items: stretch;
-  }
-
-  .report-highlight-value {
-    font-size: 24px;
   }
 
   .stat-cube-value {

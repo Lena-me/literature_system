@@ -1,11 +1,23 @@
 /* ============================================================================
-   学术级浅色主题 (Academic Light Mode Design Tokens)
-   设计理念：纸质呼吸感 · 极简弱边框 · 高对比度柔和文本 · 知性蓝点缀
+   学术蓝 Academic Blue + 语义辅助色 Semantic Accents
    ============================================================================ */
 
 :root {
   /* ==========================================
-     1. 品牌色彩 (Brand Colors)
+     0. 语义辅助色 (Semantic Accents)
+  ========================================== */
+  --accent-primary: #2563eb;
+  --accent-primary-hover: #1d4ed8;
+  --accent-teal: #10b981;
+  --accent-sky: #0ea5e9;
+  --accent-amber: #f59e0b;
+  --accent-orange: #f97316;
+  --accent-indigo: #6366f1;
+  --accent-violet: #8b5cf6;
+  --accent-cyan: #06b6d4;
+
+  /* ==========================================
+     1. 品牌色彩 (Brand / Element Plus)
   ========================================== */
   --el-color-primary: #2563eb !important;
   --el-color-primary-hover: #1d4ed8 !important;
@@ -46,11 +58,12 @@
   --radius-lg: 16px;
 
   /* ==========================================
-     6. 阴影系统 (Shadows)
+     6. 阴影系统 — 冷灰蓝调
   ========================================== */
-  --shadow-sm: 0 2px 10px -2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.03);
-  --shadow-lg: 0 10px 30px -5px rgba(0, 0, 0, 0.08);
+  --shadow-sm: 0 2px 10px -2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.05), 0 2px 4px -2px rgba(15, 23, 42, 0.03);
+  --shadow-lg: 0 10px 30px -5px rgba(15, 23, 42, 0.08);
+  --shadow-card: 0 4px 20px rgba(15, 23, 42, 0.03);
 
   /* ==========================================
      7. 语义化标签 (Tags)
@@ -69,19 +82,22 @@
   --sidebar-text-muted: var(--text-secondary);
   --sidebar-bg-subtle: var(--el-color-primary-light);
   --sidebar-border: rgba(226, 232, 240, 0.9);
-  --sidebar-accent: #2563eb;
-  --sidebar-indicator: #2563eb;
-  --accent-caramel: #2563eb;
-  --accent-sage: #10b981;
+  --sidebar-accent: var(--accent-primary);
+  --sidebar-indicator: var(--accent-primary);
+  --accent-caramel: var(--accent-primary);
+  --accent-sage: var(--accent-teal);
 
   /* 交互选中态 */
-  --selected-bg: rgba(239, 246, 255, 0.85);
-  --selected-bg-hover: rgba(239, 246, 255, 0.95);
+  --selected-bg: rgba(239, 246, 255, 0.88);
+  --selected-bg-hover: rgba(239, 246, 255, 0.96);
   --selected-bg-subtle: rgba(239, 246, 255, 0.55);
   --focus-ring: rgba(37, 99, 235, 0.12);
   --focus-border: rgba(37, 99, 235, 0.45);
 
-  /* ── 兼容旧变量（全站组件渐进迁移） ── */
+  /* 图表配色盘 */
+  --chart-colors: #3b82f6, #10b981, #6366f1, #f59e0b, #06b6d4, #8b5cf6;
+
+  /* ── 兼容旧变量 ── */
   --academic-canvas: var(--bg-canvas);
   --academic-panel: var(--bg-surface);
   --academic-border: var(--border-light);
@@ -89,16 +105,16 @@
   --academic-text-main: var(--text-heading);
   --academic-text-body: var(--text-primary);
   --academic-text-muted: var(--text-secondary);
-  --academic-primary: #2563eb;
-  --academic-primary-hover: #1d4ed8;
+  --academic-primary: var(--accent-primary);
+  --academic-primary-hover: var(--accent-primary-hover);
   --academic-primary-light: #eff6ff;
   --shadow-soft: var(--shadow-sm);
   --shadow-float: var(--shadow-lg);
   --line-academic: 1.65;
 
-  --brand: #2563eb;
-  --brand-2: #1d4ed8;
-  --brand-3: #10b981;
+  --brand: var(--accent-primary);
+  --brand-2: var(--accent-primary-hover);
+  --brand-3: var(--accent-teal);
   --danger: #ef4444;
   --bg: var(--bg-canvas);
   --panel: rgba(255, 255, 255, 0);
@@ -163,18 +179,19 @@ a { color: inherit; text-decoration: none; }
 }
 
 .gradient-title {
-  background: linear-gradient(120deg, var(--text-heading) 0%, var(--academic-primary) 50%, var(--brand-3) 100%);
+  background: linear-gradient(120deg, var(--text-heading) 0%, var(--accent-primary) 50%, var(--accent-teal) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 
-.soft-card {
+.soft-card,
+.card-surface {
   border-radius: var(--radius-lg);
   padding: 22px;
   background: var(--bg-surface);
   border: 1px solid var(--border-light);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card);
 }
 
 .slim-scroll {
@@ -198,7 +215,7 @@ a { color: inherit; text-decoration: none; }
   border-radius: 50%;
   display: inline-block;
   margin-right: 7px;
-  background: var(--brand-3);
+  background: var(--accent-teal);
   box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
 }
 

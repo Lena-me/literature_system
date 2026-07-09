@@ -53,6 +53,7 @@ class UserOut(BaseModel):
     status: str
     paper_upload_count: int = 0
     report_generate_count: int = 0
+    avatar_url: str | None = None
     created_at: datetime
     model_config = {'from_attributes': True}
 

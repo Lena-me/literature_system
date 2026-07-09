@@ -9,6 +9,7 @@ export interface User {
   status: string
   paper_upload_count?: number
   report_generate_count?: number
+  avatar_url?: string | null
   created_at?: string
 }
 export interface TokenOut { access_token: string; token_type: string; user: User }

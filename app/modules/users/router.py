@@ -1,15 +1,44 @@
 from datetime import datetime, date, timedelta, timezone
-from fastapi import APIRouter, Depends
+from pathlib import Path
+import mimetypes
+import re
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.config import get_settings
 from app.core.dependencies import get_current_user
 from app.db.mysql import get_db
 from app.models import User, LearningDuration
 from app.models.entities import BEIJING_TZ
 from app.schemas import UserOut
+from app.services.audit_service import audit_action
 
 router = APIRouter(prefix='/users', tags=['用户'])
+settings = get_settings()
+
+ALLOWED_AVATAR_TYPES = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+}
+MAX_AVATAR_BYTES = 2 * 1024 * 1024
+AVATAR_FILENAME_RE = re.compile(r'^\d+\.(jpg|jpeg|png|webp|gif)$', re.IGNORECASE)
+
+
+def _avatar_public_url(user_id: int, ext: str) -> str:
+    return f'{settings.api_v1_prefix}/users/avatars/{user_id}{ext}'
+
+
+def _clear_user_avatar_files(user_id: int) -> None:
+    avatar_dir = Path(settings.avatar_dir)
+    if not avatar_dir.exists():
+        return
+    for old in avatar_dir.glob(f'{user_id}.*'):
+        old.unlink(missing_ok=True)
 
 
 async def _bump_learning_duration(db: AsyncSession, user_id: int) -> int:
@@ -63,6 +92,76 @@ async def _bump_learning_duration(db: AsyncSession, user_id: int) -> int:
 @router.get('/me', response_model=UserOut)
 async def me(user: User = Depends(get_current_user)):
     return user
+
+
+@router.post('/me/avatar')
+async def upload_avatar(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    content_type = (file.content_type or '').lower()
+    ext = ALLOWED_AVATAR_TYPES.get(content_type)
+    if not ext:
+        raise HTTPException(status_code=400, detail='仅支持 JPG、PNG、WebP、GIF 格式头像')
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail='头像文件为空')
+    if len(data) > MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=400, detail='头像文件不能超过 2MB')
+
+    avatar_dir = Path(settings.avatar_dir)
+    avatar_dir.mkdir(parents=True, exist_ok=True)
+    _clear_user_avatar_files(user.id)
+
+    target = avatar_dir / f'{user.id}{ext}'
+    target.write_bytes(data)
+
+    user.avatar_url = _avatar_public_url(user.id, ext)
+    await audit_action(
+        db,
+        user_id=user.id,
+        module='users',
+        operation_type='upload_avatar',
+        content={'avatar_url': user.avatar_url},
+    )
+    await db.commit()
+    return {'message': '头像上传成功', 'avatar_url': user.avatar_url}
+
+
+@router.delete('/me/avatar')
+async def delete_avatar(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if not user.avatar_url:
+        raise HTTPException(status_code=400, detail='当前未设置头像')
+
+    _clear_user_avatar_files(user.id)
+    user.avatar_url = None
+    await audit_action(
+        db,
+        user_id=user.id,
+        module='users',
+        operation_type='delete_avatar',
+        content={'user_id': user.id},
+    )
+    await db.commit()
+    return {'message': '头像已移除'}
+
+
+@router.get('/avatars/{filename}')
+async def get_avatar(filename: str):
+    if not AVATAR_FILENAME_RE.match(filename):
+        raise HTTPException(status_code=404, detail='头像不存在')
+
+    path = Path(settings.avatar_dir) / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail='头像不存在')
+
+    media_type = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
+    return FileResponse(path, media_type=media_type)
 
 
 @router.post('/heartbeat')

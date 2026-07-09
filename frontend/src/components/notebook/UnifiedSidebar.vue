@@ -254,10 +254,15 @@ const profileNavItem = {
   color: var(--sidebar-text-main);
   white-space: nowrap;
   opacity: 0;
-  transition: opacity 0.2s ease 0.1s;
+  width: 0;
+  overflow: hidden;
+  transition: opacity 0.2s ease 0.1s, width 0.2s ease;
 }
 
-.unified-sidebar.expanded .brand-text { opacity: 1; }
+.unified-sidebar.expanded .brand-text {
+  opacity: 1;
+  width: auto;
+}
 
 .cta-wrap {
   padding: 8px 12px 10px;
@@ -298,10 +303,15 @@ const profileNavItem = {
 
 .cta-label {
   opacity: 0;
-  transition: opacity 0.2s ease 0.1s;
+  width: 0;
+  overflow: hidden;
+  transition: opacity 0.2s ease 0.1s, width 0.2s ease;
 }
 
-.unified-sidebar.expanded .cta-label { opacity: 1; }
+.unified-sidebar.expanded .cta-label {
+  opacity: 1;
+  width: auto;
+}
 
 .primary-nav {
   display: flex;
@@ -435,23 +445,68 @@ const profileNavItem = {
 .nav-label {
   white-space: nowrap;
   opacity: 0;
-  transition: opacity 0.2s ease 0.1s;
+  width: 0;
+  overflow: hidden;
+  transition: opacity 0.2s ease 0.1s, width 0.2s ease;
 }
 
-.unified-sidebar.expanded .nav-label { opacity: 1; }
-
-.unified-sidebar:not(.expanded) .nav-item--primary {
-  justify-content: center;
-  padding: 10px 8px;
+.unified-sidebar.expanded .nav-label {
+  opacity: 1;
+  width: auto;
 }
 
-.unified-sidebar:not(.expanded) .nav-item--profile {
+/* 折叠态：图标居中展示，避免文字占位把图标挤出可视区 */
+.unified-sidebar:not(.expanded) .sidebar-header {
   justify-content: center;
-  padding: 8px;
+  padding: 16px 8px 8px;
+}
+
+.unified-sidebar:not(.expanded) .cta-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 4px 8px 8px;
+}
+
+.unified-sidebar:not(.expanded) .cta-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  gap: 0;
+}
+
+.unified-sidebar:not(.expanded) .primary-nav {
+  align-items: center;
+  padding: 4px 6px 10px;
+}
+
+.unified-sidebar:not(.expanded) .nav-item {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  justify-content: center;
+  overflow: visible;
 }
 
 .unified-sidebar:not(.expanded) .nav-item--primary.active::before {
   height: 50%;
+}
+
+.unified-sidebar:not(.expanded) .profile-footer {
+  display: flex;
+  justify-content: center;
+  padding: 10px 8px 14px;
+}
+
+.unified-sidebar:not(.expanded) .nav-item--profile {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  justify-content: center;
+}
+
+.unified-sidebar:not(.expanded) .session-item {
+  justify-content: center;
+  padding: 8px 6px;
 }
 
 .history-section {

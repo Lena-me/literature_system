@@ -377,21 +377,21 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   <div class="reports-workspace">
     <!-- 左侧列表 -->
     <div
-      class="report-sidebar-wrapper"
+      class="report-sidebar-wrapper module-sidebar-wrapper"
       :class="{ collapsed: sidebarCollapsed }"
       @mouseenter="sidebarHovered = true"
       @mouseleave="sidebarHovered = false"
     >
-      <aside class="report-sidebar">
-        <div class="report-sidebar-head">
-          <h2 class="report-sidebar-title">研读报告</h2>
-          <span class="report-count">{{ list.length }} 份</span>
+      <aside class="module-sidebar-shell">
+        <div class="module-sidebar-head">
+          <h2 class="module-sidebar-title">研读报告</h2>
+          <span class="module-sidebar-count">{{ list.length }} 份</span>
         </div>
 
-        <div class="report-divider" />
+        <div class="module-sidebar-divider" />
 
-        <div class="report-create-block">
-          <select v-model.number="selectedPaperId" class="report-field" :disabled="creating || papers.length === 0">
+        <div class="module-create-block">
+          <select v-model.number="selectedPaperId" class="module-field" :disabled="creating || papers.length === 0">
             <option :value="null" disabled>选择一篇文献</option>
             <option v-for="paper in papers" :key="paper.id" :value="paper.id">
               {{ paper.title || paper.original_filename || `文献 #${paper.id}` }}
@@ -399,43 +399,43 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
           </select>
           <input
             v-model="reportTitle"
-            class="report-field"
+            class="module-field"
             placeholder="报告标题，可不填"
             :disabled="creating"
           />
-          <button class="report-create-btn" :disabled="!selectedPaperId || creating" @click="createReport">
+          <button class="module-create-btn" :disabled="!selectedPaperId || creating" @click="createReport">
             {{ creating ? '生成中...' : '生成研读报告' }}
           </button>
         </div>
 
-        <div class="report-divider" />
+        <div class="module-sidebar-divider" />
 
-        <div class="report-list-wrap slim-scroll">
+        <div class="module-sidebar-list-wrap slim-scroll">
           <div
             v-for="r in list"
             :key="r.id"
-            class="report-list-item"
+            class="module-sidebar-list-item"
             :class="{ active: current?.id === r.id }"
             @click="current = r"
           >
-            <div class="report-item-main">
-              <div class="report-item-title">{{ r.title }}</div>
-              <p v-if="reportSummary(r)" class="report-item-summary">{{ reportSummary(r) }}</p>
-              <div class="report-item-meta">{{ formatDate(r.created_at) }}</div>
+            <div class="module-sidebar-list-main">
+              <div class="module-sidebar-list-title">{{ r.title }}</div>
+              <p v-if="reportSummary(r)" class="module-sidebar-list-summary">{{ reportSummary(r) }}</p>
+              <div class="module-sidebar-list-meta">{{ formatDate(r.created_at) }}</div>
             </div>
-            <button class="report-item-delete" title="删除报告" @click.stop="deleteReport(r)">
+            <button class="module-sidebar-list-delete" title="删除报告" @click.stop="deleteReport(r)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
               </svg>
             </button>
           </div>
-          <div v-if="list.length === 0" class="report-empty-side">暂无报告</div>
+          <div v-if="list.length === 0" class="module-sidebar-empty">暂无报告</div>
         </div>
       </aside>
     </div>
 
     <button
-      class="report-sidebar-toggle"
+      class="module-sidebar-toggle"
       :class="{ visible: sidebarHovered || sidebarCollapsed, collapsed: sidebarCollapsed }"
       :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
       @click="toggleSidebar"
@@ -674,259 +674,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   overflow: hidden;
 }
 
-/* ====== 左侧栏 ====== */
-.report-sidebar-wrapper {
-  position: relative;
-  flex-shrink: 0;
-  width: 260px;
-  overflow: hidden;
-  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.report-sidebar-wrapper.collapsed {
-  width: 0;
-}
-
-.report-sidebar {
-  width: 260px;
-  height: 100%;
-  background: var(--bg-surface);
-  box-shadow: 1px 0 0 0 var(--sidebar-border);
-  display: flex;
-  flex-direction: column;
-  padding: 20px 12px;
-  overflow: hidden;
-  gap: 12px;
-}
-
-.report-sidebar-toggle {
-  position: absolute;
-  left: 240px;
-  top: 18px;
-  z-index: 50;
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-light);
-  border-radius: 50%;
-  background: #fff;
-  color: var(--text-secondary);
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
-  opacity: 0;
-  transform: translateX(-4px);
-  transition: opacity 0.2s ease, transform 0.2s ease, color 0.15s, left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  pointer-events: none;
-}
-
-.report-sidebar-toggle.visible {
-  opacity: 1;
-  transform: translateX(0);
-  pointer-events: auto;
-}
-
-.report-sidebar-toggle.collapsed {
-  left: 12px;
-  opacity: 1;
-  transform: translateX(0);
-  pointer-events: auto;
-}
-
-.report-sidebar-toggle:hover {
-  color: var(--text-heading);
-  border-color: var(--border-light);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
-}
-
-.report-sidebar-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 8px;
-}
-
-.report-sidebar-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-heading);
-}
-
-.report-count {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-weight: 500;
-  background: var(--border-lighter);
-  padding: 1px 7px;
-  border-radius: 10px;
-}
-
-.report-divider {
-  height: 1px;
-  background: var(--border-lighter);
-}
-
-.report-create-block {
-  display: grid;
-  gap: 8px;
-  padding: 0 8px;
-}
-
-.report-field {
-  width: 100%;
-  min-width: 0;
-  height: 34px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 8px;
-  background: var(--bg-canvas);
-  color: var(--text-primary);
-  font-size: 13px;
-  outline: none;
-  box-shadow: 0 0 0 1px var(--border-light);
-}
-
-.report-field:focus {
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.3);
-}
-
-.report-create-btn {
-  height: 34px;
-  border: none;
-  border-radius: 8px;
-  background: var(--el-color-primary);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.report-create-btn:hover:not(:disabled) {
-  background: var(--el-color-primary-hover);
-}
-
-.report-create-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.report-list-wrap {
-  flex: 1;
-  overflow-y: auto;
-  margin: 0 -12px;
-  padding-bottom: 12px;
-}
-
-.report-list-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  cursor: pointer;
-  transition: background 0.12s;
-  box-shadow: 0 1px 0 0 var(--border-lighter);
-  position: relative;
-}
-
-.report-list-item::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  transition: background 0.12s;
-}
-
-.report-list-item:hover {
-  background: var(--border-lighter);
-}
-
-.report-list-item.active {
-  background: rgba(239, 246, 255, 0.85);
-}
-
-.report-list-item.active::before {
-  background: #2563eb;
-}
-
-.report-list-item.active:hover {
-  background: rgba(239, 246, 255, 0.95);
-}
-
-.report-item-main {
-  flex: 1;
-  min-width: 0;
-}
-
-.report-item-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-heading);
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-height: 1.35;
-}
-
-.report-list-item.active .report-item-title {
-  color: var(--text-heading);
-}
-
-.report-item-meta {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-.report-item-summary {
-  margin: 4px 0 0;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.report-item-delete {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  opacity: 0;
-  transition: all 0.12s;
-}
-
-.report-list-item:hover .report-item-delete {
-  opacity: 1;
-}
-
-.report-item-delete:hover {
-  background: #FEE2E2;
-  color: #EF4444;
-}
-
-.report-empty-side {
-  padding: 32px 16px;
-  text-align: center;
-  color: var(--text-tertiary);
-  font-size: 13px;
-}
+/* ====== 左侧栏（布局由 research.css module-* 统一） ====== */
 
 /* ====== 右侧主区 ====== */
 .report-main {

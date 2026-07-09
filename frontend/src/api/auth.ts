@@ -54,6 +54,16 @@ export const authApi = {
   // 更新用户信息
   updateProfile: (payload: { username: string }) => http.put('/auth/profile', payload),
 
+  uploadAvatar: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return http.post<any, { message: string; avatar_url: string }>('/users/me/avatar', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
+  deleteAvatar: () => http.delete<any, { message: string }>('/users/me/avatar'),
+
   // 修改密码
   changePassword: (payload: { old_password: string; new_password: string }) => http.put('/auth/change-password', payload),
 

@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth'
 import { usePaperStore } from '@/stores/papers'
 import { useNotebookStore } from '@/stores/notebook'
 import { featuresApi } from '@/api/features'
+import { resolveAvatarUrl } from '@/utils/avatar'
 import BentoActionCard from '@/components/dashboard/BentoActionCard.vue'
 
 const router = useRouter()
@@ -44,9 +45,11 @@ function sparklinePath(values: number[], w = 72, h = 28): string {
 }
 
 const paperCount = ref(0)
-const parsedCount = ref(0)
+const todayFocusMinutes = ref(0)
 const sessionCount = ref(0)
 const hotTopics = ref<string[]>([])
+
+const avatarDisplayUrl = computed(() => resolveAvatarUrl(user))
 
 onMounted(async () => {
   await Promise.all([
@@ -55,15 +58,18 @@ onMounted(async () => {
   ])
 
   paperCount.value = paperStore.list.length
-  parsedCount.value = paperStore.list.filter(
-    p => p.parse_status === 'completed' || p.parse_status === 'indexed',
-  ).length
   sessionCount.value = notebook.sessions.length
 
   try {
-    const hotspots = await featuresApi.hotspots()
+    const [hotspots, overview] = await Promise.all([
+      featuresApi.hotspots(),
+      featuresApi.overview(),
+    ])
     hotTopics.value = (hotspots as any)?.keywords || (hotspots as any)?.data?.keywords || []
+    todayFocusMinutes.value = Number((overview as any)?.today_minutes) || 0
   } catch { /* ignore */ }
+
+  await auth.loadMe().catch(() => {})
 })
 
 function quickActions(action: string) {
@@ -85,6 +91,9 @@ function quickActions(action: string) {
     case 'graph':
       router.push('/graph')
       break
+    case 'profile':
+      router.push('/profile')
+      break
   }
 }
 </script>
@@ -100,9 +109,10 @@ function quickActions(action: string) {
           <h1>{{ greetingInfo.text }}，{{ displayName }} {{ greetingInfo.emoji }}</h1>
           <p>你的专属科研引擎已就绪，今天想探索什么？</p>
         </div>
-        <div class="avatar-wrap">
+        <div class="avatar-wrap" @click="router.push('/profile')">
           <div class="avatar-halo" aria-hidden="true" />
-          <div class="avatar-lg">{{ user.username?.slice(0, 1)?.toUpperCase() }}</div>
+          <img v-if="avatarDisplayUrl" :src="avatarDisplayUrl" class="avatar-lg avatar-lg--image" alt="用户头像">
+          <div v-else class="avatar-lg">{{ user.username?.slice(0, 1)?.toUpperCase() }}</div>
         </div>
       </div>
 
@@ -121,19 +131,19 @@ function quickActions(action: string) {
           <span class="stat-label">已上传文献</span>
         </div>
 
-        <div class="stat-card stat-card--success" @click="quickActions('upload')">
+        <div class="stat-card stat-card--success" @click="quickActions('profile')">
           <div class="stat-card-head">
-            <div class="stat-icon parsed">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <div class="stat-icon focus">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             </div>
             <svg class="stat-sparkline stat-sparkline--muted" width="56" height="20" viewBox="0 0 56 20" aria-hidden="true">
-              <path :d="sparklinePath([1, 3, 2, 5, 4, 6, parsedCount || 3], 56, 20)" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+              <path :d="sparklinePath([1, 2, 4, 3, 6, 5, todayFocusMinutes || 2], 56, 20)" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
             </svg>
           </div>
-          <b class="stat-value">{{ parsedCount }}</b>
+          <b class="stat-value">{{ todayFocusMinutes }}<small>分</small></b>
           <span class="stat-label stat-label--live">
-            <span class="pulse-dot" aria-hidden="true" />
-            已解析就绪
+            <span v-if="todayFocusMinutes > 0" class="pulse-dot" aria-hidden="true" />
+            今日专注
           </span>
         </div>
 
@@ -440,6 +450,12 @@ function quickActions(action: string) {
     0 6px 18px rgba(37, 99, 235, 0.3);
 }
 
+.avatar-lg--image {
+  display: block;
+  object-fit: cover;
+  background: #fff;
+}
+
 /* ====== 统计卡片（与 Bento 统一） ====== */
 .stats-row {
   position: relative;
@@ -498,7 +514,7 @@ function quickActions(action: string) {
   color: #2563eb;
 }
 
-.stat-icon.parsed {
+.stat-icon.focus {
   background: rgba(16, 185, 129, 0.12);
   color: #059669;
 }
@@ -525,6 +541,14 @@ function quickActions(action: string) {
   line-height: 1;
   letter-spacing: -0.03em;
   color: #2563eb;
+}
+
+.stat-value small {
+  margin-left: 2px;
+  font-size: 14px;
+  font-weight: 600;
+  color: inherit;
+  opacity: 0.85;
 }
 
 .stat-card--success .stat-value {

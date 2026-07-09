@@ -25,6 +25,7 @@ class User(Base):
     paper_upload_count: Mapped[int] = mapped_column(Integer, default=0)
     report_generate_count: Mapped[int] = mapped_column(Integer, default=0)
     quota_json: Mapped[str | None] = mapped_column(Text)
+    avatar_url: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

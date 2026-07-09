@@ -1,12 +1,22 @@
 import type { LiteratureGraphNode } from '@/api/knowledge'
 
+/** 学术蓝图表配色盘 */
+export const CHART_COLORS = [
+  '#3b82f6',
+  '#10b981',
+  '#6366f1',
+  '#f59e0b',
+  '#06b6d4',
+  '#8b5cf6',
+] as const
+
 /**
- * 知性蓝冷色盘 — 与学术浅色主题一致
- * 年份：灰蓝 → 青绿 → 蓝 → 靛紫
+ * 学术蓝节点色盘
+ * 年份：灰蓝 → 青 → 蓝 → 靛紫
  */
 export const NODE_PALETTE = {
   slate: '#6b7d93',
-  teal: '#14b8a6',
+  teal: '#10b981',
   blue: '#3b82f6',
   indigo: '#6366f1',
 } as const
@@ -74,7 +84,7 @@ export function yearToNodeColor(year: number | null | undefined, range: [number,
 
 const HOVER_COLOR_MAP: Record<string, string> = {
   [NODE_PALETTE.slate]: '#5a6b80',
-  [NODE_PALETTE.teal]: '#0d9488',
+  [NODE_PALETTE.teal]: '#059669',
   [NODE_PALETTE.blue]: '#2563eb',
   [NODE_PALETTE.indigo]: '#4f46e5',
   [YEAR_UNKNOWN_COLOR]: '#6b7d93',

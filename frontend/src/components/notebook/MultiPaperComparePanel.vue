@@ -866,40 +866,40 @@ function evidencePageLabel(page?: number | string) {
 <template>
   <div class="compare-workspace">
     <div
-      class="compare-sidebar-wrapper"
+      class="compare-sidebar-wrapper module-sidebar-wrapper"
       :class="{ collapsed: sidebarCollapsed }"
       @mouseenter="sidebarHovered = true"
       @mouseleave="sidebarHovered = false"
     >
-      <aside class="compare-sidebar">
-        <div class="compare-sidebar-head">
-          <h2 class="compare-sidebar-title">多文献对比</h2>
-          <span class="compare-count">{{ history.length }} 条</span>
+      <aside class="module-sidebar-shell">
+        <div class="module-sidebar-head">
+          <h2 class="module-sidebar-title">多维对比</h2>
+          <span class="module-sidebar-count">{{ history.length }} 条</span>
         </div>
 
-        <div class="compare-divider" />
+        <div class="module-sidebar-divider" />
 
-        <div class="compare-create-block">
-          <button class="compare-create-btn" @click="startNewCompare">新建对比</button>
+        <div class="module-create-block">
+          <button class="module-create-btn" @click="startNewCompare">新建对比</button>
         </div>
 
-        <div class="compare-divider" />
+        <div class="module-sidebar-divider" />
 
-        <div class="compare-list-wrap slim-scroll">
-          <div v-if="historyLoading" class="compare-empty-side">加载中...</div>
-          <div v-else-if="!history.length" class="compare-empty-side">暂无历史记录</div>
+        <div class="module-sidebar-list-wrap slim-scroll">
+          <div v-if="historyLoading" class="module-sidebar-empty">加载中...</div>
+          <div v-else-if="!history.length" class="module-sidebar-empty">暂无历史记录</div>
           <div
             v-for="item in history"
             :key="item.id"
-            class="compare-list-item"
+            class="module-sidebar-list-item"
             :class="{ active: activeHistoryId === item.id }"
             @click="openHistoryItem(item)"
           >
-            <div class="compare-item-main">
-              <div class="compare-item-title">{{ historyItemTitle(item) }}</div>
-              <div class="compare-item-meta">{{ historyItemMeta(item) }}</div>
+            <div class="module-sidebar-list-main">
+              <div class="module-sidebar-list-title">{{ historyItemTitle(item) }}</div>
+              <div class="module-sidebar-list-meta">{{ historyItemMeta(item) }}</div>
             </div>
-            <button class="compare-item-delete" title="删除" @click.stop="deleteHistoryItem(item)">
+            <button class="module-sidebar-list-delete" title="删除" @click.stop="deleteHistoryItem(item)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
               </svg>
@@ -910,7 +910,7 @@ function evidencePageLabel(page?: number | string) {
     </div>
 
     <button
-      class="compare-sidebar-toggle"
+      class="module-sidebar-toggle"
       :class="{ visible: sidebarHovered || sidebarCollapsed, collapsed: sidebarCollapsed }"
       :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
       @click="toggleSidebar"
@@ -925,7 +925,7 @@ function evidencePageLabel(page?: number | string) {
 
     <main class="compare-main" :class="{ 'is-sidebar-collapsed': sidebarCollapsed }">
       <header class="compare-header">
-        <h2 class="compare-header-title">多文献对比</h2>
+        <h2 class="compare-header-title">多维对比</h2>
       </header>
 
       <div class="compare-tabs">
@@ -936,12 +936,12 @@ function evidencePageLabel(page?: number | string) {
       <section v-if="activeTab === 'setup'" class="compare-body slim-scroll">
         <div class="section-block config-block">
           <div class="field-row name-row">
-            <label class="field-label">记录名称</label>
+            <label class="field-label module-field-label">记录名称</label>
             <div class="name-input-row">
               <input
                 ref="compareNameInputRef"
                 v-model="compareName"
-                class="text-field"
+                class="text-field module-field"
                 placeholder="输入本次对比名称"
                 @focus="focusCompareName"
                 @input="markCompareNameEdited"
@@ -957,10 +957,10 @@ function evidencePageLabel(page?: number | string) {
           </div>
 
           <div class="field-row">
-            <label class="field-label">关注问题</label>
+            <label class="field-label module-field-label">关注问题</label>
             <textarea
               v-model="evidenceQuestion"
-              class="text-area"
+              class="text-area module-field"
               rows="2"
               placeholder="例如：比较检索策略、数据集和评价指标"
             />
@@ -1267,224 +1267,6 @@ function evidencePageLabel(page?: number | string) {
   background: var(--bg-canvas);
 }
 
-.compare-sidebar-wrapper {
-  position: relative;
-  flex-shrink: 0;
-  width: 260px;
-  overflow: hidden;
-  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.compare-sidebar-wrapper.collapsed {
-  width: 0;
-}
-
-.compare-sidebar {
-  width: 260px;
-  height: 100%;
-  background: var(--bg-surface);
-  border-right: 1px solid var(--sidebar-border);
-  display: flex;
-  flex-direction: column;
-  padding: 16px 12px;
-  box-sizing: border-box;
-}
-
-.compare-sidebar-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 8px;
-}
-
-.compare-sidebar-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-heading);
-}
-
-.compare-count {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-weight: 500;
-  background: var(--border-lighter);
-  padding: 1px 7px;
-  border-radius: 10px;
-}
-
-.compare-divider {
-  height: 1px;
-  background: var(--border-lighter);
-  margin: 12px 0;
-}
-
-.compare-create-block {
-  display: grid;
-  gap: 8px;
-  padding: 0 8px;
-}
-
-.compare-create-btn {
-  height: 34px;
-  border: none;
-  border-radius: 8px;
-  background: var(--el-color-primary);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.compare-create-btn:hover {
-  background: var(--el-color-primary-hover);
-}
-
-.compare-list-wrap {
-  flex: 1;
-  overflow-y: auto;
-  margin: 0 -12px;
-  padding-bottom: 8px;
-}
-
-.compare-list-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  cursor: pointer;
-  transition: background 0.12s;
-  box-shadow: 0 1px 0 0 var(--border-lighter);
-  position: relative;
-}
-
-.compare-list-item::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  transition: background 0.12s;
-}
-
-.compare-list-item:hover {
-  background: var(--border-lighter);
-}
-
-.compare-list-item.active {
-  background: rgba(239, 246, 255, 0.85);
-}
-
-.compare-list-item.active::before {
-  background: #2563eb;
-}
-
-.compare-list-item.active:hover {
-  background: rgba(239, 246, 255, 0.95);
-}
-
-.compare-item-main {
-  flex: 1;
-  min-width: 0;
-}
-
-.compare-item-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-heading);
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-height: 1.35;
-}
-
-.compare-list-item.active .compare-item-title {
-  color: var(--text-heading);
-}
-
-.compare-item-meta {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-.compare-item-delete {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  opacity: 0;
-  transition: all 0.12s;
-}
-
-.compare-list-item:hover .compare-item-delete {
-  opacity: 1;
-}
-
-.compare-item-delete:hover {
-  background: #FEE2E2;
-  color: #EF4444;
-}
-
-.compare-empty-side {
-  padding: 32px 16px;
-  text-align: center;
-  color: var(--text-tertiary);
-  font-size: 13px;
-}
-
-.compare-sidebar-toggle {
-  position: absolute;
-  left: 240px;
-  top: 18px;
-  z-index: 50;
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-light);
-  border-radius: 50%;
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
-  opacity: 0;
-  transform: translateX(-4px);
-  transition: opacity 0.2s ease, transform 0.2s ease, color 0.15s, left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  pointer-events: none;
-}
-
-.compare-sidebar-toggle.visible {
-  opacity: 1;
-  transform: translateX(0);
-  pointer-events: auto;
-}
-
-.compare-sidebar-toggle.collapsed {
-  left: 12px;
-  opacity: 1;
-  transform: translateX(0);
-  pointer-events: auto;
-}
-
-.compare-sidebar-toggle:hover {
-  color: var(--text-heading);
-  border-color: #CBD5E1;
-}
-
 .compare-main {
   flex: 1;
   min-width: 0;
@@ -1669,14 +1451,6 @@ function evidencePageLabel(page?: number | string) {
   line-height: 1.4;
 }
 
-.field-label {
-  display: block;
-  margin: 0 0 7px;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .field-row {
   min-width: 0;
 }
@@ -1689,7 +1463,7 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .inline-action {
-  height: 40px;
+  height: 34px;
   padding: 0 12px;
   border-radius: 8px;
   border: none;
@@ -1713,30 +1487,6 @@ function evidencePageLabel(page?: number | string) {
 .text-field,
 .text-area {
   width: 100%;
-  border: none;
-  border-radius: 8px;
-  padding: 9px 12px;
-  color: var(--text-primary);
-  font: inherit;
-  line-height: 1.5;
-  outline: none;
-  resize: vertical;
-  background: var(--bg-surface);
-  box-shadow: 0 0 0 1px var(--border-light);
-}
-
-.text-field {
-  height: 40px;
-}
-
-.text-area {
-  min-height: 68px;
-  max-height: 120px;
-}
-
-.text-field:focus,
-.text-area:focus {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
 }
 
 .action-row {
@@ -2312,15 +2062,11 @@ function evidencePageLabel(page?: number | string) {
 }
 
 @media (max-width: 960px) {
-  .compare-sidebar-wrapper {
+  .module-sidebar-wrapper {
     width: 220px;
   }
 
-  .compare-sidebar {
-    width: 220px;
-  }
-
-  .compare-sidebar-toggle {
+  .module-sidebar-toggle {
     left: 200px;
   }
 

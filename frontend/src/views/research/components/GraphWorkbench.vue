@@ -20,7 +20,6 @@ const emit = defineEmits<{
   (e: 'update:graphSearch', value: string): void
   (e: 'update:leftTab', value: LeftTab): void
   (e: 'update:activeTopicId', value: number | null): void
-  (e: 'refresh'): void
   (e: 'openCreate'): void
   (e: 'openGraph', id: number): void
   (e: 'deleteGraph', item: GraphListItem): void
@@ -41,21 +40,25 @@ function setActiveTopic(id: number | null) {
 </script>
 
 <template>
-  <aside class="graph-sidebar">
-    <div class="sidebar-heading">
-      <h2>我的图谱</h2>
-      <button class="icon-btn" title="刷新列表" @click="emit('refresh')">
-        <span>↻</span>
+  <aside class="graph-sidebar module-sidebar-shell">
+    <div class="module-sidebar-head">
+      <h2 class="module-sidebar-title">知识图谱</h2>
+      <span class="module-sidebar-count">{{ filteredGraphs.length }} 个</span>
+    </div>
+
+    <div class="module-sidebar-divider" />
+
+    <div class="module-create-block">
+      <button class="module-create-btn" @click="emit('openCreate')">
+        新建图谱
       </button>
     </div>
 
-    <button class="create-btn sidebar-create" @click="emit('openCreate')">
-      <span>＋</span> 新建图谱
-    </button>
+    <div class="module-sidebar-divider" />
 
-    <div class="search-box">
+    <div class="module-search-box">
       <span class="search-icon">⌕</span>
-      <input v-model="graphSearchModel" placeholder="搜索图谱名称或主题…" />
+      <input v-model="graphSearchModel" class="module-field module-field--search" placeholder="搜索图谱名称或主题…" />
     </div>
 
     <div class="tabs">
@@ -87,8 +90,8 @@ function setActiveTopic(id: number | null) {
         :class="{ active: currentGraphId === item.id }"
         @click="emit('openGraph', item.id)"
       >
-        <div class="row-title-line">
-          <strong>{{ item.name }}</strong>
+        <div class="row-title-block">
+          <strong class="graph-card-title">{{ item.name }}</strong>
           <span class="row-date">{{ formatDate(item.created_at) }}</span>
         </div>
         <div class="row-subline">
@@ -114,112 +117,34 @@ function setActiveTopic(id: number | null) {
 <style scoped>
 .graph-sidebar {
   width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  padding: 20px 12px;
-  background: #fff;
-  box-shadow: 1px 0 0 0 var(--border-light);
   overflow-y: auto;
   overflow-x: hidden;
-  gap: 12px;
 }
 
-.sidebar-heading,
+.create-btn {
+  width: 100%;
+}
+
 .card-topline,
 .card-meta,
 .card-footer,
-.row-title-line,
 .row-subline,
 .row-meta-line {
   display: flex;
   align-items: center;
 }
 
-.sidebar-heading,
 .card-footer,
-.row-title-line,
 .row-meta-line {
   justify-content: space-between;
 }
 
-.sidebar-heading h2 {
-  margin: 0;
-  color: #0f1f3d;
-  font-size: 21px;
-  line-height: 1.16;
-  font-weight: 850;
-  letter-spacing: -0.04em;
-}
-
-.sidebar-create {
-  margin: 18px 0 14px;
-}
-
-.icon-btn,
-.create-btn,
 .tabs button,
 .topic-pill,
 .graph-card {
   border: none;
   cursor: pointer;
   font-family: inherit;
-}
-
-.icon-btn {
-  width: 38px;
-  height: 38px;
-  padding: 0;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.92);
-  color: #344960;
-  border: 1px solid #dbe6f0;
-  font-size: 18px;
-}
-
-.create-btn {
-  width: 100%;
-  height: 42px;
-  border-radius: 13px;
-  background: var(--el-color-primary-hover);
-  color: #fff;
-  font-weight: 850;
-  box-shadow: none;
-}
-
-.create-btn:hover {
-  background: var(--el-color-primary-hover);
-}
-
-.search-box {
-  position: relative;
-  margin: 0 0 14px;
-}
-
-.search-icon {
-  position: absolute;
-  left: 13px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #8ea0b5;
-  font-size: 16px;
-}
-
-.search-box input {
-  width: 100%;
-  height: 40px;
-  padding: 0 12px 0 38px;
-  border: 1px solid #dbe6f0;
-  background: rgba(255, 255, 255, 0.92);
-  border-radius: 13px;
-  color: #1e293b;
-  outline: none;
-  transition: border 0.16s, box-shadow 0.16s, background 0.16s;
-}
-
-.search-box input:focus {
-  border-color: rgba(20, 184, 166, 0.68);
-  box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.12);
 }
 
 .tabs {
@@ -327,30 +252,32 @@ function setActiveTopic(id: number | null) {
   flex: 0 0 auto;
 }
 
-.row-title-line {
-  gap: 8px;
+.row-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
 }
 
-.graph-card strong {
-  min-width: 0;
+.graph-card-title {
+  width: 100%;
   margin: 0;
   color: #17233a;
-  font-size: 13.5px;
-  line-height: 1.38;
-  font-weight: 850;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 600;
+  white-space: normal;
+  word-break: break-word;
 }
 
-.graph-card.active strong {
+.graph-card.active .graph-card-title {
   color: #075985;
 }
 
 .row-date {
   flex: 0 0 auto;
   color: #7b8aa0;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .row-subline {

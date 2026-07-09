@@ -110,6 +110,7 @@ class Settings(BaseSettings):
     default_daily_qa_calls: int = 200
     default_concurrent_tasks: int = 5
     upload_tmp_dir: str = './runtime/uploads'
+    avatar_dir: str = './runtime/avatars'
 
     # Milvus 备份恢复
     milvus_backup_dir: str = './runtime/milvus_backups'

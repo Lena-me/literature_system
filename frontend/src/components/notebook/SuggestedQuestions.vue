@@ -7,34 +7,60 @@ const notebook = useNotebookStore()
 const questions = ref<string[]>([])
 const loading = ref(false)
 
-// 仅在新会话（无任何消息）时获取推荐问题
+/** 仅随会话 / 挂载文献 ID 变化，不受解析状态轮询影响 */
+const suggestFetchKey = computed(() => {
+  if (!notebook.activeSessionId || notebook.activeMessages.length > 0) return ''
+  const paperIds = notebook.activeSources
+    .map(p => p.id)
+    .filter(id => Number.isFinite(id))
+    .sort((a, b) => a - b)
+    .join(',')
+  if (!paperIds) return ''
+  return `${notebook.activeSessionId}:${paperIds}`
+})
+
+let lastFetchedKey = ''
+let fetchPromise: Promise<void> | null = null
+
 watch(
-  () => [
-    notebook.activeSessionId,
-    notebook.activeSources.map(p => p.id).join(','),
-    notebook.activeMessages.length,
-  ] as const,
-  async ([sessionId, sourceKey, messageCount]) => {
-    if (!sessionId || !sourceKey || messageCount > 0) {
+  suggestFetchKey,
+  async key => {
+    if (!key) {
       questions.value = []
+      lastFetchedKey = ''
       return
     }
-    await fetchQuestions()
+    if (key === lastFetchedKey && questions.value.length > 0) return
+    await fetchQuestions(key)
   },
   { immediate: true },
 )
 
-async function fetchQuestions() {
+async function fetchQuestions(key: string) {
   if (!notebook.activeSessionId || notebook.activeSources.length === 0) return
+  if (fetchPromise && lastFetchedKey === key) return fetchPromise
+
   loading.value = true
-  try {
-    const res = await qaApi.suggestedQuestions(notebook.activeSessionId)
-    questions.value = res.questions || []
-  } catch {
-    questions.value = []
-  } finally {
-    loading.value = false
-  }
+  lastFetchedKey = key
+  fetchPromise = (async () => {
+    try {
+      const res = await qaApi.suggestedQuestions(notebook.activeSessionId!)
+      if (suggestFetchKey.value !== key) return
+      questions.value = res.questions || []
+    } catch {
+      if (suggestFetchKey.value === key) {
+        questions.value = []
+        lastFetchedKey = ''
+      }
+    } finally {
+      if (suggestFetchKey.value === key) {
+        loading.value = false
+      }
+      fetchPromise = null
+    }
+  })()
+
+  return fetchPromise
 }
 
 // 只有会话刚开始且无消息时显示
@@ -57,7 +83,7 @@ function askQuestion(q: string) {
       <span>基于挂载文献，推荐以下探索性问题：</span>
     </div>
     <div class="sq-list">
-      <div v-if="loading" class="sq-loading">生成推荐问题中...</div>
+      <div v-if="loading && !questions.length" class="sq-loading">生成推荐问题中...</div>
       <button
         v-for="(q, i) in questions"
         :key="i"
