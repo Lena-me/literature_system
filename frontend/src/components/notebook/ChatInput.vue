@@ -316,7 +316,7 @@ function openPaper(paperId: number) {
 .chip-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(166, 124, 82, 0.25);
+  border: 2px solid rgba(37, 99, 235, 0.25);
   border-top-color: var(--academic-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -325,7 +325,7 @@ function openPaper(paperId: number) {
 
 .chip-tag {
   font-size: 11px;
-  background: rgba(166, 124, 82, 0.1);
+  background: rgba(37, 99, 235, 0.1);
   padding: 2px 8px;
   border-radius: 8px;
   font-weight: 600;
@@ -347,8 +347,8 @@ function openPaper(paperId: number) {
 
 .dock-shell:focus-within {
   background: rgba(255, 255, 255, 0.95);
-  border-color: rgba(196, 154, 108, 0.45);
-  box-shadow: 0 -10px 40px rgba(166, 124, 82, 0.08);
+  border-color: rgba(59, 130, 246, 0.45);
+  box-shadow: 0 -10px 40px rgba(37, 99, 235, 0.08);
 }
 
 .attachment-strip {
@@ -368,7 +368,7 @@ function openPaper(paperId: number) {
 .attach-pill.upload-pill .chip-spinner {
   width: 8px;
   height: 8px;
-  border: 2px solid rgba(166, 124, 82, 0.25);
+  border: 2px solid rgba(37, 99, 235, 0.25);
   border-top-color: var(--academic-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -402,7 +402,7 @@ function openPaper(paperId: number) {
 }
 
 .attach-pill:hover {
-  border-color: rgba(196, 154, 108, 0.4);
+  border-color: rgba(59, 130, 246, 0.4);
   background: var(--academic-primary-light);
 }
 
@@ -571,7 +571,7 @@ function openPaper(paperId: number) {
 
 .stop-btn:hover {
   background: var(--bg-canvas);
-  border-color: rgba(196, 154, 108, 0.4);
+  border-color: rgba(59, 130, 246, 0.4);
   color: var(--text-primary);
 }
 

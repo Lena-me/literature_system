@@ -134,7 +134,7 @@ onUnmounted(() => {
 
 .action.library {
   color: var(--academic-primary);
-  border-color: rgba(166, 124, 82, 0.25);
+  border-color: rgba(37, 99, 235, 0.25);
   background: var(--academic-primary-light);
 }
 

@@ -292,7 +292,7 @@ const html = computed(() => {
 
   text-decoration: none;
 
-  border-bottom: 1px dashed rgba(166, 124, 82, 0.35);
+  border-bottom: 1px dashed rgba(37, 99, 235, 0.35);
 
 }
 
@@ -360,7 +360,7 @@ const html = computed(() => {
 
   text-align: center;
 
-  background: rgba(166, 124, 82, 0.04);
+  background: rgba(37, 99, 235, 0.04);
 
   border-radius: var(--radius-sm);
 
@@ -456,7 +456,7 @@ const html = computed(() => {
 
   text-decoration: underline;
 
-  text-decoration-color: rgba(166, 124, 82, 0.35);
+  text-decoration-color: rgba(37, 99, 235, 0.35);
 
   text-underline-offset: 2px;
 
@@ -474,7 +474,7 @@ const html = computed(() => {
 
   text-decoration: none;
 
-  border-bottom: 1px dashed rgba(166, 124, 82, 0.35);
+  border-bottom: 1px dashed rgba(37, 99, 235, 0.35);
 
 }
 

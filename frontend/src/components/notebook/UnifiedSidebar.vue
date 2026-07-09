@@ -239,7 +239,7 @@ const profileNavItem = {
 }
 
 .brand-toggle:hover {
-  background: rgba(74, 66, 58, 0.06);
+  background: rgba(15, 23, 42, 0.05);
 }
 
 .brand-logo {
@@ -287,9 +287,9 @@ const profileNavItem = {
 
 .cta-btn:hover {
   background: #ffffff;
-  border-color: rgba(196, 154, 108, 0.45);
+  border-color: rgba(59, 130, 246, 0.45);
   color: var(--sidebar-text-main);
-  box-shadow: 0 2px 8px rgba(93, 83, 74, 0.06);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
 }
 
 .cta-btn:active {
@@ -368,18 +368,18 @@ const profileNavItem = {
   color: var(--sidebar-text-main);
   font-weight: 600;
   box-shadow:
-    0 4px 12px rgba(93, 83, 74, 0.08),
-    0 1px 3px rgba(93, 83, 74, 0.04);
-  border-color: rgba(220, 215, 205, 0.6);
+    0 4px 12px rgba(15, 23, 42, 0.08),
+    0 1px 3px rgba(15, 23, 42, 0.04);
+  border-color: rgba(226, 232, 240, 0.6);
 }
 
 .nav-item--primary.active::before {
   height: 60%;
-  background: var(--accent-caramel);
+  background: var(--academic-primary);
 }
 
 .nav-item--primary.active .nav-icon {
-  color: var(--accent-caramel);
+  color: var(--academic-primary);
   transform: scale(1.05);
 }
 
@@ -418,12 +418,12 @@ const profileNavItem = {
 .nav-item--profile.active {
   color: var(--sidebar-text-main);
   background: rgba(255, 255, 255, 0.72);
-  border-color: rgba(220, 215, 205, 0.45);
-  box-shadow: 0 2px 8px rgba(93, 83, 74, 0.05);
+  border-color: rgba(226, 232, 240, 0.45);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
 }
 
 .nav-item--profile.active .nav-icon {
-  color: var(--accent-caramel);
+  color: var(--academic-primary);
 }
 
 .nav-icon {
@@ -512,7 +512,7 @@ const profileNavItem = {
 }
 
 .session-list:hover {
-  scrollbar-color: rgba(140, 130, 117, 0.35) transparent;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
 }
 
 .session-list::-webkit-scrollbar {
@@ -525,7 +525,7 @@ const profileNavItem = {
 }
 
 .session-list:hover::-webkit-scrollbar-thumb {
-  background: rgba(140, 130, 117, 0.35);
+  background: rgba(148, 163, 184, 0.35);
 }
 
 .section-label {
@@ -555,11 +555,11 @@ const profileNavItem = {
 }
 
 .session-item:hover {
-  background: rgba(241, 237, 228, 0.55);
+  background: var(--selected-bg-subtle);
 }
 
 .session-item.active {
-  background: rgba(241, 237, 228, 0.85);
+  background: var(--selected-bg);
 }
 
 .session-item.active .session-title {
@@ -613,7 +613,7 @@ const profileNavItem = {
   width: 100%;
   padding: 4px 8px;
   border-radius: 6px;
-  border: 1px solid rgba(196, 154, 108, 0.5);
+  border: 1px solid rgba(59, 130, 246, 0.5);
   background: #ffffff;
   color: var(--sidebar-text-main);
   font-size: 12px;

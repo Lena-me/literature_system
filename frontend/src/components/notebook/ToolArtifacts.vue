@@ -104,7 +104,7 @@ function icon(item: QAToolArtifact): string {
 
 .artifact-card:hover {
   background: var(--bg-surface);
-  border-color: rgba(196, 154, 108, 0.4);
+  border-color: rgba(59, 130, 246, 0.4);
   box-shadow: var(--shadow-md);
   transform: translateY(-2px);
 }

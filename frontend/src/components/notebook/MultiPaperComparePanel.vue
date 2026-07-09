@@ -1376,15 +1376,15 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .compare-list-item.active {
-  background: rgba(241, 237, 228, 0.85);
+  background: rgba(239, 246, 255, 0.85);
 }
 
 .compare-list-item.active::before {
-  background: #c49a6c;
+  background: #2563eb;
 }
 
 .compare-list-item.active:hover {
-  background: rgba(241, 237, 228, 0.95);
+  background: rgba(239, 246, 255, 0.95);
 }
 
 .compare-item-main {
@@ -1612,7 +1612,7 @@ function evidencePageLabel(page?: number | string) {
 .select-all-box input,
 .paper-option input[type="checkbox"],
 .dimension-option input[type="checkbox"] {
-  accent-color: #a67c52;
+  accent-color: #2563eb;
 }
 
 .paper-option,
@@ -2021,18 +2021,18 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .evidence-panel {
-  --ev-strong: #b87d6a;
-  --ev-strong-soft: rgba(184, 125, 106, 0.14);
-  --ev-strong-text: #7a5548;
-  --ev-medium: #c49a6c;
-  --ev-medium-soft: rgba(196, 154, 108, 0.14);
-  --ev-medium-text: #8b6640;
-  --ev-related: #9aab96;
-  --ev-related-soft: rgba(154, 171, 150, 0.16);
-  --ev-related-text: #5f7260;
-  --ev-weak: #b8aea4;
-  --ev-weak-soft: rgba(184, 174, 164, 0.2);
-  --ev-weak-text: #8c8275;
+  --ev-strong: #2563eb;
+  --ev-strong-soft: rgba(37, 99, 235, 0.14);
+  --ev-strong-text: #1d4ed8;
+  --ev-medium: #3b82f6;
+  --ev-medium-soft: rgba(59, 130, 246, 0.14);
+  --ev-medium-text: #1e40af;
+  --ev-related: #14b8a6;
+  --ev-related-soft: rgba(20, 184, 166, 0.16);
+  --ev-related-text: #0f766e;
+  --ev-weak: #94a3b8;
+  --ev-weak-soft: rgba(148, 163, 184, 0.2);
+  --ev-weak-text: #64748b;
 
   margin-top: 20px;
   padding-top: 18px;
@@ -2099,7 +2099,7 @@ function evidencePageLabel(page?: number | string) {
 
 .dimension-header {
   padding: 12px 16px;
-  background: rgba(241, 237, 228, 0.75);
+  background: rgba(239, 246, 255, 0.75);
   color: var(--sidebar-accent);
   font-weight: 600;
   font-size: 14px;
@@ -2183,24 +2183,24 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .evidence-item:hover {
-  background: rgba(241, 237, 228, 0.65);
-  box-shadow: inset 0 0 0 1px rgba(218, 212, 198, 0.45);
+  background: rgba(239, 246, 255, 0.65);
+  box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.45);
 }
 
 .evidence-item.support-strong:hover {
-  background: rgba(184, 125, 106, 0.18);
+  background: rgba(37, 99, 235, 0.18);
 }
 
 .evidence-item.support-medium:hover {
-  background: rgba(196, 154, 108, 0.18);
+  background: rgba(59, 130, 246, 0.18);
 }
 
 .evidence-item.support-related:hover {
-  background: rgba(154, 171, 150, 0.2);
+  background: rgba(20, 184, 166, 0.2);
 }
 
 .evidence-item.support-weak:hover {
-  background: rgba(184, 174, 164, 0.28);
+  background: rgba(148, 163, 184, 0.28);
 }
 
 .evidence-item:hover .evidence-hover-actions {
@@ -2244,13 +2244,13 @@ function evidencePageLabel(page?: number | string) {
 
 .evidence-tags em {
   border-radius: 999px;
-  background: rgba(241, 237, 228, 0.85);
+  background: rgba(239, 246, 255, 0.85);
   color: var(--text-secondary);
   font-size: 11px;
   font-style: normal;
   line-height: 1;
   padding: 5px 8px;
-  border: 1px solid rgba(218, 212, 198, 0.5);
+  border: 1px solid rgba(226, 232, 240, 0.5);
 }
 
 .evidence-tags .support-tag {
@@ -2263,25 +2263,25 @@ function evidencePageLabel(page?: number | string) {
 .evidence-tags .support-tag.strong {
   background: var(--ev-strong-soft);
   color: var(--ev-strong-text);
-  border-color: rgba(184, 125, 106, 0.28);
+  border-color: rgba(37, 99, 235, 0.28);
 }
 
 .evidence-tags .support-tag.medium {
   background: var(--ev-medium-soft);
   color: var(--ev-medium-text);
-  border-color: rgba(196, 154, 108, 0.28);
+  border-color: rgba(59, 130, 246, 0.28);
 }
 
 .evidence-tags .support-tag.related {
   background: var(--ev-related-soft);
   color: var(--ev-related-text);
-  border-color: rgba(154, 171, 150, 0.32);
+  border-color: rgba(20, 184, 166, 0.32);
 }
 
 .evidence-tags .support-tag.weak {
   background: var(--ev-weak-soft);
   color: var(--ev-weak-text);
-  border-color: rgba(184, 174, 164, 0.45);
+  border-color: rgba(148, 163, 184, 0.45);
 }
 
 .evidence-snippet {

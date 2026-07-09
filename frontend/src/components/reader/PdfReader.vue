@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+﻿﻿﻿﻿<script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, shallowRef, watch, withDefaults } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import {ZoomIn, ZoomOut } from '@element-plus/icons-vue'
@@ -1480,7 +1480,7 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgba(0, 0, 0, 0.06);
-  box-shadow: 0 4px 12px -2px rgba(74, 66, 58, 0.08);
+  box-shadow: 0 4px 12px -2px rgba(15, 23, 42, 0.08);
   flex-shrink: 0;
 }
 
@@ -1523,11 +1523,11 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
 
 .formula-crop-box {
   position: absolute;
-  border: 1px solid rgba(166, 124, 82, 0.5);
-  background: rgba(166, 124, 82, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.5);
+  background: rgba(37, 99, 235, 0.08);
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.5),
-    inset 0 0 12px rgba(166, 124, 82, 0.15);
+    inset 0 0 12px rgba(37, 99, 235, 0.15);
   pointer-events: none;
   z-index: 6;
   box-sizing: border-box;
@@ -1642,16 +1642,16 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   position: absolute;
   border-radius: 3px;
   pointer-events: none;
-  background: rgba(166, 124, 82, 0.25);
-  border: 2px solid rgba(166, 124, 82, 0.7);
+  background: rgba(37, 99, 235, 0.25);
+  border: 2px solid rgba(37, 99, 235, 0.7);
   animation: targetFlash 1.2s ease-in-out 3;
   z-index: 5;
 }
 
 @keyframes targetFlash {
-  0%   { background: rgba(166, 124, 82, 0.45); border-color: rgba(166, 124, 82, 0.9); }
-  50%  { background: rgba(166, 124, 82, 0.10); border-color: rgba(166, 124, 82, 0.3); }
-  100% { background: rgba(166, 124, 82, 0.45); border-color: rgba(166, 124, 82, 0.9); }
+  0%   { background: rgba(37, 99, 235, 0.45); border-color: rgba(37, 99, 235, 0.9); }
+  50%  { background: rgba(37, 99, 235, 0.10); border-color: rgba(37, 99, 235, 0.3); }
+  100% { background: rgba(37, 99, 235, 0.45); border-color: rgba(37, 99, 235, 0.9); }
 }
 
 /* ===================================================================
@@ -1749,7 +1749,7 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease;
   padding: 0;
   outline: none;
-  box-shadow: inset 0 0 0 1px rgba(74, 66, 58, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
 }
 
 .pdf-highlight-menu .color-btn.yellow { background: #ffd24d; }
@@ -1763,7 +1763,7 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
 
 .pdf-highlight-menu .color-btn.active {
   border-color: var(--el-color-primary);
-  box-shadow: 0 0 0 2px rgba(166, 124, 82, 0.15);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
   transform: scale(1.1);
 }
 
@@ -1783,8 +1783,8 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
 }
 
 .pdf-highlight-menu .menu-note-input:focus {
-  border-color: rgba(166, 124, 82, 0.45);
-  box-shadow: 0 0 0 3px rgba(166, 124, 82, 0.1);
+  border-color: rgba(37, 99, 235, 0.45);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .pdf-highlight-menu .menu-note-input::placeholder {
@@ -1837,7 +1837,7 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
 
 .pdf-highlight-menu .action-btn:hover {
   background: var(--el-color-primary-light);
-  border-color: rgba(166, 124, 82, 0.25);
+  border-color: rgba(37, 99, 235, 0.25);
   color: var(--el-color-primary);
 }
 
@@ -1845,7 +1845,7 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   position: fixed;
   inset: 0;
   z-index: 100000;
-  background: rgba(74, 66, 58, 0.45);
+  background: rgba(15, 23, 42, 0.45);
   display: grid;
   place-items: center;
   padding: 24px;
@@ -1855,7 +1855,7 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   width: min(560px, 92vw);
   background: #fff;
   border-radius: 16px;
-  box-shadow: 0 24px 60px rgba(74, 66, 58, 0.25);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
   overflow: hidden;
 }
 

@@ -315,7 +315,7 @@ function setActiveTopic(id: number | null) {
 }
 
 .graph-card:focus-visible {
-  box-shadow: inset 0 0 0 2px rgba(166, 124, 82, 0.18);
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.18);
 }
 
 .status-dot {

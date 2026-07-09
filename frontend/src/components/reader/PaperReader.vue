@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+﻿﻿﻿﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import 'katex/dist/katex.min.css'
@@ -874,15 +874,15 @@ defineExpose({ open, navigateToSource, navigateToVisual })
 
 .reader-divider:hover,
 .reader-divider.active {
-  background: rgba(166, 124, 82, 0.05);
-  border-left-color: rgba(166, 124, 82, 0.3);
+  background: rgba(37, 99, 235, 0.05);
+  border-left-color: rgba(37, 99, 235, 0.3);
 }
 
 .reader-divider-grip {
   width: 3px;
   height: 24px;
   border-radius: 2px;
-  background: rgba(166, 124, 82, 0.5);
+  background: rgba(37, 99, 235, 0.5);
   opacity: 0;
   transition: opacity 0.2s ease;
 }
@@ -1007,8 +1007,8 @@ defineExpose({ open, navigateToSource, navigateToVisual })
 }
 
 .clickable-block.has-locate:hover {
-  background-color: rgba(166, 124, 82, 0.08);
-  outline: 1px dashed rgba(166, 124, 82, 0.35);
+  background-color: rgba(37, 99, 235, 0.08);
+  outline: 1px dashed rgba(37, 99, 235, 0.35);
   outline-offset: 2px;
 }
 

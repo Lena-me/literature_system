@@ -196,7 +196,7 @@ const roseLegendDomains = computed(() =>
   primaryCoverageDomains.value.slice(0, 4).map((d: any, i: number) => ({
     name: d.name,
     frequency: d.frequency,
-    color: [NODE_PALETTE.caramel, NODE_PALETTE.sage, NODE_PALETTE.terracotta, NODE_PALETTE.mauve][i % 4],
+    color: [NODE_PALETTE.slate, NODE_PALETTE.teal, NODE_PALETTE.blue, NODE_PALETTE.indigo][i % 4],
   })),
 )
 
@@ -266,11 +266,11 @@ function renderRoseChart(
 
   const sorted = [...domains].sort((a, b) => b.frequency - a.frequency)
   const palette = [
-    NODE_PALETTE.caramel,
-    NODE_PALETTE.sage,
-    NODE_PALETTE.terracotta,
-    NODE_PALETTE.mauve,
-    '#d4c4a8',
+    NODE_PALETTE.slate,
+    NODE_PALETTE.teal,
+    NODE_PALETTE.blue,
+    NODE_PALETTE.indigo,
+    '#bfdbfe',
     '#b8aea4',
   ]
 
@@ -278,7 +278,7 @@ function renderRoseChart(
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
-      formatter: (p: any) => `${p.name}<br/><span style="color:#a67c52;font-weight:600">${p.value} 篇 · ${p.percent}%</span>`,
+      formatter: (p: any) => `${p.name}<br/><span style="color:#2563eb;font-weight:600">${p.value} 篇 · ${p.percent}%</span>`,
     },
     series: [{
       type: 'pie',
@@ -308,7 +308,7 @@ function renderRoseChart(
 }
 
 function buildRadarOption(domain: any, isCompact: boolean) {
-  const color = '#a67c52'
+  const color = '#2563eb'
   const subDomains = getEffectiveSubDomains(domain).slice(0, 8)
   if (!subDomains.length) return null
 
@@ -384,7 +384,7 @@ function renderDomainRadar(instance: any, domain: any, isCompact: boolean) {
         left: 'center',
         top: 'center',
         textStyle: { color: 'var(--text-tertiary)', fontSize: 12, fontWeight: 'normal' },
-        subtextStyle: { color: '#d8d0c4', fontSize: 11 },
+        subtextStyle: { color: '#cbd5e1', fontSize: 11 },
       },
     })
     return
@@ -503,11 +503,11 @@ const heatmapRows = computed(() => {
 const getCellColor = (day: number | null, count: number) => {
   if (day === null) return 'transparent'
   const maxValue = currentHeatmap.value?.max_value || 1
-  if (count === 0) return '#f3f0e9'
-  if (count <= Math.ceil(maxValue * 0.25)) return '#ede4d4'
-  if (count <= Math.ceil(maxValue * 0.5)) return '#d4c4a8'
-  if (count <= Math.ceil(maxValue * 0.75)) return '#c49a6c'
-  return '#a67c52'
+  if (count === 0) return '#f1f5f9'
+  if (count <= Math.ceil(maxValue * 0.25)) return '#dbeafe'
+  if (count <= Math.ceil(maxValue * 0.5)) return '#bfdbfe'
+  if (count <= Math.ceil(maxValue * 0.75)) return '#3b82f6'
+  return '#2563eb'
 }
 
 const currentMonthTotal = computed(() => {
@@ -1090,10 +1090,10 @@ function logout() {
 
 <style scoped>
 .profile-page {
-  --bg-surface: #f3f0e9;
+  --bg-surface: #f1f5f9;
   --text-main: var(--text-heading);
   --text-muted: var(--text-secondary);
-  --accent-caramel: var(--accent-caramel);
+  --accent-caramel: var(--academic-primary);
   height: 100%;
   overflow-y: auto;
 }
@@ -1140,13 +1140,13 @@ function logout() {
   background: #ffffff;
   border-radius: 14px;
   padding: 16px;
-  border: 1px solid rgba(220, 215, 205, 0.4);
-  box-shadow: 0 4px 16px rgba(93, 83, 74, 0.04);
+  border: 1px solid rgba(226, 232, 240, 0.4);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .profile-card:hover {
-  box-shadow: 0 6px 20px rgba(93, 83, 74, 0.08);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
 }
 
 /* ============ 左栏身份名片 ============ */
@@ -1173,7 +1173,7 @@ function logout() {
   height: 100%;
   display: grid;
   place-items: center;
-  background: linear-gradient(145deg, #c49a6c, #7d9b76);
+  background: linear-gradient(145deg, #3b82f6, #10b981);
   color: #fff;
   font-size: 30px;
   font-weight: 800;
@@ -1299,7 +1299,7 @@ function logout() {
 
 .domain-charts-divider {
   height: 1px;
-  background: rgba(220, 215, 205, 0.55);
+  background: rgba(226, 232, 240, 0.55);
   margin: 6px 0;
   flex-shrink: 0;
 }
@@ -1318,13 +1318,13 @@ function logout() {
 .report-editorial.profile-card {
   padding: 16px 18px;
   background: var(--bg-canvas);
-  border-color: rgba(220, 215, 205, 0.35);
-  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.01), 0 4px 16px rgba(93, 83, 74, 0.04);
+  border-color: rgba(226, 232, 240, 0.35);
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.01), 0 4px 16px rgba(15, 23, 42, 0.04);
   min-height: 0;
 }
 
 .report-editorial.profile-card:hover {
-  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.01), 0 4px 16px rgba(93, 83, 74, 0.04);
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.01), 0 4px 16px rgba(15, 23, 42, 0.04);
 }
 
 .report-editorial:hover {
@@ -1361,7 +1361,7 @@ function logout() {
   width: 16px;
   height: 16px;
   border: 2px solid #e8e4dc;
-  border-top-color: var(--accent-caramel);
+  border-top-color: var(--academic-primary);
   border-radius: 50%;
   animation: reportSpin 0.8s linear infinite;
 }
@@ -1371,7 +1371,7 @@ function logout() {
 }
 
 .report-editorial.is-expanded {
-  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.015), 0 6px 20px rgba(93, 83, 74, 0.06);
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.015), 0 6px 20px rgba(15, 23, 42, 0.06);
 }
 
 .report-editorial-head {
@@ -1401,7 +1401,7 @@ function logout() {
 .report-editorial .month-btn:hover,
 .report-editorial .btn-ghost:hover:not(:disabled) {
   background: rgba(243, 240, 233, 0.85);
-  border-color: rgba(196, 154, 108, 0.4);
+  border-color: rgba(59, 130, 246, 0.4);
   color: var(--text-main);
 }
 
@@ -1440,7 +1440,7 @@ function logout() {
   left: 0;
   width: 40px;
   height: 2px;
-  background: var(--accent-caramel);
+  background: var(--academic-primary);
 }
 
 .report-header-sub {
@@ -1455,7 +1455,7 @@ function logout() {
   gap: 10px;
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid rgba(220, 215, 205, 0.5);
+  border-top: 1px solid rgba(226, 232, 240, 0.5);
 }
 
 .report-highlight {
@@ -1467,7 +1467,7 @@ function logout() {
 .report-highlight-value {
   font-size: 24px;
   font-weight: 800;
-  color: var(--accent-caramel);
+  color: var(--academic-primary);
   line-height: 1;
   letter-spacing: -0.02em;
 }
@@ -1518,7 +1518,7 @@ function logout() {
   border-radius: 999px;
   font-size: 10px;
   font-weight: 500;
-  color: #a67c52;
+  color: #2563eb;
   background: rgba(91, 143, 185, 0.1);
 }
 
@@ -1624,7 +1624,7 @@ function logout() {
 .btn-detail {
   border: none;
   background: transparent;
-  color: #a67c52;
+  color: #2563eb;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -1640,8 +1640,8 @@ function logout() {
 .card-surface {
   background: #fff;
   border-radius: 16px;
-  border: 1px solid rgba(220, 215, 205, 0.4);
-  box-shadow: 0 4px 16px rgba(93, 83, 74, 0.04);
+  border: 1px solid rgba(226, 232, 240, 0.4);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
 }
 
 .dashboard-header {
@@ -1916,7 +1916,7 @@ function logout() {
 }
 
 .heatmap-mode-btn.active {
-  background: #a67c52;
+  background: #2563eb;
   color: #fff;
   box-shadow: 0 2px 8px rgba(91, 168, 217, 0.28);
 }
@@ -2247,7 +2247,7 @@ function logout() {
 .toggle-btn.active {
   background: #fff;
   color: var(--graph-blue);
-  box-shadow: 0 1px 2px rgba(74, 66, 58, 0.06);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
 .month-nav {
@@ -2347,7 +2347,7 @@ function logout() {
 
 .heatmap-cell:hover:not(.empty) {
   transform: scale(1.25);
-  outline: 1px solid rgba(74, 66, 58, 0.25);
+  outline: 1px solid rgba(15, 23, 42, 0.25);
   outline-offset: 1px;
   z-index: 2;
 }
@@ -2402,7 +2402,7 @@ function logout() {
   font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
-  box-shadow: 0 4px 12px rgba(74, 66, 58, 0.15);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
 }
 
 .heatmap-tooltip::after {
@@ -2609,7 +2609,7 @@ function logout() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(74, 66, 58, 0.45);
+  background: rgba(15, 23, 42, 0.45);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -2629,7 +2629,7 @@ function logout() {
   padding: 28px 32px;
   min-width: 420px;
   max-width: 480px;
-  box-shadow: 0 20px 60px rgba(74, 66, 58, 0.18);
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.18);
   animation: modalSlideUp 0.25s ease;
 }
 
@@ -2853,7 +2853,7 @@ function logout() {
 .domain-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(74, 66, 58, 0.55);
+  background: rgba(15, 23, 42, 0.55);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -2891,7 +2891,7 @@ function logout() {
   justify-content: space-between;
   padding: 20px 24px;
   border-bottom: 1px solid var(--academic-border);
-  background: linear-gradient(135deg, rgba(196, 154, 108, 0.08), rgba(166, 124, 82, 0.06));
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(37, 99, 235, 0.06));
 }
 
 .domain-modal-title {
@@ -2975,7 +2975,7 @@ function logout() {
 .domain-view-tab-sub {
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(166, 124, 82, 0.08);
+  background: rgba(37, 99, 235, 0.08);
   color: var(--el-color-primary-hover);
   font-size: 11px;
   font-weight: 600;

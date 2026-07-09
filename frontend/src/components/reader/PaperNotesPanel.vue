@@ -249,12 +249,12 @@ defineExpose({ scrollToNote, flashNote })
 
 .note-card:hover {
   border-color: #93C5FD;
-  box-shadow: 0 4px 14px rgba(166, 124, 82, 0.08);
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.08);
 }
 
 .note-card--flash {
   border-color: #3B82F6;
-  box-shadow: 0 0 0 3px rgba(166, 124, 82, 0.22);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22);
   animation: noteFlash 1.2s ease-in-out 1;
 }
 

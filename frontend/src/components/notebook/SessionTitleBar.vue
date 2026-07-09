@@ -100,7 +100,7 @@ function cancelEdit() {
 }
 
 .title-display:hover {
-  border-color: rgba(140, 130, 117, 0.35);
+  border-color: rgba(148, 163, 184, 0.35);
   background: rgba(255, 255, 255, 0.5);
 }
 
@@ -112,7 +112,7 @@ function cancelEdit() {
   width: 100%;
   max-width: 420px;
   padding: 6px 10px;
-  border: 1px solid rgba(166, 124, 82, 0.45);
+  border: 1px solid rgba(37, 99, 235, 0.45);
   border-radius: 8px;
   background: var(--academic-panel);
   color: var(--academic-text-main);
@@ -120,7 +120,7 @@ function cancelEdit() {
   font-weight: 600;
   text-align: left;
   outline: none;
-  box-shadow: 0 0 0 3px rgba(166, 124, 82, 0.12);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
 .title-input:focus {

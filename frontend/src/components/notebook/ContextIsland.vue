@@ -162,23 +162,23 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
   gap: 6px;
   padding: 6px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(140, 130, 117, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.35);
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(10px);
   color: var(--academic-text-muted);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(74, 66, 58, 0.06);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
   transition: all 0.18s ease;
 }
 
 .island-trigger:hover,
 .island-trigger.active {
-  border-color: rgba(166, 124, 82, 0.35);
+  border-color: rgba(37, 99, 235, 0.35);
   color: var(--academic-primary);
   background: rgba(255, 255, 255, 0.95);
-  box-shadow: 0 4px 14px rgba(166, 124, 82, 0.1);
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.1);
 }
 
 .island-trigger.empty {
@@ -339,7 +339,7 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 .upload-spinner {
   width: 8px;
   height: 8px;
-  border: 2px solid rgba(166, 124, 82, 0.25);
+  border: 2px solid rgba(37, 99, 235, 0.25);
   border-top-color: var(--academic-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -361,7 +361,7 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 
 .add-btn.primary {
   border-style: solid;
-  border-color: rgba(166, 124, 82, 0.35);
+  border-color: rgba(37, 99, 235, 0.35);
   color: var(--academic-primary);
   background: var(--academic-primary-light);
 }

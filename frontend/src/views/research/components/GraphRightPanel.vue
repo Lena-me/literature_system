@@ -562,7 +562,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   -webkit-backdrop-filter: blur(16px);
   border: none;
   border-radius: 0;
-  box-shadow: -4px 0 24px rgba(74, 66, 58, 0.04);
+  box-shadow: -4px 0 24px rgba(15, 23, 42, 0.04);
   font-size: 13.5px;
 }
 
@@ -671,9 +671,9 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   padding: 12px 0;
   border: none;
   border-radius: 10px 0 0 10px;
-  background: #e8ddd0;
+  background: #dbeafe;
   cursor: pointer;
-  box-shadow: -2px 0 10px rgba(166, 124, 82, 0.12);
+  box-shadow: -2px 0 10px rgba(37, 99, 235, 0.12);
   transition: background 0.15s ease;
 }
 
@@ -702,7 +702,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   background: #fff;
   border: 1px solid var(--border-light);
   border-radius: 10px 0 0 10px;
-  box-shadow: -8px 0 28px rgba(74, 66, 58, 0.1);
+  box-shadow: -8px 0 28px rgba(15, 23, 42, 0.1);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%) translateX(12px);
@@ -1258,7 +1258,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 }
 
 .priority-actions {
-  background: linear-gradient(135deg, #faf7f2, #eef6ff);
+  background: linear-gradient(135deg, #f8fafc, #eef6ff);
   border-color: #cfe0ff;
 }
 
@@ -1267,7 +1267,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 }
 
 .emphasis-section {
-  background: linear-gradient(135deg, #faf7f2, var(--el-color-primary-light));
+  background: linear-gradient(135deg, #f8fafc, var(--el-color-primary-light));
   border-color: #cfe0ff;
 }
 

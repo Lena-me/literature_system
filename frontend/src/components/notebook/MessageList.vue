@@ -394,7 +394,7 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
 .user-bubble {
   max-width: 75%;
   background: var(--el-color-primary-light);
-  border: 1px solid rgba(196, 154, 108, 0.35);
+  border: 1px solid rgba(59, 130, 246, 0.35);
   border-radius: 20px 20px 4px 20px;
 }
 
@@ -520,8 +520,8 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
 }
 
 .visual-card:hover {
-  border-color: rgba(166, 124, 82, 0.4);
-  box-shadow: 0 4px 12px rgba(166, 124, 82, 0.08);
+  border-color: rgba(37, 99, 235, 0.4);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
 }
 
 .visual-image {

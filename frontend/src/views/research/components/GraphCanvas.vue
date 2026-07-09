@@ -516,7 +516,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid #e5e7eb;
-  box-shadow: 0 4px 14px rgba(74, 66, 58, 0.06);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
@@ -616,7 +616,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   fill: #ffffff;
   font-weight: 800;
   paint-order: stroke;
-  stroke: rgba(93, 83, 74, 0.18);
+  stroke: rgba(15, 23, 42, 0.18);
   stroke-width: 2px;
   stroke-linejoin: round;
 }
@@ -641,7 +641,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.92);
   color: var(--text-secondary);
-  box-shadow: 0 12px 30px rgba(74, 66, 58, 0.10);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.10);
 }
 
 
@@ -658,7 +658,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   position: relative;
   min-height: 260px;
   border-radius: 22px;
-  background: linear-gradient(135deg, #faf7f2, #eef7ff);
+  background: linear-gradient(135deg, #f8fafc, #eef7ff);
   border: 1px solid #dce8f6;
 }
 
@@ -672,12 +672,12 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   width: 58px;
   height: 58px;
   border-radius: 999px;
-  background: #e8ddd0;
+  background: #dbeafe;
   border: 3px solid #fff;
-  box-shadow: 0 18px 35px rgba(166, 124, 82, 0.15);
+  box-shadow: 0 18px 35px rgba(37, 99, 235, 0.15);
 }
 
-.empty-node.main { left: 50%; top: 45%; transform: translate(-50%, -50%); background: var(--accent-caramel); }
+.empty-node.main { left: 50%; top: 45%; transform: translate(-50%, -50%); background: var(--academic-primary); }
 .empty-node.left { left: 22%; top: 58%; }
 .empty-node.right { right: 22%; top: 58%; }
 .empty-line { height: 2px; width: 92px; background: var(--border-light); top: 57%; }

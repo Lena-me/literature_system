@@ -789,7 +789,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 }
 
 .report-field:focus {
-  box-shadow: 0 0 0 2px rgba(166, 124, 82, 0.3);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.3);
 }
 
 .report-create-btn {
@@ -848,15 +848,15 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 }
 
 .report-list-item.active {
-  background: rgba(241, 237, 228, 0.85);
+  background: rgba(239, 246, 255, 0.85);
 }
 
 .report-list-item.active::before {
-  background: #c49a6c;
+  background: #2563eb;
 }
 
 .report-list-item.active:hover {
-  background: rgba(241, 237, 228, 0.95);
+  background: rgba(239, 246, 255, 0.95);
 }
 
 .report-item-main {
@@ -968,8 +968,8 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   background: rgba(255, 255, 255, 0.86);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(218, 212, 198, 0.65);
-  box-shadow: 0 4px 18px rgba(74, 66, 58, 0.06);
+  border: 1px solid rgba(226, 232, 240, 0.65);
+  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.06);
 }
 
 .toolbar-btn {
@@ -1106,7 +1106,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   cursor: pointer;
   text-align: left;
   text-decoration: underline;
-  text-decoration-color: rgba(166, 124, 82, 0.35);
+  text-decoration-color: rgba(37, 99, 235, 0.35);
   text-underline-offset: 3px;
 }
 
@@ -1123,7 +1123,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   position: absolute;
   inset: 0;
   z-index: 24;
-  background: rgba(74, 66, 58, 0.12);
+  background: rgba(15, 23, 42, 0.12);
 }
 
 .toc-drawer {
@@ -1136,7 +1136,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   padding: 16px 14px 24px;
   background: var(--bg-surface);
   border-left: 1px solid var(--border-light);
-  box-shadow: -8px 0 24px rgba(74, 66, 58, 0.08);
+  box-shadow: -8px 0 24px rgba(15, 23, 42, 0.08);
   transform: translateX(100%);
   transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
   overflow-y: auto;
@@ -1249,7 +1249,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 }
 
 .reference-popover-link:hover {
-  background: #e8ddd0;
+  background: #dbeafe;
 }
 
 .content-panel {
@@ -1443,7 +1443,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 0;
-  border: 1px solid #e8ddd0;
+  border: 1px solid #dbeafe;
   border-radius: 10px;
   overflow: hidden;
   background: var(--bg-canvas);
@@ -1451,8 +1451,8 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 
 .metric-cell {
   padding: 16px 18px;
-  border-right: 1px solid #e8ddd0;
-  border-bottom: 1px solid #e8ddd0;
+  border-right: 1px solid #dbeafe;
+  border-bottom: 1px solid #dbeafe;
   background: linear-gradient(180deg, #fff 0%, var(--bg-canvas) 100%);
 }
 
@@ -1622,7 +1622,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 }
 
 .reference-link-btn:hover {
-  background: #e8ddd0;
+  background: #dbeafe;
 }
 
 .reference-empty {

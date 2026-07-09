@@ -1001,13 +1001,13 @@ async function batchDelete() {
 }
 
 .lib-nav-item.active {
-  background: rgba(241, 237, 228, 0.85);
+  background: rgba(239, 246, 255, 0.85);
   color: var(--text-heading);
   font-weight: 600;
 }
 
 .lib-nav-item.active::before {
-  background: #c49a6c;
+  background: #2563eb;
 }
 
 .lib-nav-count {
@@ -1021,7 +1021,7 @@ async function batchDelete() {
 }
 
 .lib-nav-item.active .lib-nav-count {
-  background: #e8ddd0;
+  background: #dbeafe;
   color: var(--el-color-primary-hover);
 }
 
@@ -1089,7 +1089,7 @@ async function batchDelete() {
 }
 
 .lib-new-cat-input:focus {
-  box-shadow: 0 0 0 2px rgba(166, 124, 82, 0.3);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.3);
 }
 
 .lib-new-cat-ok,
@@ -1132,7 +1132,7 @@ async function batchDelete() {
 }
 
 .lib-collection-item.active {
-  background: rgba(241, 237, 228, 0.85);
+  background: rgba(239, 246, 255, 0.85);
 }
 
 .lib-collection-item.active::before {
@@ -1143,7 +1143,7 @@ async function batchDelete() {
   bottom: 6px;
   width: 3px;
   border-radius: 0 2px 2px 0;
-  background: #c49a6c;
+  background: #2563eb;
 }
 
 .lib-col-icon {
@@ -1567,7 +1567,7 @@ async function batchDelete() {
 }
 
 .lib-select-all input {
-  accent-color: #a67c52;
+  accent-color: #2563eb;
   width: 15px;
   height: 15px;
   cursor: pointer;
@@ -1610,7 +1610,7 @@ async function batchDelete() {
 }
 
 .lib-item-check input {
-  accent-color: #a67c52;
+  accent-color: #2563eb;
   width: 15px;
   height: 15px;
   cursor: pointer;
@@ -1964,7 +1964,7 @@ async function batchDelete() {
   color: #fff;
   font-size: 13px;
   cursor: pointer;
-  box-shadow: 0 1px 3px rgba(166, 124, 82, 0.3);
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.3);
   transition: background 0.15s;
 }
 
@@ -1978,7 +1978,7 @@ async function batchDelete() {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(74, 66, 58, 0.4);
+  background: rgba(15, 23, 42, 0.4);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -2089,7 +2089,7 @@ async function batchDelete() {
 }
 
 .modal-input:focus {
-  box-shadow: 0 0 0 2px rgba(166, 124, 82, 0.3);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.3);
 }
 
 textarea.modal-input {
@@ -2133,12 +2133,12 @@ textarea.modal-input {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
-  box-shadow: 0 1px 3px rgba(166, 124, 82, 0.3);
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.3);
 }
 
 .modal-btn-confirm:hover:not(:disabled) {
   background: var(--el-color-primary-hover);
-  box-shadow: 0 4px 6px rgba(166, 124, 82, 0.3);
+  box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);
 }
 
 .modal-btn-confirm:disabled {
