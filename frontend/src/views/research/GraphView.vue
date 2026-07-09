@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -23,6 +23,7 @@ import {
   paperReadinessLabel,
   paperSubtitle,
 } from '@/utils/paperDisplay'
+import { isCoreGraphNode, morandiEdgeColor, nodeAuthorShortLabel, nodeYearShortLabel, yearToNodeColor } from '@/utils/graphColors'
 
 interface LibraryPaper extends Paper {
   abstract?: string | null
@@ -34,6 +35,8 @@ interface LayoutNode extends LiteratureGraphNode {
   y: number
   radius: number
   color: string
+  paperIndex: number
+  isCore: boolean
 }
 
 interface LayoutEdge extends LiteratureGraphEdge {
@@ -72,6 +75,7 @@ const graphSearch = ref('')
 const activeTopicId = ref<number | null>(null)
 const selectedPanel = ref<SelectedPanel>({ kind: 'summary' })
 const relationFilter = ref<RelationFilter>('all')
+const hoveredNodeId = ref<string | null>(null)
 const DEFAULT_RELATION_SCORE = 0.05
 const minScore = ref(DEFAULT_RELATION_SCORE)
 const showCreateDialog = ref(false)
@@ -210,6 +214,29 @@ const connectedNodeIds = computed(() => {
   return ids
 })
 
+function nodeColor(year?: number | null): string {
+  return yearToNodeColor(year, yearRange.value)
+}
+
+function buildLayoutNode(
+  node: LiteratureGraphNode,
+  position: { x: number; y: number },
+  allNodes: LiteratureGraphNode[],
+  paperIndex: number,
+  isLayoutCore = false,
+): LayoutNode {
+  const isCore = isLayoutCore || isCoreGraphNode(node, allNodes)
+  return {
+    ...node,
+    x: position.x,
+    y: position.y,
+    radius: nodeRadius(node),
+    color: nodeColor(node.year),
+    paperIndex,
+    isCore,
+  }
+}
+
 const layoutNodes = computed<LayoutNode[]>(() => {
   const nodes = graph.value?.nodes || []
   const width = 960
@@ -224,20 +251,22 @@ const layoutNodes = computed<LayoutNode[]>(() => {
     if (ya !== yb) return ya - yb
     return (b.centrality || 0) - (a.centrality || 0)
   })
+  const paperIndexMap = new Map<string, number>()
+  sorted.forEach((node, index) => paperIndexMap.set(String(node.id), index + 1))
 
   if (nodes.length === 1) {
-    const only = nodes[0]
-    return [{ ...only, x: cx, y: cy, radius: nodeRadius(only), color: nodeColor(only.year) }]
+    return [buildLayoutNode(nodes[0], { x: cx, y: cy }, nodes, 1, true)]
   }
 
   if (nodes.length === 2) {
-    return sorted.map((node, index) => ({
-      ...node,
-      x: cx + (index === 0 ? -190 : 190),
-      y: cy,
-      radius: nodeRadius(node),
-      color: nodeColor(node.year),
-    }))
+    return sorted.map((node, index) =>
+      buildLayoutNode(
+        node,
+        { x: cx + (index === 0 ? -190 : 190), y: cy },
+        nodes,
+        paperIndexMap.get(String(node.id)) || index + 1,
+      ),
+    )
   }
 
   const core = [...nodes].sort((a, b) => (b.centrality || 0) - (a.centrality || 0))[0]
@@ -249,20 +278,23 @@ const layoutNodes = computed<LayoutNode[]>(() => {
 
   const positioned: LayoutNode[] = []
   if (coreId) {
-    positioned.push({ ...core, x: cx, y: cy, radius: nodeRadius(core), color: nodeColor(core.year) })
+    positioned.push(buildLayoutNode(
+      core,
+      { x: cx, y: cy },
+      nodes,
+      paperIndexMap.get(String(core.id)) || 1,
+      true,
+    ))
   }
 
   ringNodes.forEach((node, index) => {
     const angle = -Math.PI / 2 + (Math.PI * 2 * index) / Math.max(1, ringNodes.length)
     const centralityOffset = 1 - Math.min(0.28, (node.centrality || 0) * 0.18)
     const jitter = ringNodes.length > 8 ? ((index % 3) - 1) * 18 : 0
-    positioned.push({
-      ...node,
+    positioned.push(buildLayoutNode(node, {
       x: cx + Math.cos(angle) * radiusX * centralityOffset,
       y: cy + Math.sin(angle) * radiusY * centralityOffset + jitter,
-      radius: nodeRadius(node),
-      color: nodeColor(node.year),
-    })
+    }, nodes, paperIndexMap.get(String(node.id)) || index + 1))
   })
 
   return positioned
@@ -302,6 +334,24 @@ const selectedNodeIds = computed(() => {
     ids.add(String(selectedPanel.value.edge.target))
   }
   return ids
+})
+
+const graphFocusActive = computed(() =>
+  hoveredNodeId.value !== null
+  || selectedPanel.value.kind !== 'summary',
+)
+
+const graphFocusNodeIds = computed(() => {
+  if (hoveredNodeId.value) {
+    const ids = new Set<string>([hoveredNodeId.value])
+    for (const edge of filteredEdges.value) {
+      if (String(edge.source) === hoveredNodeId.value) ids.add(String(edge.target))
+      if (String(edge.target) === hoveredNodeId.value) ids.add(String(edge.source))
+    }
+    return ids
+  }
+  if (selectedNodeIds.value.size) return selectedNodeIds.value
+  return new Set<string>()
 })
 
 const graphStats = computed(() => ({
@@ -570,6 +620,14 @@ function selectNode(node: LiteratureGraphNode) {
   selectedPanel.value = { kind: 'node', node }
 }
 
+function onHoverNode(node: LiteratureGraphNode) {
+  hoveredNodeId.value = String(node.id)
+}
+
+function onLeaveNode() {
+  hoveredNodeId.value = null
+}
+
 function selectEdge(edge: LiteratureGraphEdge) {
   selectedPanel.value = { kind: 'edge', edge }
 }
@@ -643,50 +701,60 @@ function edgeLabel(edge: LiteratureGraphEdge): string {
   return '弱关联'
 }
 
+function isEdgeInFocus(edge: LiteratureGraphEdge) {
+  if (hoveredNodeId.value) {
+    const focus = hoveredNodeId.value
+    return String(edge.source) === focus || String(edge.target) === focus
+  }
+  if (selectedPanel.value.kind === 'node') {
+    const focus = String(selectedPanel.value.node.id)
+    return String(edge.source) === focus || String(edge.target) === focus
+  }
+  if (selectedPanel.value.kind === 'edge') {
+    return selectedPanel.value.edge.id === edge.id
+  }
+  return false
+}
+
+function strengthStrokeColor(strength?: RelationStrength, focused = false): string {
+  return morandiEdgeColor(strength, focused)
+}
+
 function edgeStroke(edge: LiteratureGraphEdge): string {
-  if (selectedPanel.value.kind === 'edge' && selectedPanel.value.edge.id === edge.id) return '#155EEF'
-  if (edge.strength === 'strong') return '#155EEF'
-  if (edge.strength === 'medium') return '#64748B'
-  return '#94A3B8'
+  if (selectedPanel.value.kind === 'edge' && selectedPanel.value.edge.id === edge.id) {
+    return strengthStrokeColor(edge.strength, true)
+  }
+
+  if (graphFocusActive.value) {
+    if (isEdgeInFocus(edge)) return strengthStrokeColor(edge.strength, true)
+    return '#E8EDF2'
+  }
+
+  return strengthStrokeColor(edge.strength)
+}
+
+function edgeDasharray(edge: LiteratureGraphEdge): string | undefined {
+  return edge.strength === 'weak' ? '6 6' : undefined
 }
 
 function edgeWidth(edge: LiteratureGraphEdge): number {
-  if (edge.strength === 'strong') return 4.2
-  if (edge.strength === 'medium') return 2.7
-  return 1.9
-}
-
-function edgeOpacity(edge: LiteratureGraphEdge): number {
-  if (selectedPanel.value.kind === 'summary') return edge.strength === 'weak' ? 0.62 : 0.9
-  if (selectedPanel.value.kind === 'edge') return selectedPanel.value.edge.id === edge.id ? 1 : 0.2
-  if (selectedPanel.value.kind === 'node') {
-    const id = String(selectedPanel.value.node.id)
-    return String(edge.source) === id || String(edge.target) === id ? 1 : 0.16
+  if (graphFocusActive.value && isEdgeInFocus(edge)) {
+    if (edge.strength === 'strong') return 3.2
+    if (edge.strength === 'medium') return 2.4
+    return 2
   }
-  return 0.86
-}
-
-function nodeOpacity(node: LayoutNode): number {
-  if (!connectedNodeIds.value.has(String(node.id)) && filteredEdges.value.length) return 0.28
-  if (selectedPanel.value.kind === 'summary') return 1
-  return selectedNodeIds.value.size === 0 || selectedNodeIds.value.has(String(node.id)) ? 1 : 0.22
+  if (graphFocusActive.value) {
+    return edge.strength === 'weak' ? 1.2 : 1.5
+  }
+  if (edge.strength === 'strong') return 2.6
+  if (edge.strength === 'medium') return 2
+  return 1.4
 }
 
 function nodeRadius(node: LiteratureGraphNode): number {
   const base = typeof node.size === 'number' ? node.size * 0.96 : 36
   const centralityBoost = Math.min(11, Math.max(0, (node.centrality || 0) * 8.5))
   return Math.max(32, Math.min(62, base + centralityBoost))
-}
-
-function nodeColor(year?: number | null): string {
-  if (!year) return '#7F91A6'
-  const [minYear, maxYear] = yearRange.value
-  const span = Math.max(1, maxYear - minYear)
-  const t = Math.max(0, Math.min(1, (year - minYear) / span))
-  if (t < 0.25) return '#6B7D93'
-  if (t < 0.5) return '#14B8A6'
-  if (t < 0.75) return '#3B82F6'
-  return '#6366F1'
 }
 
 function paperTitle(paper: LibraryPaper): string {
@@ -771,25 +839,12 @@ function normalizeTerms(value: unknown): string[] {
     .filter(Boolean)
 }
 
-function nodePrimaryLabel(node: LiteratureGraphNode): string {
-  const candidates = [node.label, node.name, node.title, formatAuthors(node.authors), '论文']
-    .map(value => String(value || '').trim())
-    .filter(value => value && !['未知', 'unknown', 'Unknown', '年份未知'].includes(value))
-  const raw = candidates[0] || '论文'
-  const first = raw.split(/[，,]/)[0]?.trim() || raw.trim()
-  return first.length > 12 ? `${first.slice(0, 12)}…` : first
+function nodePrimaryLabel(node: LayoutNode): string {
+  return nodeAuthorShortLabel(node)
 }
 
-function nodeYearLabel(node: LiteratureGraphNode): string {
-  return node.year ? String(node.year) : ''
-}
-
-function nodeCaption(node: LiteratureGraphNode): string {
-  const candidates = [node.label, node.title, node.name, formatAuthors(node.authors), '论文节点']
-    .map(value => String(value || '').trim())
-    .filter(value => value && !['未知', 'unknown', 'Unknown', '年份未知'].includes(value))
-  const source = candidates[0] || '论文节点'
-  return source.length > 22 ? `${source.slice(0, 22)}…` : source
+function nodeYearLabel(node: LayoutNode): string {
+  return nodeYearShortLabel(node)
 }
 
 function formatDate(value?: string | null): string {
@@ -859,11 +914,11 @@ function delay(ms: number) {
       </svg>
     </button>
 
-    <main class="graph-main" :class="{ 'create-mode': !graph }">
+    <main class="graph-main" :class="{ 'create-mode': !graph, 'sidebar-collapsed': sidebarCollapsed }">
       <section v-if="graph" class="graph-toolbar">
         <div class="toolbar-copy">
           <div class="title-row compact-title-row">
-            <h1>知识图谱</h1>
+            <h1>{{ graphTitle }}</h1>
           </div>
         </div>
       </section>
@@ -999,9 +1054,6 @@ function delay(ms: number) {
       >
         <div class="graph-canvas-card">
           <div class="canvas-header simplified-header">
-            <div class="canvas-title-inline">
-              <strong>{{ graphTitle }}</strong>
-            </div>
             <div class="filter-row relation-only-filter">
               <label>关联类型</label>
               <select v-model="relationFilter">
@@ -1026,23 +1078,29 @@ function delay(ms: number) {
             :year-range="yearRange"
             :edge-stroke="edgeStroke"
             :edge-width="edgeWidth"
-            :edge-opacity="edgeOpacity"
-            :node-opacity="nodeOpacity"
+            :edge-dasharray="edgeDasharray"
             :node-primary-label="nodePrimaryLabel"
             :node-year-label="nodeYearLabel"
-            :node-caption="nodeCaption"
             :format-authors="formatAuthors"
             :display-state="graphDisplayState"
             :display-message="graphDisplayMessage"
             :single-paper="singlePaperForState"
+            :hovered-node-id="hoveredNodeId"
+            :focus-active="graphFocusActive"
             @select-summary="selectSummary"
             @select-edge="selectEdge"
             @select-node="selectNode"
+            @hover-node="onHoverNode"
+            @leave-node="onLeaveNode"
             @open-create="openCreateDialog"
             @open-library="router.push('/library')"
           />
         </div>
 
+        <div
+          class="graph-panel-shell"
+          :class="{ 'panel-overlay': isPaperDetail || isRelationDetail }"
+        >
         <GraphRightPanel
           :graph="graph"
           :panel-mode="rightPanelMode"
@@ -1074,6 +1132,7 @@ function delay(ms: number) {
           @compare-graph="compareFromGraph"
           @back-to-overview="selectSummary"
         />
+        </div>
       </section>
     </main>
 
@@ -1208,15 +1267,14 @@ function delay(ms: number) {
 
 <style scoped>
 .literature-graph-page {
-  --graph-blue: #2563eb;
+  --graph-blue: var(--el-color-primary-hover);
   --graph-cyan: #14b8a6;
   --graph-navy: #0f1f3d;
   --graph-text: #182235;
-  --graph-muted: #64748b;
-  --graph-line: #e2e8f0;
+  --graph-muted: var(--text-secondary);
+  --graph-line: var(--border-light);
   display: flex;
   height: 100%;
-  background: #f8fafc;
   color: var(--graph-text);
   overflow: hidden;
   position: relative;
@@ -1245,10 +1303,10 @@ function delay(ms: number) {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border-light);
   border-radius: 50%;
   background: #fff;
-  color: #64748b;
+  color: var(--text-secondary);
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
   opacity: 0;
@@ -1271,8 +1329,8 @@ function delay(ms: number) {
 }
 
 .module-sidebar-toggle:hover {
-  color: #0f172a;
-  border-color: #cbd5e1;
+  color: var(--text-heading);
+  border-color: var(--border-light);
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
 }
 
@@ -1328,8 +1386,9 @@ h1, h2, h3, p {
 }
 
 .graph-toolbar h1 {
-  font-size: 27px;
-  line-height: 1.05;
+  font-size: 18px;
+  line-height: 1.3;
+  font-weight: 700;
 }
 
 .sidebar-desc,
@@ -1354,7 +1413,7 @@ h1, h2, h3, p {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid var(--graph-line);
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.035);
+  box-shadow: 0 10px 28px rgba(74, 66, 58, 0.035);
 }
 
 .sidebar-metrics b,
@@ -1399,7 +1458,7 @@ h1, h2, h3, p {
 .current-graph-chip {
   padding: 5px 10px;
   border-radius: 999px;
-  background: rgba(37, 99, 235, 0.08);
+  background: rgba(166, 124, 82, 0.08);
   color: #31527d;
   font-size: 12px;
   font-weight: 800;
@@ -1543,19 +1602,19 @@ h1, h2, h3, p {
   background: rgba(255, 255, 255, 0.95);
   color: #1e293b;
   border: 1px solid rgba(213, 223, 235, 0.92);
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.045);
+  box-shadow: 0 10px 28px rgba(74, 66, 58, 0.045);
   transition: transform 0.16s, box-shadow 0.16s, border-color 0.16s, background 0.16s;
 }
 
 .graph-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 16px 34px rgba(74, 66, 58, 0.08);
 }
 
 .graph-card.active {
-  border-color: rgba(37, 99, 235, 0.72);
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-  box-shadow: 0 18px 36px rgba(37, 99, 235, 0.14);
+  border-color: rgba(166, 124, 82, 0.72);
+  background: linear-gradient(180deg, #ffffff 0%, #faf7f2 100%);
+  box-shadow: 0 18px 36px rgba(166, 124, 82, 0.14);
 }
 
 .card-topline,
@@ -1665,12 +1724,19 @@ h1, h2, h3, p {
   background: #fff;
 }
 
+.graph-main.sidebar-collapsed .create-page-bar,
+.graph-main.sidebar-collapsed .graph-toolbar {
+  padding-left: 44px;
+  transition: padding-left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 .graph-toolbar {
   padding: 14px 20px;
   gap: 12px;
   margin-bottom: 0;
   border-bottom: 1px solid var(--graph-line);
   background: #fff;
+  transition: padding-left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .create-home-panel {
@@ -1701,6 +1767,7 @@ h1, h2, h3, p {
   padding: 14px 20px;
   border-bottom: 1px solid var(--graph-line);
   background: #fff;
+  transition: padding-left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .create-page-bar h1 {
@@ -1739,7 +1806,7 @@ h1, h2, h3, p {
 
 .create-side-column {
   padding: 16px 18px;
-  background: #f8fafc;
+  background: var(--bg-canvas);
 }
 
 .create-home-head {
@@ -1748,7 +1815,7 @@ h1, h2, h3, p {
 
 .create-home-head h2 {
   margin: 0;
-  color: #334155;
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
   line-height: 1.3;
@@ -1771,7 +1838,7 @@ h1, h2, h3, p {
 .inline-field span {
   display: block;
   margin-bottom: 6px;
-  color: #475569;
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
 }
@@ -1782,7 +1849,7 @@ h1, h2, h3, p {
   height: 36px;
   border: 1px solid transparent;
   border-radius: 8px;
-  background: #f1f5f9;
+  background: var(--border-lighter);
   color: #1e293b;
   outline: none;
   transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
@@ -1792,7 +1859,7 @@ h1, h2, h3, p {
 .create-paper-search input:focus {
   background: #fff;
   border-color: var(--graph-blue);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  box-shadow: 0 0 0 3px rgba(166, 124, 82, 0.1);
 }
 
 .inline-field input {
@@ -1829,13 +1896,13 @@ h1, h2, h3, p {
 .create-paper-toolbar strong,
 .selected-paper-box strong,
 .create-mode-box strong {
-  color: #334155;
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
 }
 
 .create-paper-toolbar span {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -1863,7 +1930,7 @@ h1, h2, h3, p {
 }
 
 .inline-paper-option:hover {
-  background-color: #f1f5f9;
+  background-color: var(--border-lighter);
 }
 
 .paper-row-body {
@@ -1873,7 +1940,7 @@ h1, h2, h3, p {
 .paper-row-hint {
   display: block;
   margin-top: 4px;
-  color: #94a3b8;
+  color: var(--text-tertiary);
   font-size: 11px;
   font-style: normal;
   line-height: 1.4;
@@ -1905,7 +1972,7 @@ h1, h2, h3, p {
 
 .inline-paper-option input {
   margin-top: 4px;
-  accent-color: #2563eb;
+  accent-color: var(--el-color-primary-hover);
 }
 
 .inline-paper-option strong {
@@ -1995,7 +2062,7 @@ h1, h2, h3, p {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #334155;
+  color: var(--text-primary);
   text-align: left;
   cursor: pointer;
   transition: background-color 0.15s ease;
@@ -2060,14 +2127,14 @@ h1, h2, h3, p {
   grid-template-columns: auto 1fr;
   gap: 8px;
   margin-top: 8px;
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
 }
 
 .create-mode-box input {
   margin-top: 2px;
-  accent-color: var(--graph-blue);
+  accent-color: #a67c52;
 }
 
 .create-action-block {
@@ -2092,7 +2159,7 @@ h1, h2, h3, p {
 }
 
 .create-submit-btn:disabled {
-  background: #cbd5e1;
+  background: var(--border-light);
   cursor: not-allowed;
 }
 
@@ -2100,7 +2167,7 @@ h1, h2, h3, p {
   margin-top: 8px;
   border: 1px solid var(--graph-line);
   background: #fff;
-  color: #475569;
+  color: var(--text-primary);
 }
 
 @media (max-width: 1180px) {
@@ -2127,7 +2194,7 @@ h1, h2, h3, p {
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(214, 224, 236, 0.88);
   border-radius: 26px;
-  box-shadow: 0 28px 72px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 28px 72px rgba(74, 66, 58, 0.08);
 }
 
 .refined-empty-card {
@@ -2143,7 +2210,7 @@ h1, h2, h3, p {
   border-radius: 24px;
   background:
     radial-gradient(circle at 32% 35%, rgba(20, 184, 166, 0.18), transparent 38%),
-    radial-gradient(circle at 74% 58%, rgba(37, 99, 235, 0.12), transparent 42%),
+    radial-gradient(circle at 74% 58%, rgba(166, 124, 82, 0.12), transparent 42%),
     #f8fbfd;
   border: 1px solid #e3ebf4;
   overflow: hidden;
@@ -2175,8 +2242,8 @@ h1, h2, h3, p {
 
 .preview-node.n1 { width: 88px; height: 88px; left: 32px; top: 72px; background: #9aaab8; }
 .preview-node.n2 { width: 68px; height: 68px; left: 154px; top: 104px; background: #14b8a6; }
-.preview-node.n3 { width: 54px; height: 54px; left: 204px; top: 44px; background: #2563eb; }
-.preview-node.n4 { width: 56px; height: 56px; left: 84px; top: 162px; background: #60a5fa; }
+.preview-node.n3 { width: 54px; height: 54px; left: 204px; top: 44px; background: var(--el-color-primary-hover); }
+.preview-node.n4 { width: 56px; height: 56px; left: 84px; top: 162px; background: var(--accent-caramel); }
 
 .welcome-copy {
   text-align: left;
@@ -2231,28 +2298,23 @@ h1, h2, h3, p {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 300px;
   gap: 0;
   padding: 0;
   overflow: hidden;
-  background: #fff;
-  border-top: 1px solid var(--graph-line);
+  background: #fcfcfd;
+  border-top: 1px solid var(--border-lighter);
 }
 
 .graph-workspace.panel-detail {
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 380px);
 }
 
-.graph-workspace.state-low,
-.graph-workspace.state-weak,
-.graph-workspace.state-empty {
-  grid-template-columns: minmax(0, 1fr) 320px;
-}
-
-.graph-workspace.state-low.panel-detail,
-.graph-workspace.state-weak.panel-detail,
-.graph-workspace.state-empty.panel-detail {
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+.graph-panel-shell {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .graph-canvas-card {
@@ -2260,21 +2322,23 @@ h1, h2, h3, p {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #fff;
+  background: #fcfcfd;
   border: none;
-  border-right: 1px solid var(--graph-line);
+  border-right: none;
   border-radius: 0;
   box-shadow: none;
 }
 
 .canvas-header {
-  padding: 14px 18px 12px;
+  padding: 12px 16px 10px;
   gap: 12px;
-  border-bottom: 1px solid #eef4f9;
+  border-bottom: 1px solid var(--border-lighter);
+  background: rgba(252, 252, 253, 0.92);
 }
 
 .canvas-header.simplified-header {
   align-items: center;
+  justify-content: flex-start;
 }
 
 .relation-only-filter {
@@ -2347,15 +2411,15 @@ h1, h2, h3, p {
   border-radius: 8px;
   background: #fff;
   color: #1e293b;
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 4px 16px rgba(74, 66, 58, 0.06);
   outline: none;
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .relation-only-filter select:focus,
 .canvas-header .filter-row select:focus {
-  border-color: rgba(37, 99, 235, 0.55);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12), 0 10px 30px rgba(0, 0, 0, 0.08);
+  border-color: rgba(166, 124, 82, 0.55);
+  box-shadow: 0 0 0 3px rgba(166, 124, 82, 0.12), 0 10px 30px rgba(0, 0, 0, 0.08);
 }
 
 .score-filter {
@@ -2370,7 +2434,7 @@ h1, h2, h3, p {
 
 .score-filter input {
   width: 104px;
-  accent-color: var(--graph-blue);
+  accent-color: #a67c52;
 }
 
 
@@ -2382,7 +2446,7 @@ h1, h2, h3, p {
   border-radius: 20px;
   background:
     radial-gradient(circle at 48% 40%, rgba(20, 184, 166, 0.10), transparent 22%),
-    radial-gradient(circle at 70% 60%, rgba(37, 99, 235, 0.06), transparent 24%),
+    radial-gradient(circle at 70% 60%, rgba(166, 124, 82, 0.06), transparent 24%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 253, 255, 0.96));
   border: 1px solid #edf3f8;
   overflow: hidden;
@@ -2417,7 +2481,7 @@ h1, h2, h3, p {
 }
 
 .node-halo.selected {
-  stroke: rgba(37, 99, 235, 0.30);
+  stroke: rgba(166, 124, 82, 0.30);
   stroke-width: 16;
 }
 
@@ -2426,7 +2490,7 @@ h1, h2, h3, p {
   fill: #fff;
   font-weight: 850;
   paint-order: stroke;
-  stroke: rgba(15, 23, 42, 0.12);
+  stroke: rgba(74, 66, 58, 0.12);
   stroke-width: 2px;
   stroke-linejoin: round;
 }
@@ -2457,8 +2521,8 @@ h1, h2, h3, p {
   padding: 14px 18px;
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.92);
-  color: #64748b;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.10);
+  color: var(--text-secondary);
+  box-shadow: 0 12px 30px rgba(74, 66, 58, 0.10);
 }
 
 .legend-row {
@@ -2480,7 +2544,7 @@ h1, h2, h3, p {
 .legend-line {
   width: 34px;
   height: 0;
-  border-top: 3px solid #2563eb;
+  border-top: 3px solid var(--el-color-primary-hover);
 }
 
 .legend-line.medium {
@@ -2498,14 +2562,14 @@ h1, h2, h3, p {
   width: 118px;
   height: 10px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #94a3b8, #14b8a6, #60a5fa, #6366f1);
+  background: linear-gradient(90deg, var(--text-tertiary), var(--accent-sage), var(--accent-caramel), var(--el-color-primary));
 }
 
 .unknown-dot {
   width: 10px;
   height: 10px;
   border-radius: 999px;
-  background: #cbd5e1;
+  background: var(--border-light);
 }
 
 .detail-panel {
@@ -2543,7 +2607,7 @@ h1, h2, h3, p {
 
 .source-note p {
   margin: 0;
-  color: #64748b;
+  color: var(--text-secondary);
   line-height: 1.65;
   font-size: 13px;
 }
@@ -2614,7 +2678,7 @@ h1, h2, h3, p {
 .relation-line-item:hover {
   transform: translateY(-1px);
   border-color: #c8d9ea;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 10px 24px rgba(74, 66, 58, 0.06);
 }
 
 .related-paper strong,
@@ -2691,7 +2755,7 @@ h1, h2, h3, p {
   z-index: 3000;
   display: grid;
   place-items: center;
-  background: rgba(15, 23, 42, 0.34);
+  background: rgba(74, 66, 58, 0.34);
   backdrop-filter: blur(8px);
 }
 
@@ -2736,7 +2800,7 @@ h1, h2, h3, p {
   height: 9px;
   margin: 0 auto 7px;
   border-radius: 999px;
-  background: #cbd5e1;
+  background: var(--border-light);
   box-shadow: 0 0 0 5px #eef3f8;
 }
 
@@ -2767,7 +2831,7 @@ h1, h2, h3, p {
 .field-label {
   display: block;
   margin: 0 0 8px;
-  color: #334155;
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 850;
 }
@@ -2857,12 +2921,12 @@ h1, h2, h3, p {
 }
 
 .mode-badge.soft {
-  background: #cbd5e1;
-  color: #475569;
+  background: var(--border-light);
+  color: var(--text-primary);
 }
 
 .mode-card p {
-  color: #64748b;
+  color: var(--text-secondary);
   line-height: 1.65;
 }
 
@@ -2886,7 +2950,7 @@ h1, h2, h3, p {
   width: 76px;
   height: 76px;
   border-radius: 28px;
-  background: conic-gradient(from 0deg, #2563eb, #14b8a6, #e0f5f7, #2563eb);
+  background: conic-gradient(from 0deg, var(--el-color-primary-hover), #14b8a6, #e0f5f7, var(--el-color-primary-hover));
   animation: spin 1.3s linear infinite;
 }
 
@@ -2902,12 +2966,12 @@ h1, h2, h3, p {
 
 .generation-list div {
   padding: 9px 0;
-  color: #94a3b8;
+  color: var(--text-tertiary);
   font-weight: 750;
 }
 
 .generation-list div.active {
-  color: #2563eb;
+  color: var(--el-color-primary-hover);
 }
 
 .generation-list div.done {
@@ -2937,48 +3001,64 @@ h1, h2, h3, p {
   display: block;
 }
 
-.slim-scroll::-webkit-scrollbar,
 .detail-panel::-webkit-scrollbar,
 .paper-list-modal::-webkit-scrollbar {
   width: 6px;
 }
 
-.slim-scroll::-webkit-scrollbar-thumb,
 .detail-panel::-webkit-scrollbar-thumb,
 .paper-list-modal::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--border-light);
   border-radius: 999px;
 }
 
-@media (max-width: 1380px) {
+@media (max-width: 1280px) {
   .graph-workspace,
-  .graph-workspace.state-low,
-  .graph-workspace.state-empty,
-  .graph-workspace.state-weak {
-    grid-template-columns: minmax(0, 1fr) 300px;
-  }
-  .graph-workspace.panel-detail,
-  .graph-workspace.state-low.panel-detail,
-  .graph-workspace.state-weak.panel-detail,
-  .graph-workspace.state-empty.panel-detail {
-    grid-template-columns: minmax(0, 1fr) 340px;
-  }
-  .toolbar-actions {
-    gap: 8px;
+  .graph-workspace.panel-detail {
+    grid-template-columns: minmax(0, 1fr) 280px;
   }
 }
 
 @media (max-width: 1180px) {
   .graph-workspace,
+  .graph-workspace.panel-detail,
   .graph-workspace.state-low,
   .graph-workspace.state-weak,
   .graph-workspace.state-empty {
     grid-template-columns: 1fr;
-    overflow-y: auto;
+    position: relative;
+    overflow: hidden;
   }
-  .detail-panel {
-    min-height: 320px;
+
+  .graph-panel-shell {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    pointer-events: none;
   }
+
+  .graph-panel-shell.panel-overlay {
+    pointer-events: auto;
+  }
+
+  .graph-panel-shell :deep(.detail-panel) {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(400px, 92vw);
+    box-shadow: -12px 0 40px rgba(74, 66, 58, 0.12);
+  }
+
+  .graph-panel-shell:not(.panel-overlay) :deep(.detail-panel) {
+    position: static;
+    width: 100%;
+    max-height: 42vh;
+    border-top: 1px solid var(--border-lighter);
+    box-shadow: none;
+    pointer-events: auto;
+  }
+
   .refined-empty-card {
     grid-template-columns: 1fr;
   }

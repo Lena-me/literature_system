@@ -599,8 +599,9 @@ class PaperPipelineService:
 4. keywords 优先从 Keywords、Index Terms、关键词、关键字 后面的显式内容提取；没有显式关键词时，再根据标题、摘要和引言归纳 3-8 个学术术语。
 5. doi 优先从原文中提取 10.xxxx/xxxxx 或 arXiv 编号；没有则为 null。
 6. publication_year 必须是整数年份；无法确定则为 null。
-7. subject_labels 是文献的学科/主题分类标签，从以下常用学科中选择最匹配的 2-5 个：计算机科学,人工智能,机器学习,深度学习,自然语言处理,计算机视觉,数据挖掘,知识图谱,推荐系统,信息检索,软件工程,数据库,分布式系统,网络安全,生物信息学,医学影像,信号处理,通信技术,控制工程,机器人,量子计算,物理学,化学,材料科学,能源科学,环境科学,数学,统计学,经济学,管理学,教育学,心理学,社会学,法学,文学,历史学,哲学,艺术学。如果文献主题不在上述列表中，可以补充自定义标签，但不要超过 5 个。
-8. 输出 JSON 必须包含以下全部字段，不得遗漏。
+7. subject_labels 必须体现多级学科粒度：至少 2 个、最多 6 个标签；禁止只输出顶级大类（如仅「计算机科学」「材料科学」）。优先选择具体研究方向（深度学习、医学影像、纳米材料、机器人等），可搭配 1 个所属顶级领域。候选标签包括：计算机科学,人工智能,机器学习,深度学习,自然语言处理,计算机视觉,数据挖掘,知识图谱,推荐系统,信息检索,软件工程,数据库,分布式系统,网络安全,生物信息学,医学影像,信号处理,通信技术,控制工程,机器人,量子计算,物理学,化学,材料科学,能源科学,环境科学,数学,统计学,经济学,管理学,教育学,心理学,社会学,法学,文学,历史学,哲学,艺术学；可补充更细自定义标签。
+8. 标签组合应覆盖不同层级，例如「计算机科学+深度学习」「材料科学+纳米材料」「医学+医学影像」。
+9. 输出 JSON 必须包含以下全部字段，不得遗漏。
 
 JSON 示例：
 {{
@@ -608,7 +609,7 @@ JSON 示例：
     "authors": ["蒋温平"],
     "abstract": "本文针对超声图像中存在的散斑噪声问题，提出了一种基于边缘信息增强的去噪算法...",
     "keywords": ["超声图像", "去噪", "边缘信息增强", "深度学习", "Canny算子"],
-    "subject_labels": ["计算机科学", "人工智能", "医学影像"],
+    "subject_labels": ["计算机科学", "深度学习", "医学影像"],
     "research_question": "如何在去除超声图像噪声的同时有效保留边缘细节信息",
     "method": "提出基于边缘信息增强的深度学习去噪框架，结合Canny边缘检测与注意力机制",
     "experiment_data": "在公开数据集和临床超声图像上进行实验验证",
@@ -768,6 +769,12 @@ JSON 示例：
             return
 
         for item in hierarchy_result:
+            if not item.get('secondary_domain'):
+                logger.error(
+                    '[paper=%s] hierarchy item still missing secondary after analysis: %s',
+                    paper_id, item.get('subject_label'),
+                )
+                continue
             hierarchy = SubjectHierarchy(
                 user_id=user_id,
                 paper_id=paper_id,
@@ -780,6 +787,32 @@ JSON 示例：
             )
             db.add(hierarchy)
         db.flush()
+
+    def rebuild_subject_hierarchy_for_paper(self, paper_id: int) -> int:
+        """基于已保存的 subject_labels 重建学科层级（无需完整重解析）。"""
+        with celery_db() as db:
+            paper = db.get(Paper, paper_id)
+            if not paper or paper.is_deleted:
+                raise ValueError('文献不存在')
+
+            labels_raw = paper.subject_labels
+            if not labels_raw:
+                raise ValueError('文献暂无学科标签，请先完成解析')
+
+            subject_labels = loads(labels_raw, default=[])
+            if not isinstance(subject_labels, list) or not subject_labels:
+                raise ValueError('学科标签格式无效')
+
+            title = paper.title or paper.original_filename or ''
+            info = db.execute(
+                select(PaperExtractedInfo).where(PaperExtractedInfo.paper_id == paper_id)
+            ).scalar_one_or_none()
+            if info and info.title:
+                title = info.title
+
+            self._save_subject_hierarchy(db, paper_id, paper.user_id, subject_labels, title)
+            db.commit()
+            return len(subject_labels)
 
     def _build_context_prefix(self, paper_id: int) -> str:
         with celery_db() as db:

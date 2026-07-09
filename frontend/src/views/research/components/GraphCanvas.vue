@@ -1,12 +1,15 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { LiteratureGraphEdge, LiteratureGraphNode } from '@/api/knowledge'
+import { emphasizeNodeColor, YEAR_GRADIENT_CSS, YEAR_UNKNOWN_COLOR } from '@/utils/graphColors'
 
 interface LayoutNode extends LiteratureGraphNode {
   x: number
   y: number
   radius: number
   color: string
+  paperIndex: number
+  isCore: boolean
 }
 
 interface LayoutEdge extends LiteratureGraphEdge {
@@ -35,21 +38,23 @@ const props = defineProps<{
   yearRange: [number, number]
   edgeStroke: (edge: LiteratureGraphEdge) => string
   edgeWidth: (edge: LiteratureGraphEdge) => number
-  edgeOpacity: (edge: LiteratureGraphEdge) => number
-  nodeOpacity: (node: LayoutNode) => number
-  nodePrimaryLabel: (node: LiteratureGraphNode) => string
-  nodeYearLabel: (node: LiteratureGraphNode) => string
-  nodeCaption: (node: LiteratureGraphNode) => string
+  edgeDasharray: (edge: LiteratureGraphEdge) => string | undefined
+  nodePrimaryLabel: (node: LayoutNode) => string
+  nodeYearLabel: (node: LayoutNode) => string
   formatAuthors: (value?: string | null) => string
   displayState: GraphDisplayState
   displayMessage: GraphDisplayMessage
   singlePaper: LiteratureGraphNode | null
+  hoveredNodeId?: string | null
+  focusActive?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'select-summary'): void
   (e: 'select-edge', edge: LiteratureGraphEdge): void
   (e: 'select-node', node: LiteratureGraphNode): void
+  (e: 'hover-node', node: LiteratureGraphNode): void
+  (e: 'leave-node'): void
   (e: 'open-create'): void
   (e: 'open-library'): void
 }>()
@@ -58,9 +63,27 @@ function isNodeSelected(node: LayoutNode) {
   return props.selectedPanel.kind === 'node' && String(props.selectedNodeForPanel?.id) === String(node.id)
 }
 
+function isNodeHovered(node: LayoutNode) {
+  return props.hoveredNodeId === String(node.id)
+}
+
+function nodeDisplayRadius(node: LayoutNode) {
+  return node.radius + (isNodeHovered(node) || isNodeSelected(node) ? 2 : 0)
+}
+
 function nodeSelectedTransform(node: LayoutNode) {
   if (!isNodeSelected(node)) return undefined
   return `translate(${node.x} ${node.y}) scale(1.02) translate(${-node.x} ${-node.y})`
+}
+
+function nodeFillColor(node: LayoutNode) {
+  if (isNodeHovered(node) || isNodeSelected(node)) return emphasizeNodeColor(node.color)
+  return node.color
+}
+
+function nodeVisualFilter(node: LayoutNode) {
+  if (isNodeHovered(node) || isNodeSelected(node)) return 'url(#nodeGlow)'
+  return node.isCore ? 'url(#nodeShadowCore)' : 'url(#nodeShadow)'
 }
 
 const bestEdge = computed(() => {
@@ -80,6 +103,16 @@ const bestSharedKeywords = computed(() => {
 })
 
 const paperKeywords = computed(() => props.singlePaper?.keywords?.slice(0, 8) || [])
+
+const sortedLayoutEdges = computed(() =>
+  [...props.layoutEdges].sort((a, b) => (a.score || 0) - (b.score || 0)),
+)
+
+function edgeTooltip(edge: LayoutEdge) {
+  const strength = edge.strength === 'strong' ? '强关联' : edge.strength === 'medium' ? '中等关联' : '弱关联'
+  const score = typeof edge.score === 'number' ? edge.score.toFixed(2) : '-'
+  return `${strength} · 强度 ${score}`
+}
 
 const canvasRef = ref<HTMLElement | null>(null)
 const panX = ref(0)
@@ -206,7 +239,7 @@ function endPan() {
 function onPanStart(event: PointerEvent) {
   if (event.button !== 0) return
   const target = event.target as Element | null
-  if (target?.closest('.node-group') || target?.closest('.edge-line') || target?.closest('.canvas-toolbar')) return
+  if (target?.closest('.node-group') || target?.closest('.edge-group') || target?.closest('.canvas-toolbar')) return
 
   isPanning.value = true
   panMoved.value = false
@@ -317,6 +350,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
         compact: props.displayState === 'low',
         weak: props.displayState === 'weak',
         panning: isPanning,
+        'focus-active': props.focusActive,
       }"
       @wheel.prevent="onWheel"
       @click="onCanvasClick"
@@ -345,28 +379,49 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
       >
         <defs>
           <filter id="nodeShadow" x="-40%" y="-40%" width="180%" height="180%">
-            <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.16" />
+            <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="var(--text-secondary)" flood-opacity="0.14" />
+          </filter>
+          <filter id="nodeShadowCore" x="-50%" y="-50%" width="200%" height="200%">
+            <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="var(--text-secondary)" flood-opacity="0.18" />
+          </filter>
+          <filter id="nodeGlow" x="-60%" y="-60%" width="220%" height="220%">
+            <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="var(--text-secondary)" flood-opacity="0.2" />
           </filter>
         </defs>
 
         <g :transform="viewportTransform">
         <g class="edges-layer">
-          <line
-            v-for="edge in props.layoutEdges"
+          <g
+            v-for="edge in sortedLayoutEdges"
             :key="edge.id"
-            :x1="edge.x1"
-            :y1="edge.y1"
-            :x2="edge.x2"
-            :y2="edge.y2"
-            :stroke="props.edgeStroke(edge)"
-            :stroke-width="props.displayState === 'weak' ? Math.min(props.edgeWidth(edge), 2.2) : props.edgeWidth(edge)"
-            :stroke-opacity="props.displayState === 'weak' ? 0.5 : props.edgeOpacity(edge)"
-            :stroke-dasharray="edge.strength === 'weak' || props.displayState === 'weak' ? '8 8' : undefined"
-            stroke-linecap="round"
-            class="edge-line"
+            class="edge-group"
+            :class="`edge-${edge.strength || 'weak'}`"
             @click.stop="emit('select-edge', edge)"
             @pointerdown.stop
-          />
+          >
+            <line
+              class="edge-hit"
+              :x1="edge.x1"
+              :y1="edge.y1"
+              :x2="edge.x2"
+              :y2="edge.y2"
+              stroke="transparent"
+              stroke-width="14"
+              stroke-linecap="round"
+            />
+            <line
+              class="edge-visible"
+              :x1="edge.x1"
+              :y1="edge.y1"
+              :x2="edge.x2"
+              :y2="edge.y2"
+              :stroke="props.edgeStroke(edge)"
+              :stroke-width="props.edgeWidth(edge)"
+              :stroke-dasharray="props.edgeDasharray(edge)"
+              stroke-linecap="round"
+            />
+            <title>{{ edgeTooltip(edge) }}</title>
+          </g>
         </g>
 
         <g class="nodes-layer">
@@ -374,44 +429,38 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
             v-for="node in props.layoutNodes"
             :key="node.id"
             class="node-group"
-            :class="{ 'is-selected': isNodeSelected(node) }"
+            :class="{
+              'is-selected': isNodeSelected(node),
+              'is-hovered': isNodeHovered(node),
+              'is-core': node.isCore,
+            }"
             :transform="nodeSelectedTransform(node)"
-            :style="{ opacity: props.nodeOpacity(node) }"
             @click.stop="emit('select-node', node)"
+            @pointerenter="emit('hover-node', node)"
+            @pointerleave="emit('leave-node')"
             @pointerdown.stop
           >
             <circle
-              v-if="isNodeSelected(node)"
+              v-if="isNodeSelected(node) || isNodeHovered(node)"
               :cx="node.x"
               :cy="node.y"
-              :r="node.radius + 3.5"
-              class="node-select-ring"
+              :r="nodeDisplayRadius(node) + 5"
+              class="node-hover-ring"
+              :stroke="emphasizeNodeColor(node.color)"
             />
             <circle
               :cx="node.x"
               :cy="node.y"
-              :r="node.radius + 5"
-              class="node-soft-ring"
-              :stroke="node.color"
-            />
-            <circle
-              :cx="node.x"
-              :cy="node.y"
-              :r="node.radius"
-              :fill="node.color"
+              :r="nodeDisplayRadius(node)"
+              class="node-core"
+              :fill="nodeFillColor(node)"
               stroke="#ffffff"
-              stroke-width="4.8"
-              filter="url(#nodeShadow)"
+              stroke-width="3"
+              :filter="nodeVisualFilter(node)"
             />
-            <text :x="node.x" :y="node.y - 3" text-anchor="middle" class="node-core-label">{{ props.nodePrimaryLabel(node) }}</text>
-            <text :x="node.x" :y="node.y + 14" text-anchor="middle" class="node-year-label">{{ props.nodeYearLabel(node) }}</text>
-            <text
-              :x="node.x"
-              :y="node.y + node.radius + 26"
-              text-anchor="middle"
-              class="node-label"
-            >{{ props.nodeCaption(node) }}</text>
-            <title>{{ node.title }}&#10;{{ props.formatAuthors(node.authors) }}&#10;本地中心性：{{ node.centrality ?? 0 }}</title>
+            <text :x="node.x" :y="node.y - 2" text-anchor="middle" class="node-core-label">{{ props.nodePrimaryLabel(node) }}</text>
+            <text :x="node.x" :y="node.y + 15" text-anchor="middle" class="node-year-label">{{ props.nodeYearLabel(node) }}</text>
+            <title>{{ node.title }}&#10;{{ props.formatAuthors(node.authors) }}&#10;{{ node.year || '年份未知' }}&#10;本地中心性：{{ node.centrality ?? 0 }}</title>
           </g>
         </g>
         </g>
@@ -444,9 +493,8 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   min-height: 0;
   margin: 0;
   border-radius: 0;
-  background: #f8fafc;
+  background: transparent;
   border: none;
-  border-top: 1px solid #eef2f7;
   overflow: hidden;
   cursor: grab;
   touch-action: none;
@@ -458,18 +506,19 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
 
 .canvas-toolbar {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 12px;
+  right: 12px;
   z-index: 3;
   display: inline-flex;
   align-items: center;
   gap: 2px;
   padding: 3px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.82);
-  border: 1px solid rgba(226, 232, 240, 0.9);
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
-  backdrop-filter: blur(6px);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 4px 14px rgba(74, 66, 58, 0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .canvas-tool-btn {
@@ -482,7 +531,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #64748b;
+  color: #9c948c;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
@@ -493,8 +542,8 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
 }
 
 .canvas-tool-btn:hover {
-  background: #f1f5f9;
-  color: #2563eb;
+  background: var(--border-lighter);
+  color: #5BA8D4;
 }
 
 .svg-shell.compact svg {
@@ -507,14 +556,12 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
 }
 
 .svg-shell.weak {
-  background:
-    radial-gradient(circle at 48% 40%, rgba(148, 163, 184, 0.10), transparent 24%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 253, 255, 0.96));
+  background: transparent;
 }
 
 .svg-shell.weak svg {
-  opacity: 0.82;
-  filter: saturate(0.80);
+  opacity: 1;
+  filter: none;
 }
 
 .svg-shell svg {
@@ -531,66 +578,58 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   min-height: 0;
   margin: 0;
   border-radius: 0;
-  background: #f8fafc;
+  background: transparent;
   border: none;
-  border-top: 1px solid #eef2f7;
   overflow: hidden;
 }
 
-.edge-line {
+.edge-group {
   cursor: pointer;
-  vector-effect: non-scaling-stroke;
-  transition: stroke-opacity 0.16s, stroke-width 0.16s;
 }
 
-.edge-line:hover {
-  stroke-opacity: 1;
+.edge-hit {
+  pointer-events: stroke;
+}
+
+.edge-visible {
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+  transition: stroke 0.2s ease, stroke-width 0.2s ease;
 }
 
 .node-group {
   cursor: pointer;
-  transition: opacity 0.16s ease;
 }
 
-.node-select-ring {
+.node-hover-ring {
   fill: none;
-  stroke: #2563eb;
-  stroke-width: 2;
+  stroke-width: 2.5;
   pointer-events: none;
 }
 
-.node-soft-ring {
-  fill: none;
-  stroke-opacity: 0.20;
-  stroke-width: 8;
+.node-core {
+  transition: r 0.2s ease, fill 0.2s ease;
 }
 
 .node-core-label,
 .node-year-label {
-  fill: #fff;
-  font-weight: 850;
+  fill: #ffffff;
+  font-weight: 800;
   paint-order: stroke;
-  stroke: rgba(15, 23, 42, 0.12);
+  stroke: rgba(93, 83, 74, 0.18);
   stroke-width: 2px;
   stroke-linejoin: round;
 }
 
 .node-core-label {
-  font-size: 14.5px;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .node-year-label {
-  font-size: 14px;
-}
-
-.node-label {
-  fill: #23334b;
-  font-size: 13.8px;
-  font-weight: 880;
-  paint-order: stroke;
-  stroke: rgba(255, 255, 255, 0.98);
-  stroke-width: 5.5px;
-  stroke-linejoin: round;
+  font-size: 11.5px;
+  font-weight: 700;
+  fill: #ffffff;
 }
 
 .canvas-empty-note {
@@ -601,8 +640,8 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   padding: 14px 18px;
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.92);
-  color: #64748b;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.10);
+  color: var(--text-secondary);
+  box-shadow: 0 12px 30px rgba(74, 66, 58, 0.10);
 }
 
 
@@ -619,7 +658,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   position: relative;
   min-height: 260px;
   border-radius: 22px;
-  background: linear-gradient(135deg, #f8fbff, #eef7ff);
+  background: linear-gradient(135deg, #faf7f2, #eef7ff);
   border: 1px solid #dce8f6;
 }
 
@@ -633,15 +672,15 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   width: 58px;
   height: 58px;
   border-radius: 999px;
-  background: #dbeafe;
+  background: #e8ddd0;
   border: 3px solid #fff;
-  box-shadow: 0 18px 35px rgba(37, 99, 235, 0.15);
+  box-shadow: 0 18px 35px rgba(166, 124, 82, 0.15);
 }
 
-.empty-node.main { left: 50%; top: 45%; transform: translate(-50%, -50%); background: #60a5fa; }
+.empty-node.main { left: 50%; top: 45%; transform: translate(-50%, -50%); background: var(--accent-caramel); }
 .empty-node.left { left: 22%; top: 58%; }
 .empty-node.right { right: 22%; top: 58%; }
-.empty-line { height: 2px; width: 92px; background: #cbd5e1; top: 57%; }
+.empty-line { height: 2px; width: 92px; background: var(--border-light); top: 57%; }
 .empty-line.left { left: 31%; transform: rotate(-18deg); }
 .empty-line.right { right: 31%; transform: rotate(18deg); }
 
@@ -653,7 +692,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
 
 .empty-copy p {
   margin: 0;
-  color: #64748b;
+  color: var(--text-secondary);
   line-height: 1.75;
 }
 
@@ -673,20 +712,20 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   cursor: pointer;
 }
 
-.primary-action { background: #2563eb; color: #fff; }
-.ghost-action { background: #fff; color: #2563eb; border: 1px solid #bfdbfe; }
+.primary-action { background: var(--el-color-primary-hover); color: #fff; }
+.ghost-action { background: #fff; color: var(--el-color-primary-hover); border: 1px solid #bfdbfe; }
 
 .single-paper-card {
   grid-column: 1 / -1;
   padding: 18px;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.92);
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border-light);
 }
 
 .single-paper-head p {
   margin: 0 0 4px;
-  color: #2563eb;
+  color: var(--el-color-primary-hover);
   font-size: 13px;
   font-weight: 850;
 }
@@ -698,7 +737,7 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
 }
 
 .single-paper-head span {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -738,9 +777,10 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   gap: 18px;
   padding: 8px 14px 18px;
   margin-top: auto;
-  color: #66788a;
+  color: var(--text-tertiary);
   font-size: 12px;
   flex-wrap: wrap;
+  background: transparent;
 }
 
 .legend-item,
@@ -753,17 +793,22 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
 .legend-line {
   width: 34px;
   height: 0;
-  border-top: 3px solid #2563eb;
+  border-top: 2px solid var(--border-light);
+}
+
+.legend-line.strong {
+  border-color: #5BA8D4;
+  border-top-width: 3px;
 }
 
 .legend-line.medium {
-  border-color: #7788a0;
+  border-color: #A8B8C8;
   border-top-width: 2px;
 }
 
 .legend-line.weak {
-  border-color: #aab7c8;
-  border-top-width: 2px;
+  border-color: #E8EDF2;
+  border-top-width: 1.5px;
   border-top-style: dashed;
 }
 
@@ -771,14 +816,14 @@ function compactText(value?: string | null, fallback = '暂无抽取结果') {
   width: 118px;
   height: 10px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #94a3b8, #14b8a6, #60a5fa, #6366f1);
+  background: v-bind('YEAR_GRADIENT_CSS');
 }
 
 .unknown-dot {
   width: 10px;
   height: 10px;
   border-radius: 999px;
-  background: #cbd5e1;
+  background: v-bind('YEAR_UNKNOWN_COLOR');
 }
 
 @media (max-width: 1180px) {

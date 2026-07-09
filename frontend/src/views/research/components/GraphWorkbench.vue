@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed } from 'vue'
 import type { GraphListItem } from '@/api/knowledge'
 import type { KnowledgeDomain } from '@/types/domain'
@@ -119,7 +119,7 @@ function setActiveTopic(id: number | null) {
   flex-direction: column;
   padding: 20px 12px;
   background: #fff;
-  box-shadow: 1px 0 0 0 #e2e8f0;
+  box-shadow: 1px 0 0 0 var(--border-light);
   overflow-y: auto;
   overflow-x: hidden;
   gap: 12px;
@@ -181,14 +181,14 @@ function setActiveTopic(id: number | null) {
   width: 100%;
   height: 42px;
   border-radius: 13px;
-  background: #2563eb;
+  background: var(--el-color-primary-hover);
   color: #fff;
   font-weight: 850;
   box-shadow: none;
 }
 
 .create-btn:hover {
-  background: #1d4ed8;
+  background: var(--el-color-primary-hover);
 }
 
 .search-box {
@@ -244,9 +244,9 @@ function setActiveTopic(id: number | null) {
 }
 
 .tabs button.active {
-  color: #2563eb;
+  color: var(--el-color-primary-hover);
   box-shadow: none;
-  border-bottom-color: #2563eb;
+  border-bottom-color: var(--el-color-primary-hover);
 }
 
 .topic-list {
@@ -306,7 +306,7 @@ function setActiveTopic(id: number | null) {
   bottom: 14px;
   width: 3px;
   border-radius: 999px;
-  background: #2563eb;
+  background: var(--el-color-primary-hover);
 }
 
 .graph-card:focus,
@@ -315,7 +315,7 @@ function setActiveTopic(id: number | null) {
 }
 
 .graph-card:focus-visible {
-  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.18);
+  box-shadow: inset 0 0 0 2px rgba(166, 124, 82, 0.18);
 }
 
 .status-dot {
@@ -404,7 +404,7 @@ function setActiveTopic(id: number | null) {
 }
 
 .slim-scroll::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--border-light);
   border-radius: 999px;
 }
 

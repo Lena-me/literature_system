@@ -1,5 +1,5 @@
-<script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+﻿<script setup lang="ts">
+import { nextTick, onBeforeUnmount, ref, shallowRef, watch, withDefaults } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import {ZoomIn, ZoomOut } from '@element-plus/icons-vue'
 import { mergeSelectionRects } from '@/utils/mergeRects'
@@ -14,10 +14,10 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 ).href
 
 // ============================================================================
-// Props / Emits / Expose（保持与 WorkbenchView 兼容）
+// Props / Emits / Expose
 // ============================================================================
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   url?: string
   initialPage?: number
   highlightText?: string
@@ -29,7 +29,10 @@ const props = defineProps<{
     noteContent?: string
   }) => Promise<{ id: number; color?: string } | null>
   deleteHighlightHandler?: (id: number | string) => Promise<void>
-}>()
+  showFormulaButton?: boolean
+}>(), {
+  showFormulaButton: true,
+})
 const emit = defineEmits<{
   (e: 'oldUrlCleanup', url: string): void
   (e: 'highlightSaved'): void
@@ -45,7 +48,8 @@ const containerRef = ref<HTMLElement | null>(null)
 const pdfLoading = ref(false)
 const error = ref('')
 const totalPages = ref(0)
-const scale = ref(1.15)
+const scale = ref(1)
+const userManualZoom = ref(false)
 const pageHeightPx = ref(800)           // 骨架屏高度（首页渲染后更新）
 const pageWidthPx = ref(566)            // 骨架屏宽度（A4 比例 ≈ height / 1.414）
 const scrollPage = ref(1)               // 当前视口最可见的页码（工具栏显示用）
@@ -155,6 +159,8 @@ watch(() => props.highlightText, async () => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onGlobalMouseDown)
+  resizeObs?.disconnect()
+  if (resizeFitTimeout) clearTimeout(resizeFitTimeout)
   clearLinkHighlight()
   cancelFormulaCrop()
   destroyObserver()
@@ -233,15 +239,19 @@ async function loadPdf() {
     doc = newDoc
     totalPages.value = doc.numPages
 
-    // 获取首页尺寸，用于骨架屏高度
-    await estimatePageHeight()
+    userManualZoom.value = false
+    totalPages.value = doc.numPages
 
-    // 初始化 IntersectionObserver（需要 DOM 更新后）
     await nextTick()
+    await nextTick()
+
+    setupResizeObserver()
+    await fitToContainerWidth(true)
     setupObserver()
 
-    // 立即渲染首屏（第一页）
     await renderPage(1)
+    await nextTick()
+    await fitToContainerWidth(true)
 
     // 如果指定了 initialPage，滚动过去
     const target = Math.min(Math.max(props.initialPage || 1, 1), totalPages.value)
@@ -255,6 +265,47 @@ async function loadPdf() {
   } finally {
     if (myGen === loadGen) pdfLoading.value = false
   }
+}
+
+let resizeObs: ResizeObserver | null = null
+let resizeFitTimeout: ReturnType<typeof setTimeout> | null = null
+
+function setupResizeObserver() {
+  resizeObs?.disconnect()
+  if (!containerRef.value) return
+  resizeObs = new ResizeObserver(() => {
+    if (resizeFitTimeout) clearTimeout(resizeFitTimeout)
+    resizeFitTimeout = setTimeout(() => {
+      void fitToContainerWidth()
+    }, 150)
+  })
+  resizeObs.observe(containerRef.value)
+}
+
+async function fitToContainerWidth(force = false) {
+  if (!containerRef.value || !doc) return
+  if (userManualZoom.value && !force) return
+
+  await nextTick()
+
+  const containerWidth = containerRef.value.clientWidth
+  if (containerWidth < 120) return
+
+  try {
+    const page = await doc.getPage(1)
+    const baseVp = page.getViewport({ scale: 1 })
+    const styles = getComputedStyle(containerRef.value)
+    const padX = (parseFloat(styles.paddingLeft) || 0) + (parseFloat(styles.paddingRight) || 0)
+    const horizontalPad = padX + 4
+    const targetScale = (containerWidth - horizontalPad) / baseVp.width
+    const clamped = Math.min(Math.max(targetScale, 0.5), 3)
+    if (Math.abs(clamped - scale.value) > 0.005) {
+      await applyZoom(clamped, { preserveManualZoom: true })
+      await renderPage(1)
+    } else {
+      await estimatePageHeight()
+    }
+  } catch { /* ignore */ }
 }
 
 async function estimatePageHeight() {
@@ -376,12 +427,21 @@ async function renderPage(pageNum: number) {
       return
     }
 
-    canvas.width = Math.floor(viewport.width)
-    canvas.height = Math.floor(viewport.height)
+    const outputScale = window.devicePixelRatio || 1
+    canvas.width = Math.floor(viewport.width * outputScale)
+    canvas.height = Math.floor(viewport.height * outputScale)
     canvas.style.width = `${Math.floor(viewport.width)}px`
     canvas.style.height = `${Math.floor(viewport.height)}px`
 
-    const renderTask = page.render({ canvasContext: context, viewport })
+    const transform = outputScale !== 1
+      ? [outputScale, 0, 0, outputScale, 0, 0]
+      : null
+
+    const renderTask = page.render({
+      canvasContext: context,
+      transform,
+      viewport,
+    })
     taskMap.set(pageNum, renderTask)
     await renderTask.promise
     taskMap.delete(pageNum)
@@ -483,7 +543,9 @@ async function renderAnnotationLayer(pageNum: number) {
       box.style.top = `${rect.top * 100}%`
       box.style.width = `${rect.width * 100}%`
       box.style.height = `${rect.height * 100}%`
-      box.style.backgroundColor = hl.color || 'rgba(255, 210, 77, 0.45)'
+      box.style.backgroundColor = hl.color || HIGHLIGHT_COLORS.yellow
+      const tone = resolveHighlightTone(hl.color)
+      box.style.setProperty('--hl-edge', highlightEdgeColor(HIGHLIGHT_HEX[tone]))
       box.title = isPersistedNote ? '点击查看笔记' : hl.text.slice(0, 100)
       box.dataset.highlightId = hl.id
       if (isPersistedNote) {
@@ -782,10 +844,10 @@ function onHighlightLayerClick(e: MouseEvent) {
 // ============================================================================
 
 const HIGHLIGHT_COLORS: Record<string, string> = {
-  yellow: 'rgba(255, 210, 77, 0.45)',
-  green:  'rgba(60, 210, 120, 0.40)',
-  red:    'rgba(255, 80, 80, 0.40)',
-  blue:   'rgba(80, 150, 255, 0.40)',
+  yellow: 'rgba(255, 210, 77, 0.2)',
+  green:  'rgba(60, 210, 120, 0.2)',
+  red:    'rgba(255, 80, 80, 0.2)',
+  blue:   'rgba(80, 150, 255, 0.2)',
 }
 
 const HIGHLIGHT_HEX: Record<string, string> = {
@@ -795,13 +857,25 @@ const HIGHLIGHT_HEX: Record<string, string> = {
   blue: '#5096FF',
 }
 
-function hexToRgba(hex: string, alpha = 0.45): string {
+function hexToRgba(hex: string, alpha = 0.2): string {
   const normalized = hex.replace('#', '')
   if (normalized.length !== 6) return HIGHLIGHT_COLORS.yellow
   const r = parseInt(normalized.slice(0, 2), 16)
   const g = parseInt(normalized.slice(2, 4), 16)
   const b = parseInt(normalized.slice(4, 6), 16)
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+function highlightEdgeColor(hex: string): string {
+  return hexToRgba(hex.replace('#', '').length === 6 ? hex : '#FFD24D', 0.75)
+}
+
+function resolveHighlightTone(color?: string): keyof typeof HIGHLIGHT_HEX {
+  if (!color) return 'yellow'
+  for (const [key, value] of Object.entries(HIGHLIGHT_COLORS)) {
+    if (value === color) return key as keyof typeof HIGHLIGHT_HEX
+  }
+  return 'yellow'
 }
 
 async function confirmHighlight(color?: string) {
@@ -929,8 +1003,11 @@ function markRendered(pageNum: number, rendered: boolean) {
 // 缩放
 // ============================================================================
 
-async function applyZoom(newScale: number) {
+async function applyZoom(newScale: number, options?: { preserveManualZoom?: boolean }) {
   scale.value = newScale
+  if (!options?.preserveManualZoom) {
+    userManualZoom.value = true
+  }
   if (!doc) return
 
   // 重新计算骨架高度
@@ -952,6 +1029,20 @@ async function zoomIn() {
 
 async function zoomOut() {
   await applyZoom(Math.max(scale.value - 0.15, 0.7))
+}
+
+let zoomTimeout: ReturnType<typeof setTimeout> | null = null
+
+function handleWheelZoom(e: WheelEvent) {
+  if (!e.ctrlKey && !e.metaKey) return
+  e.preventDefault()
+  if (zoomTimeout) return
+  zoomTimeout = setTimeout(() => { zoomTimeout = null }, 150)
+  if (e.deltaY < 0) {
+    void zoomIn()
+  } else {
+    void zoomOut()
+  }
 }
 
 async function scrollToPage(page: number) {
@@ -1180,42 +1271,11 @@ async function whenReady(timeoutMs = 15000): Promise<boolean> {
   return !!doc
 }
 
-defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, clearPersistedHighlights, hexToRgba, toggleFormulaMode, formulaMode })
+defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, clearPersistedHighlights, hexToRgba, toggleFormulaMode, formulaMode, fitToContainer: fitToContainerWidth })
 </script>
 
 <template>
   <div class="pdf-reader">
-    <!-- 工具栏（保留原有翻页/缩放控件） -->
-    <div class="toolbar">
-      <div>
-        <el-button size="small" @click="zoomOut"><el-icon><ZoomOut /></el-icon></el-button>
-        <el-button size="small" @click="zoomIn"><el-icon><ZoomIn /></el-icon></el-button>
-      </div>
-      <div class="pager">
-        <span>Page</span>
-        <el-input-number
-          v-model="scrollPage"
-          :min="1"
-          :max="totalPages || 1"
-          size="small"
-          @change="(v: number) => scrollToPage(v)"
-        />
-        <span>/ {{ totalPages || '-' }}</span>
-      </div>
-      <div>
-        <el-button
-          v-if="saveHighlightHandler"
-          size="small"
-          class="formula-toolbar-btn"
-          :type="formulaMode ? 'primary' : 'default'"
-          @click="toggleFormulaMode"
-        >
-          {{ formulaMode ? '退出框选' : '框选公式' }}
-        </el-button>
-        <span class="scale-badge">{{ Math.round(scale * 100) }}%</span>
-      </div>
-    </div>
-
     <!-- 错误 -->
     <el-alert
       v-if="error"
@@ -1231,7 +1291,7 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
     </div>
 
     <!-- ================================================================ -->
-    <!-- 连续滚动容器：骨架屏 + 按需渲染 Canvas -->
+    <!-- 连续滚动容器：工具栏 + 骨架屏 + 按需渲染 Canvas -->
     <!-- ================================================================ -->
     <div
       v-else
@@ -1239,11 +1299,42 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
       class="scroll-container slim-scroll"
       :class="{ 'formula-mode': formulaMode }"
       v-loading="pdfLoading"
+      @wheel="handleWheelZoom"
       @mouseup="(e) => { onFormulaMouseUp(e); handleTextSelection(e) }"
       @mousedown="onFormulaMouseDown"
       @mousemove="onFormulaMouseMove"
       @click="onHighlightLayerClick"
     >
+      <div class="toolbar">
+        <div>
+          <el-button size="small" @click="zoomOut"><el-icon><ZoomOut /></el-icon></el-button>
+          <el-button size="small" @click="zoomIn"><el-icon><ZoomIn /></el-icon></el-button>
+        </div>
+        <div class="pager">
+          <span>Page</span>
+          <el-input-number
+            v-model="scrollPage"
+            :min="1"
+            :max="totalPages || 1"
+            size="small"
+            @change="(v: number) => scrollToPage(v)"
+          />
+          <span>/ {{ totalPages || '-' }}</span>
+        </div>
+        <div>
+          <el-button
+            v-if="saveHighlightHandler && showFormulaButton"
+            size="small"
+            class="formula-toolbar-btn"
+            :type="formulaMode ? 'primary' : 'default'"
+            @click="toggleFormulaMode"
+          >
+            {{ formulaMode ? '退出框选' : '框选公式' }}
+          </el-button>
+          <span class="scale-badge">{{ Math.round(scale * 100) }}%</span>
+        </div>
+      </div>
+
       <div
         v-for="p in totalPages"
         :key="p"
@@ -1251,7 +1342,7 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
         class="page-wrapper"
         :style="{ minHeight: pageHeightPx + 'px' }"
       >
-        <div class="page-inner" :style="{ minWidth: pageWidthPx + 'px', minHeight: pageHeightPx + 'px' }">
+        <div class="page-inner" :style="{ width: pageWidthPx + 'px', minHeight: pageHeightPx + 'px' }">
           <canvas
             :ref="(el: any) => setCanvasRef(p, el)"
             class="page-canvas"
@@ -1369,18 +1460,27 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  position: relative;
 }
 
 .toolbar {
+  position: sticky;
+  top: 8px;
+  z-index: 50;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, .06);
-  border: 1px solid rgba(255, 255, 255, .08);
+  gap: 10px;
+  width: fit-content;
+  max-width: calc(100% - 12px);
+  margin: 0 auto 8px;
+  padding: 5px 12px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 4px 12px -2px rgba(74, 66, 58, 0.08);
   flex-shrink: 0;
 }
 
@@ -1388,11 +1488,12 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--muted);
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .scale-badge {
-  color: var(--muted);
+  color: var(--text-secondary);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
@@ -1408,23 +1509,25 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
 .scroll-container {
   flex: 1;
   overflow-y: auto;
-  border-radius: 18px;
-  background: rgba(0, 0, 0, .26);
-  padding: 16px 24px;
+  border-radius: 0;
+  background: #525659;
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .scroll-container.formula-mode {
   cursor: crosshair;
 }
 
-.scroll-container.formula-mode :deep(.textLayer) {
-  pointer-events: none;
-}
-
 .formula-crop-box {
   position: absolute;
-  border: 2px dashed #3B82F6;
-  background: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(166, 124, 82, 0.5);
+  background: rgba(166, 124, 82, 0.08);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.5),
+    inset 0 0 12px rgba(166, 124, 82, 0.15);
   pointer-events: none;
   z-index: 6;
   box-sizing: border-box;
@@ -1434,8 +1537,11 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
    每页骨架
    =================================================================== */
 .page-wrapper {
-  margin: 0 auto 20px;
+  width: 100%;
   max-width: 100%;
+  margin: 0 auto 20px;
+  display: flex;
+  justify-content: center;
 }
 
 .page-inner {
@@ -1476,8 +1582,14 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   position: absolute;
   border-radius: 2px;
   pointer-events: auto;
-  transition: background-color .15s ease, filter .15s ease;
+  transition: all .15s ease;
   overflow: visible;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  mix-blend-mode: multiply;
+  box-shadow:
+    inset 0 2px 0 var(--hl-edge, rgba(255, 210, 77, 0.75)),
+    inset 0 -2px 0 var(--hl-edge, rgba(255, 210, 77, 0.75));
 }
 
 .annotationLayer :deep(.highlight-box--linked) {
@@ -1530,16 +1642,16 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   position: absolute;
   border-radius: 3px;
   pointer-events: none;
-  background: rgba(59, 130, 246, 0.25);
-  border: 2px solid rgba(59, 130, 246, 0.7);
+  background: rgba(166, 124, 82, 0.25);
+  border: 2px solid rgba(166, 124, 82, 0.7);
   animation: targetFlash 1.2s ease-in-out 3;
   z-index: 5;
 }
 
 @keyframes targetFlash {
-  0%   { background: rgba(59, 130, 246, 0.45); border-color: rgba(59, 130, 246, 0.9); }
-  50%  { background: rgba(59, 130, 246, 0.10); border-color: rgba(59, 130, 246, 0.3); }
-  100% { background: rgba(59, 130, 246, 0.45); border-color: rgba(59, 130, 246, 0.9); }
+  0%   { background: rgba(166, 124, 82, 0.45); border-color: rgba(166, 124, 82, 0.9); }
+  50%  { background: rgba(166, 124, 82, 0.10); border-color: rgba(166, 124, 82, 0.3); }
+  100% { background: rgba(166, 124, 82, 0.45); border-color: rgba(166, 124, 82, 0.9); }
 }
 
 /* ===================================================================
@@ -1604,15 +1716,17 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px;
-  min-width: 220px;
-  background: rgba(24, 28, 36, .96);
-  border: 1px solid rgba(255, 255, 255, .12);
-  border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, .45);
-  backdrop-filter: blur(12px);
+  padding: 12px 14px;
+  min-width: 240px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   user-select: none;
   animation: menuIn .18s ease-out;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 
 .pdf-highlight-menu .menu-row {
@@ -1622,19 +1736,20 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
 }
 
 @keyframes menuIn {
-  from { opacity: 0; transform: translate(-50%, -100%) scale(.85); }
+  from { opacity: 0; transform: translate(-50%, -100%) scale(.92); }
   to   { opacity: 1; transform: translate(-50%, -100%) scale(1); }
 }
 
 .pdf-highlight-menu .color-btn {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border: 2px solid transparent;
   border-radius: 50%;
   cursor: pointer;
-  transition: border-color .15s ease, transform .15s ease;
+  transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease;
   padding: 0;
   outline: none;
+  box-shadow: inset 0 0 0 1px rgba(74, 66, 58, 0.06);
 }
 
 .pdf-highlight-menu .color-btn.yellow { background: #ffd24d; }
@@ -1642,50 +1757,66 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
 .pdf-highlight-menu .color-btn.red    { background: #ff5050; }
 .pdf-highlight-menu .color-btn.blue   { background: #5096ff; }
 
-.pdf-highlight-menu .color-btn:hover,
+.pdf-highlight-menu .color-btn:hover {
+  transform: scale(1.1);
+}
+
 .pdf-highlight-menu .color-btn.active {
-  border-color: #fff;
-  transform: scale(1.18);
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 2px rgba(166, 124, 82, 0.15);
+  transform: scale(1.1);
 }
 
 .pdf-highlight-menu .menu-note-input {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid rgba(255, 255, 255, .14);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, .06);
-  color: rgba(255, 255, 255, .92);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
   font-size: 12px;
   line-height: 1.5;
   padding: 8px 10px;
   resize: vertical;
   outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.pdf-highlight-menu .menu-note-input:focus {
+  border-color: rgba(166, 124, 82, 0.45);
+  box-shadow: 0 0 0 3px rgba(166, 124, 82, 0.1);
 }
 
 .pdf-highlight-menu .menu-note-input::placeholder {
-  color: rgba(255, 255, 255, .45);
+  color: var(--text-tertiary);
 }
 
 .pdf-highlight-menu .menu-save-btn {
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 8px 12px;
-  background: rgba(80, 150, 255, .92);
+  background: var(--el-color-primary);
   color: #fff;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  box-shadow: var(--shadow-sm);
+}
+
+.pdf-highlight-menu .menu-save-btn:hover:not(:disabled) {
+  background: var(--el-color-primary-hover);
 }
 
 .pdf-highlight-menu .menu-save-btn:disabled {
-  opacity: 0.65;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
 .pdf-highlight-menu .menu-divider {
   width: 1px;
   height: 20px;
-  background: rgba(255, 255, 255, .18);
+  background: var(--border-light);
   margin: 0 4px;
 }
 
@@ -1693,27 +1824,28 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   width: 28px;
   height: 28px;
   padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, .08);
-  color: rgba(255, 255, 255, .8);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background .15s ease, color .15s ease;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
 
 .pdf-highlight-menu .action-btn:hover {
-  background: rgba(255, 255, 255, .18);
-  color: #fff;
+  background: var(--el-color-primary-light);
+  border-color: rgba(166, 124, 82, 0.25);
+  color: var(--el-color-primary);
 }
 
 .formula-dialog-overlay {
   position: fixed;
   inset: 0;
   z-index: 100000;
-  background: rgba(15, 23, 42, 0.45);
+  background: rgba(74, 66, 58, 0.45);
   display: grid;
   place-items: center;
   padding: 24px;
@@ -1723,7 +1855,7 @@ defineExpose({ jumpTo, highlightAndScrollTo, whenReady, setPersistedHighlights, 
   width: min(560px, 92vw);
   background: #fff;
   border-radius: 16px;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
+  box-shadow: 0 24px 60px rgba(74, 66, 58, 0.25);
   overflow: hidden;
 }
 

@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import 'katex/dist/katex.min.css'
@@ -54,7 +54,7 @@ const paperNotes = ref<PaperNote[]>([])
 const notesLoading = ref(false)
 const loading = ref(false)
 const activeTab = ref<'markdown' | 'notes'>('markdown')
-const splitPercent = ref(50)
+const splitPercent = ref(62)
 const dragging = ref(false)
 const pdfReaderRef = ref<InstanceType<typeof PdfReader> | null>(null)
 const notesPanelRef = ref<InstanceType<typeof PaperNotesPanel> | null>(null)
@@ -379,7 +379,34 @@ async function loadData() {
     loading.value = false
     await nextTick()
     applyNotesToPdfReader()
+    schedulePdfFit()
   }
+}
+
+async function schedulePdfFit() {
+  await nextTick()
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+
+  const reader = pdfReaderRef.value as {
+    whenReady?: (timeoutMs?: number) => Promise<boolean>
+    fitToContainer?: (force?: boolean) => void | Promise<void>
+  } | null
+  if (!reader) return
+
+  const ready = await reader.whenReady?.(15000)
+  if (!ready) return
+
+  await reader.fitToContainer?.(true)
+  await nextTick()
+  await reader.fitToContainer?.(true)
+
+  window.setTimeout(() => {
+    void reader.fitToContainer?.(true)
+  }, 420)
+}
+
+function onDrawerEntered() {
+  void schedulePdfFit()
 }
 
 function close() {
@@ -425,17 +452,25 @@ function stopDrag() {
 onBeforeUnmount(() => {
   document.removeEventListener('mousemove', onDrag)
   document.removeEventListener('mouseup', stopDrag)
+  document.removeEventListener('keydown', onKeydown)
+  document.body.classList.remove('reader-open')
   if (pdfUrl.value && pdfUrl.value.startsWith('blob:')) {
     URL.revokeObjectURL(pdfUrl.value)
   }
 })
 
-// ── Keyboard ──
+watch(splitPercent, () => {
+  nextTick(() => {
+    (pdfReaderRef.value as { fitToContainer?: (force?: boolean) => void } | null)?.fitToContainer?.(true)
+  })
+})
+
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') close()
 }
 
 watch(visible, v => {
+  document.body.classList.toggle('reader-open', v)
   if (v) document.addEventListener('keydown', onKeydown)
   else document.removeEventListener('keydown', onKeydown)
 })
@@ -445,7 +480,7 @@ defineExpose({ open, navigateToSource, navigateToVisual })
 
 <template>
   <Teleport to="body">
-    <transition name="reader-slide">
+    <transition name="reader-slide" @after-enter="onDrawerEntered">
       <div v-if="visible" class="reader-overlay" @click.self="close">
         <div class="reader-drawer" @click.stop>
           <!-- Header -->
@@ -467,7 +502,7 @@ defineExpose({ open, navigateToSource, navigateToVisual })
           <!-- 双窗格 -->
           <div v-else class="reader-panes">
             <!-- 左侧：PDF -->
-            <section class="reader-pane reader-pane--pdf" :style="{ width: splitPercent + '%' }">
+            <section class="reader-pane reader-pane--pdf" :style="{ width: splitPercent + '%', flexShrink: 0 }">
               <div class="pane-header pane-header--pdf">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                 <span>PDF 原文</span>
@@ -482,7 +517,7 @@ defineExpose({ open, navigateToSource, navigateToVisual })
                 </el-button>
                 <span v-if="formulaModeActive" class="formula-mode-tip">在 PDF 上拖拽框选公式区域</span>
               </div>
-              <div class="pane-body">
+              <div class="pane-body pane-body--pdf">
                 <PdfReader
                   v-if="pdfUrl"
                   ref="pdfReaderRef"
@@ -491,6 +526,7 @@ defineExpose({ open, navigateToSource, navigateToVisual })
                   :highlight-text="highlightText"
                   :save-highlight-handler="saveHighlight"
                   :delete-highlight-handler="deleteHighlight"
+                  :show-formula-button="false"
                   @highlight-saved="loadNotes"
                   @highlight-click="onHighlightNoteClick"
                   @formula-mode-change="formulaModeActive = $event"
@@ -503,13 +539,14 @@ defineExpose({ open, navigateToSource, navigateToVisual })
             <div
               class="reader-divider"
               :class="{ active: dragging }"
+              title="拖拽调整左右宽度"
               @mousedown="startDrag"
             >
               <div class="reader-divider-grip"></div>
             </div>
 
             <!-- 右侧：结构化知识 -->
-            <section class="reader-pane reader-pane--md" :style="{ width: (100 - splitPercent) + '%' }">
+            <section class="reader-pane reader-pane--md">
               <div class="pane-header">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
                 <span>结构化知识</span>
@@ -584,18 +621,18 @@ defineExpose({ open, navigateToSource, navigateToVisual })
 .reader-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.35);
-  backdrop-filter: blur(4px);
-  z-index: 1000;
+  background: var(--bg-surface);
+  z-index: 1100;
   display: flex;
-  justify-content: flex-end;
+  justify-content: stretch;
 }
 
 .reader-drawer {
-  width: 85vw;
+  width: 100%;
+  max-width: 100vw;
   height: 100%;
-  background: #fff;
-  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.12);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -622,14 +659,14 @@ defineExpose({ open, navigateToSource, navigateToVisual })
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 24px;
-  border-bottom: 1px solid #F1F5F9;
+  padding: 10px 16px 8px;
   flex-shrink: 0;
-  gap: 16px;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-lighter);
 }
 
 .reader-title {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
   color: #0F172A;
   margin: 0;
@@ -657,7 +694,7 @@ defineExpose({ open, navigateToSource, navigateToVisual })
 
 .reader-close-btn:hover {
   background: #F1F5F9;
-  color: #475569;
+  color: var(--text-primary);
 }
 
 /* ========================================
@@ -708,12 +745,12 @@ defineExpose({ open, navigateToSource, navigateToVisual })
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 20px;
-  background: #F8FAFC;
-  border-bottom: 1px solid #F1F5F9;
+  padding: 7px 12px;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border-lighter);
   font-size: 13px;
   font-weight: 600;
-  color: #475569;
+  color: var(--text-secondary);
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -758,7 +795,7 @@ defineExpose({ open, navigateToSource, navigateToVisual })
 }
 
 .pane-tab:hover {
-  color: #334155;
+  color: var(--text-primary);
 }
 
 .pane-tab.active {
@@ -766,6 +803,31 @@ defineExpose({ open, navigateToSource, navigateToVisual })
   color: #1D4ED8;
   font-weight: 600;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.reader-pane--md {
+  flex: 1;
+  min-width: 0;
+}
+
+.reader-pane--pdf {
+  min-width: 0;
+}
+
+.pane-body--pdf {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  background: #525659;
+}
+
+.pane-body--pdf :deep(.pdf-reader) {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
 }
 
 .pane-body {
@@ -788,33 +850,46 @@ defineExpose({ open, navigateToSource, navigateToVisual })
    Resizable Divider
    ======================================== */
 .reader-divider {
-  width: 6px;
+  width: 10px;
   flex-shrink: 0;
-  background: #F1F5F9;
+  background: transparent;
+  border-left: 1px solid var(--border-light);
   cursor: col-resize;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s;
+  transition: all 0.2s ease;
   position: relative;
+  z-index: 10;
+}
+
+.reader-divider::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  right: -5px;
 }
 
 .reader-divider:hover,
 .reader-divider.active {
-  background: #3B82F6;
+  background: rgba(166, 124, 82, 0.05);
+  border-left-color: rgba(166, 124, 82, 0.3);
 }
 
 .reader-divider-grip {
-  width: 2px;
-  height: 40px;
-  border-radius: 1px;
-  background: #CBD5E1;
-  transition: background 0.15s;
+  width: 3px;
+  height: 24px;
+  border-radius: 2px;
+  background: rgba(166, 124, 82, 0.5);
+  opacity: 0;
+  transition: opacity 0.2s ease;
 }
 
 .reader-divider:hover .reader-divider-grip,
 .reader-divider.active .reader-divider-grip {
-  background: #fff;
+  opacity: 1;
 }
 
 /* ========================================
@@ -843,13 +918,14 @@ defineExpose({ open, navigateToSource, navigateToVisual })
   padding: 10px 12px;
   font-size: 16px;
   font-weight: 600;
-  color: #334155;
+  color: var(--text-primary);
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   list-style: none;
-  transition: background 0.12s;
+  transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
   outline: none;
   user-select: none;
+  backdrop-filter: blur(0);
 }
 
 .acc-summary::-webkit-details-marker {
@@ -879,7 +955,15 @@ defineExpose({ open, navigateToSource, navigateToVisual })
 }
 
 .acc-summary:hover {
-  background: #F8FAFC;
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-sm);
+  transform: scale(1.005);
+}
+
+.acc-section[open] > .acc-summary {
+  background: rgba(248, 250, 252, 0.8);
+  backdrop-filter: blur(6px);
 }
 
 /* 标题文字 */
@@ -907,7 +991,7 @@ defineExpose({ open, navigateToSource, navigateToVisual })
   padding: 8px 0 4px 32px;
   font-size: 14px;
   line-height: 1.8;
-  color: #475569;
+  color: var(--text-primary);
 }
 
 /* ── 可点击 Block（逐块渲染，保留坐标联动事件） ── */
@@ -923,8 +1007,8 @@ defineExpose({ open, navigateToSource, navigateToVisual })
 }
 
 .clickable-block.has-locate:hover {
-  background-color: rgba(59, 130, 246, 0.08);
-  outline: 1px dashed rgba(59, 130, 246, 0.35);
+  background-color: rgba(166, 124, 82, 0.08);
+  outline: 1px dashed rgba(166, 124, 82, 0.35);
   outline-offset: 2px;
 }
 
@@ -973,7 +1057,7 @@ defineExpose({ open, navigateToSource, navigateToVisual })
 
 .acc-content :deep(th) {
   background: #F8FAFC;
-  color: #475569;
+  color: var(--text-primary);
   font-weight: 600;
   text-align: left;
   padding: 8px 12px;
@@ -984,7 +1068,7 @@ defineExpose({ open, navigateToSource, navigateToVisual })
 .acc-content :deep(td) {
   padding: 8px 12px;
   border: 1px solid #E2E8F0;
-  color: #334155;
+  color: var(--text-primary);
   vertical-align: middle;
   line-height: 1.5;
 }
@@ -1118,7 +1202,7 @@ defineExpose({ open, navigateToSource, navigateToVisual })
   margin: 10px 0;
   font-family: 'Courier New', monospace;
   font-size: 13px;
-  color: #334155;
+  color: var(--text-primary);
   border-radius: 0 8px 8px 0;
   overflow-x: auto;
 }

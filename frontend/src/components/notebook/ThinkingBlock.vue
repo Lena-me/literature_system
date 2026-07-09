@@ -41,11 +41,19 @@ const charCount = computed(() => (props.reasoning || '').length)
 
 <style scoped>
 .thinking-block {
-  margin-bottom: 12px;
-  border-radius: 10px;
-  border: 1px dashed var(--academic-border);
-  background: #f8fafc;
+  margin-bottom: 16px;
+  border-radius: 8px;
+  border: none;
+  background: var(--bg-canvas);
+  border-left: 3px solid var(--border-light);
+  transition: all 0.2s ease;
   overflow: hidden;
+}
+
+.thinking-block[open] {
+  border-left-color: var(--el-color-primary-light-3);
+  background: #ffffff;
+  box-shadow: var(--shadow-sm);
 }
 
 .thinking-summary {
@@ -53,7 +61,7 @@ const charCount = computed(() => (props.reasoning || '').length)
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   cursor: pointer;
   list-style: none;
   user-select: none;
@@ -64,24 +72,26 @@ const charCount = computed(() => (props.reasoning || '').length)
 }
 
 .thinking-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: #64748b;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .thinking-meta {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--text-tertiary);
+  opacity: 0.6;
 }
 
 .thinking-body {
-  padding: 0 12px 12px;
-  font-size: 15px;
+  padding: 0 14px 14px;
+  font-size: 14px;
   line-height: 1.65;
-  color: #64748b;
+  color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 320px;
   overflow-y: auto;
+  border-top: 1px solid transparent;
 }
 </style>

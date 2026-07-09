@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
 import StreamProgress from '@/components/notebook/StreamProgress.vue'
 import ThinkingBlock from '@/components/notebook/ThinkingBlock.vue'
 import ToolArtifacts from '@/components/notebook/ToolArtifacts.vue'
@@ -272,8 +272,16 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
         <ToolArtifacts v-if="shouldShowArtifacts(m, i)" :artifacts="m.artifacts!" />
 
         <div v-if="isLastAssistant(i, m) && !notebook.isStreaming" class="msg-actions">
-          <button type="button" @click="notebook.regenerateLastResponse()">
-            {{ m.cancelled ? '继续生成' : '重新生成' }}
+          <button
+            type="button"
+            class="regenerate-btn"
+            :title="m.cancelled ? '继续生成' : '重新生成'"
+            @click="notebook.regenerateLastResponse()"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="23 4 23 10 17 10"/>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
           </button>
         </div>
 
@@ -364,21 +372,45 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
 .empty-state p { font-size: 14px; color: var(--academic-text-muted); line-height: 1.65; }
 .empty-state b { color: var(--academic-primary); font-weight: 600; }
 
-.message { width: 100%; max-width: 800px; margin: 16px 0; display: flex; flex-direction: column; }
+/* ========================================
+   对话气泡重构 (MessageList.vue)
+   ======================================== */
+.message {
+  width: 100%;
+  margin: 16px 0;
+  display: flex;
+  flex-direction: column;
+}
 .message.user { align-items: flex-end; }
 .message.assistant { align-items: flex-start; }
 
-.bubble { max-width: 88%; padding: 14px 18px; border-radius: 16px; line-height: 1.65; font-size: 16px; }
-.user-bubble { background: var(--academic-primary); border-bottom-right-radius: 6px; box-shadow: 0 2px 12px rgba(37, 99, 235, 0.18); }
-.user-bubble p { margin: 0; color: #fff; white-space: pre-wrap; font-size: 16px; }
+.bubble {
+  padding: 14px 20px;
+  line-height: 1.75;
+  font-size: 15px;
+  box-shadow: var(--shadow-sm);
+}
+
+.user-bubble {
+  max-width: 75%;
+  background: var(--el-color-primary-light);
+  border: 1px solid rgba(196, 154, 108, 0.35);
+  border-radius: 20px 20px 4px 20px;
+}
+
+.user-bubble p {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: pre-wrap;
+}
+
 .assistant-bubble {
-  width: 100%;
-  max-width: 100%;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 0;
-  color: var(--academic-text-body);
+  max-width: 92%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: 4px 20px 20px 20px;
+  color: var(--text-primary);
 }
 
 .msg-actions {
@@ -400,6 +432,20 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
   color: var(--academic-text-muted);
   font-size: 12px;
   cursor: pointer;
+}
+
+.regenerate-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-tertiary);
+  line-height: 0;
+  transition: color 0.15s;
+}
+
+.regenerate-btn:hover {
+  color: var(--el-color-primary);
 }
 
 .msg-actions button:hover {
@@ -474,15 +520,15 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
 }
 
 .visual-card:hover {
-  border-color: rgba(37, 99, 235, 0.4);
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
+  border-color: rgba(166, 124, 82, 0.4);
+  box-shadow: 0 4px 12px rgba(166, 124, 82, 0.08);
 }
 
 .visual-image {
   width: 100%;
   height: 96px;
   object-fit: cover;
-  background: #f8fafc;
+  background: var(--bg-canvas);
 }
 
 .visual-placeholder {
@@ -491,7 +537,7 @@ function updateReasoningExpanded(index: number, expanded: boolean) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f1f5f9;
+  background: var(--border-lighter);
   color: var(--academic-text-muted);
   font-size: 24px;
   font-weight: 600;

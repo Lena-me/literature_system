@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -168,6 +168,23 @@ const comparisonTableKeys = computed(() => {
     .filter((key: string) => rowKeys.includes(key))
   const rest = rowKeys.filter(key => key !== 'dimension' && !orderedPaperKeys.includes(key))
   return ['dimension', ...orderedPaperKeys, ...rest].filter(key => rowKeys.includes(key))
+})
+
+const paperColumnKeys = computed(() =>
+  comparisonTableKeys.value.filter(key => key !== 'dimension' && key !== 'dimension_key'),
+)
+
+const evidenceByDimensionPaper = computed(() => {
+  const map = new Map<string, Record<string, unknown>>()
+  for (const dimension of evidenceDimensions.value) {
+    const dimKey = getDimensionKey(dimension)
+    for (const row of getDimensionRows(dimension)) {
+      const evidences = getRowEvidences(row)
+      if (!evidences.length || row.paper_id == null) continue
+      map.set(`${dimKey}:${row.paper_id}`, evidences[0])
+    }
+  }
+  return map
 })
 
 const allDimensionsSelected = computed(() =>
@@ -583,6 +600,91 @@ function openEvidenceSource(evidence: any) {
   emit('sourceClick', source)
 }
 
+function paperKeyToId(paperKey: string) {
+  const paper = resultPapers.value.find((p: any) => p.key === paperKey)
+  return paper?.paper_id ?? null
+}
+
+function hasCompareCellSource(row: Record<string, unknown>, paperKey: string) {
+  const dimKey = String(row.dimension_key || '')
+  const paperId = paperKeyToId(paperKey)
+  if (!dimKey || paperId == null) return false
+  return evidenceByDimensionPaper.value.has(`${dimKey}:${paperId}`)
+}
+
+function openCompareCellSource(row: Record<string, unknown>, paperKey: string) {
+  const dimKey = String(row.dimension_key || '')
+  const paperId = paperKeyToId(paperKey)
+  if (!dimKey || paperId == null) {
+    ElMessage.info('暂无原文定位信息')
+    return
+  }
+  const evidence = evidenceByDimensionPaper.value.get(`${dimKey}:${paperId}`)
+  if (evidence) {
+    openEvidenceSource(evidence)
+    return
+  }
+  ElMessage.info('该维度暂无原文依据，请查看下方「原文依据」')
+}
+
+function normalizeCompareCellText(value: unknown) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function compareTokenSet(text: string) {
+  const tokens = text.match(/[\u4e00-\u9fff]{2,}|[a-z0-9]{2,}/gi) || []
+  return new Set(tokens.map(token => token.toLowerCase()))
+}
+
+function compareTextSimilarity(a: string, b: string) {
+  if (!a || !b) return 0
+  if (a === b) return 1
+  const setA = compareTokenSet(a)
+  const setB = compareTokenSet(b)
+  if (!setA.size || !setB.size) return 0
+  let inter = 0
+  for (const token of setA) {
+    if (setB.has(token)) inter += 1
+  }
+  const union = new Set([...setA, ...setB]).size
+  return union ? inter / union : 0
+}
+
+function getRowPaperTexts(row: Record<string, unknown>) {
+  return paperColumnKeys.value
+    .map(key => ({
+      key,
+      text: normalizeCompareCellText(displayCompareCell(row[key], row, key)),
+    }))
+    .filter(item => !isMissingCompareText(item.text))
+}
+
+function getCompareCellHighlight(row: Record<string, unknown>, paperKey: string) {
+  if (paperKey === 'dimension' || paperKey === 'dimension_key') return ''
+  const texts = getRowPaperTexts(row)
+  if (texts.length < 2) return ''
+
+  const current = texts.find(item => item.key === paperKey)
+  if (!current) return ''
+
+  const others = texts.filter(item => item.key !== paperKey)
+  const maxSim = Math.max(...others.map(item => compareTextSimilarity(current.text, item.text)), 0)
+
+  const pairSims: number[] = []
+  for (let i = 0; i < texts.length; i += 1) {
+    for (let j = i + 1; j < texts.length; j += 1) {
+      pairSims.push(compareTextSimilarity(texts[i].text, texts[j].text))
+    }
+  }
+  const rowAvgSim = pairSims.reduce((sum, sim) => sum + sim, 0) / pairSims.length
+
+  if (rowAvgSim < 0.42 && maxSim < 0.48) return 'cell-diff'
+  return ''
+}
+
 function compareCellKey(rowIndex: number | string, key: string) {
   return `${tableViewMode.value}-${Number(rowIndex)}-${key}`
 }
@@ -947,12 +1049,13 @@ function evidencePageLabel(page?: number | string) {
               </button>
             </div>
           </div>
-          <p class="table-view-hint">
-            {{ tableViewMode === 'zh' ? '各维度的横向压缩摘要，便于快速比较' : '结构化抽取的完整原文，便于核对细节' }}
-          </p>
         </div>
 
-        <div v-if="comparisonTable.length" class="compare-table-wrap" :class="{ 'raw-mode': tableViewMode === 'raw' }">
+        <div
+          v-if="comparisonTable.length"
+          class="compare-table-wrap"
+          :class="{ 'raw-mode': tableViewMode === 'raw' }"
+        >
           <table class="compare-table">
             <thead>
               <tr>
@@ -963,21 +1066,44 @@ function evidencePageLabel(page?: number | string) {
             </thead>
             <tbody>
               <tr v-for="(row, idx) in comparisonTable" :key="idx">
-                <td v-for="key in comparisonTableKeys" :key="key">
+                <td
+                  v-for="key in comparisonTableKeys"
+                  :key="key"
+                  :class="[
+                    getCompareCellHighlight(row, key),
+                    {
+                      'is-locatable': key !== 'dimension' && hasCompareCellSource(row, key),
+                    },
+                  ]"
+                >
                   <div
-                    class="compare-cell-content"
-                    :class="{ expanded: isCompareCellExpanded(idx, key) }"
+                    class="compare-cell"
+                    :class="{ clickable: key !== 'dimension' && hasCompareCellSource(row, key) }"
+                    @click="key !== 'dimension' && hasCompareCellSource(row, key) ? openCompareCellSource(row, key) : undefined"
                   >
-                    {{ displayCompareCell(row[key], row, key) }}
+                    <div
+                      class="compare-cell-content"
+                      :class="{ expanded: isCompareCellExpanded(idx, key) }"
+                    >
+                      {{ displayCompareCell(row[key], row, key) }}
+                    </div>
+                    <button
+                      v-if="shouldShowCompareToggle(row[key])"
+                      type="button"
+                      class="inline-toggle hover-action"
+                      @click.stop="toggleCompareCell(idx, key)"
+                    >
+                      {{ isCompareCellExpanded(idx, key) ? '收起' : '展开' }}
+                    </button>
+                    <button
+                      v-else-if="key !== 'dimension' && hasCompareCellSource(row, key)"
+                      type="button"
+                      class="inline-toggle hover-action locate-action"
+                      @click.stop="openCompareCellSource(row, key)"
+                    >
+                      定位
+                    </button>
                   </div>
-                  <button
-                    v-if="shouldShowCompareToggle(row[key])"
-                    type="button"
-                    class="inline-toggle"
-                    @click.stop="toggleCompareCell(idx, key)"
-                  >
-                    {{ isCompareCellExpanded(idx, key) ? '收起' : '展开' }}
-                  </button>
                 </td>
               </tr>
             </tbody>
@@ -1019,49 +1145,62 @@ function evidencePageLabel(page?: number | string) {
             <div
               v-for="dimension in evidenceDimensions"
               :key="getDimensionKey(dimension)"
-              class="evidence-dimension"
+              class="dimension-section"
             >
-              <h4>{{ dimension.label || dimensionLabel(getDimensionKey(dimension)) }}</h4>
-
-              <div
-                v-for="row in getDimensionRows(dimension)"
-                :key="dimensionRowGroupKey(dimension, row)"
-                class="evidence-group"
-              >
-                <p class="evidence-paper-title">{{ row.title }}</p>
+              <div class="dimension-header">
+                {{ dimension.label || dimensionLabel(getDimensionKey(dimension)) }}
+              </div>
+              <div class="dimension-body">
                 <div
-                  v-for="evidence in getRowEvidences(row)"
-                  :key="evidenceItemKey(evidence, getDimensionKey(dimension))"
-                  class="evidence-item"
-                  role="button"
-                  tabindex="0"
-                  @click="openEvidenceSource(evidence)"
-                  @keydown.enter="openEvidenceSource(evidence)"
+                  v-for="row in getDimensionRows(dimension)"
+                  :key="dimensionRowGroupKey(dimension, row)"
+                  class="evidence-group"
                 >
-                  <div class="evidence-item-head">
-                    <span class="evidence-tags">
-                      <em v-if="evidencePageLabel(getEvidencePageNumber(evidence))">{{ evidencePageLabel(getEvidencePageNumber(evidence)) }}</em>
-                      <em v-if="evidenceSectionLabel(getEvidenceSectionTitle(evidence))">{{ evidenceSectionLabel(getEvidenceSectionTitle(evidence)) }}</em>
-                      <em
-                        v-if="shouldShowEvidenceSupport(evidence)"
-                        :class="['support-tag', evidenceSupport(evidence)]"
-                      >{{ evidenceSupportLabel(evidence) }}</em>
-                    </span>
-                  </div>
-                  <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, getDimensionKey(dimension)) }">
-                    {{ getEvidenceSnippet(evidence) }}
-                  </span>
-                  <button
-                    v-if="shouldShowEvidenceToggle(evidence)"
-                    type="button"
-                    class="inline-toggle"
-                    @click.stop="toggleEvidenceItem(evidence, getDimensionKey(dimension))"
+                  <p class="evidence-paper-title">{{ row.title }}</p>
+                  <div
+                    v-for="evidence in getRowEvidences(row)"
+                    :key="evidenceItemKey(evidence, getDimensionKey(dimension))"
+                    class="evidence-item"
+                    :class="`support-${evidenceSupport(evidence)}`"
+                    role="button"
+                    tabindex="0"
+                    @click="openEvidenceSource(evidence)"
+                    @keydown.enter="openEvidenceSource(evidence)"
                   >
-                    {{ isEvidenceExpanded(evidence, getDimensionKey(dimension)) ? '收起' : '展开' }}
-                  </button>
-                </div>
-                <div v-if="!hasRowEvidences(row)" class="empty-note">
-                  该文献在此维度暂无原文依据。
+                    <div class="evidence-item-head">
+                      <span class="evidence-tags">
+                        <em v-if="evidencePageLabel(getEvidencePageNumber(evidence))">{{ evidencePageLabel(getEvidencePageNumber(evidence)) }}</em>
+                        <em v-if="evidenceSectionLabel(getEvidenceSectionTitle(evidence))">{{ evidenceSectionLabel(getEvidenceSectionTitle(evidence)) }}</em>
+                        <em
+                          v-if="shouldShowEvidenceSupport(evidence)"
+                          :class="['support-tag', evidenceSupport(evidence)]"
+                        >{{ evidenceSupportLabel(evidence) }}</em>
+                      </span>
+                    </div>
+                    <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, getDimensionKey(dimension)) }">
+                      {{ getEvidenceSnippet(evidence) }}
+                    </span>
+                    <div class="evidence-hover-actions">
+                      <button
+                        v-if="shouldShowEvidenceToggle(evidence)"
+                        type="button"
+                        class="hover-action"
+                        @click.stop="toggleEvidenceItem(evidence, getDimensionKey(dimension))"
+                      >
+                        {{ isEvidenceExpanded(evidence, getDimensionKey(dimension)) ? '收起' : '展开' }}
+                      </button>
+                      <button
+                        type="button"
+                        class="hover-action"
+                        @click.stop="openEvidenceSource(evidence)"
+                      >
+                        定位
+                      </button>
+                    </div>
+                  </div>
+                  <div v-if="!hasRowEvidences(row)" class="empty-note">
+                    该文献在此维度暂无原文依据。
+                  </div>
                 </div>
               </div>
             </div>
@@ -1073,6 +1212,7 @@ function evidencePageLabel(page?: number | string) {
                 v-for="evidence in getRowEvidences(row)"
                 :key="evidenceItemKey(evidence, 'flat')"
                 class="evidence-item"
+                :class="`support-${evidenceSupport(evidence)}`"
                 role="button"
                 tabindex="0"
                 @click="openEvidenceSource(evidence)"
@@ -1091,14 +1231,23 @@ function evidencePageLabel(page?: number | string) {
                 <span class="evidence-snippet" :class="{ expanded: isEvidenceExpanded(evidence, 'flat') }">
                   {{ getEvidenceSnippet(evidence) }}
                 </span>
-                <button
-                  v-if="shouldShowEvidenceToggle(evidence)"
-                  type="button"
-                  class="inline-toggle"
-                  @click.stop="toggleEvidenceItem(evidence, 'flat')"
-                >
-                  {{ isEvidenceExpanded(evidence, 'flat') ? '收起' : '展开' }}
-                </button>
+                <div class="evidence-hover-actions">
+                  <button
+                    v-if="shouldShowEvidenceToggle(evidence)"
+                    type="button"
+                    class="hover-action"
+                    @click.stop="toggleEvidenceItem(evidence, 'flat')"
+                  >
+                    {{ isEvidenceExpanded(evidence, 'flat') ? '收起' : '展开' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="hover-action"
+                    @click.stop="openEvidenceSource(evidence)"
+                  >
+                    定位
+                  </button>
+                </div>
               </div>
             </div>
           </template>
@@ -1115,7 +1264,7 @@ function evidencePageLabel(page?: number | string) {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background: #F8FAFC;
+  background: var(--bg-canvas);
 }
 
 .compare-sidebar-wrapper {
@@ -1133,8 +1282,8 @@ function evidencePageLabel(page?: number | string) {
 .compare-sidebar {
   width: 260px;
   height: 100%;
-  background: #fff;
-  border-right: 1px solid #E2E8F0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--sidebar-border);
   display: flex;
   flex-direction: column;
   padding: 16px 12px;
@@ -1152,21 +1301,21 @@ function evidencePageLabel(page?: number | string) {
   margin: 0;
   font-size: 16px;
   font-weight: 700;
-  color: #0F172A;
+  color: var(--text-heading);
 }
 
 .compare-count {
   font-size: 11px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-weight: 500;
-  background: #F1F5F9;
+  background: var(--border-lighter);
   padding: 1px 7px;
   border-radius: 10px;
 }
 
 .compare-divider {
   height: 1px;
-  background: #F1F5F9;
+  background: var(--border-lighter);
   margin: 12px 0;
 }
 
@@ -1180,7 +1329,7 @@ function evidencePageLabel(page?: number | string) {
   height: 34px;
   border: none;
   border-radius: 8px;
-  background: #3B82F6;
+  background: var(--el-color-primary);
   color: #fff;
   font-size: 13px;
   font-weight: 600;
@@ -1189,7 +1338,7 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .compare-create-btn:hover {
-  background: #2563EB;
+  background: var(--el-color-primary-hover);
 }
 
 .compare-list-wrap {
@@ -1206,19 +1355,36 @@ function evidencePageLabel(page?: number | string) {
   padding: 12px 16px;
   cursor: pointer;
   transition: background 0.12s;
-  box-shadow: 0 1px 0 0 #F1F5F9;
+  box-shadow: 0 1px 0 0 var(--border-lighter);
+  position: relative;
+}
+
+.compare-list-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: transparent;
+  transition: background 0.12s;
 }
 
 .compare-list-item:hover {
-  background: #F1F5F9;
+  background: var(--border-lighter);
 }
 
 .compare-list-item.active {
-  background: #EFF6FF;
+  background: rgba(241, 237, 228, 0.85);
+}
+
+.compare-list-item.active::before {
+  background: #c49a6c;
 }
 
 .compare-list-item.active:hover {
-  background: #DBEAFE;
+  background: rgba(241, 237, 228, 0.95);
 }
 
 .compare-item-main {
@@ -1229,7 +1395,7 @@ function evidencePageLabel(page?: number | string) {
 .compare-item-title {
   font-size: 13px;
   font-weight: 600;
-  color: #0F172A;
+  color: var(--text-heading);
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
@@ -1238,13 +1404,13 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .compare-list-item.active .compare-item-title {
-  color: #1D4ED8;
+  color: var(--text-heading);
 }
 
 .compare-item-meta {
   margin-top: 4px;
   font-size: 11px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
 }
 
 .compare-item-delete {
@@ -1257,7 +1423,7 @@ function evidencePageLabel(page?: number | string) {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   cursor: pointer;
   opacity: 0;
   transition: all 0.12s;
@@ -1275,7 +1441,7 @@ function evidencePageLabel(page?: number | string) {
 .compare-empty-side {
   padding: 32px 16px;
   text-align: center;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-size: 13px;
 }
 
@@ -1289,10 +1455,10 @@ function evidencePageLabel(page?: number | string) {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #E2E8F0;
+  border: 1px solid var(--border-light);
   border-radius: 50%;
-  background: #fff;
-  color: #64748B;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
   opacity: 0;
@@ -1315,7 +1481,7 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .compare-sidebar-toggle:hover {
-  color: #0F172A;
+  color: var(--text-heading);
   border-color: #CBD5E1;
 }
 
@@ -1334,7 +1500,7 @@ function evidencePageLabel(page?: number | string) {
   gap: 12px;
   padding: 14px 24px;
   flex-shrink: 0;
-  background: #F8FAFC;
+  background: var(--bg-canvas);
 }
 
 .compare-main.is-sidebar-collapsed .compare-header {
@@ -1345,15 +1511,15 @@ function evidencePageLabel(page?: number | string) {
   margin: 0;
   font-size: 18px;
   font-weight: 700;
-  color: #0F172A;
+  color: var(--text-heading);
 }
 
 .compare-tabs {
   display: flex;
   gap: 4px;
   padding: 0 24px;
-  border-bottom: 1px solid #E2E8F0;
-  background: #F8FAFC;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-canvas);
   flex-shrink: 0;
 }
 
@@ -1361,7 +1527,7 @@ function evidencePageLabel(page?: number | string) {
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
-  color: #64748B;
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 10px 12px;
   font-size: 13px;
@@ -1370,8 +1536,8 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .compare-tabs button.active {
-  color: #2563EB;
-  border-bottom-color: #2563EB;
+  color: var(--el-color-primary-hover);
+  border-bottom-color: var(--el-color-primary-hover);
   font-weight: 600;
 }
 
@@ -1385,12 +1551,12 @@ function evidencePageLabel(page?: number | string) {
   min-height: 0;
   overflow: auto;
   padding: 20px 24px 32px;
-  background: #F8FAFC;
+  background: var(--bg-canvas);
 }
 
 .section-block {
   padding: 16px 0;
-  border-bottom: 1px solid #E2E8F0;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .section-block:first-child {
@@ -1412,13 +1578,13 @@ function evidencePageLabel(page?: number | string) {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 10px;
-  color: #0F172A;
+  color: var(--text-heading);
   font-size: 14px;
   font-weight: 600;
 }
 
 .section-title b {
-  color: #64748B;
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 500;
 }
@@ -1437,14 +1603,16 @@ function evidencePageLabel(page?: number | string) {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: #64748B;
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
 }
 
-.select-all-box input {
-  margin: 0;
+.select-all-box input,
+.paper-option input[type="checkbox"],
+.dimension-option input[type="checkbox"] {
+  accent-color: #a67c52;
 }
 
 .paper-option,
@@ -1468,7 +1636,7 @@ function evidencePageLabel(page?: number | string) {
 
 .paper-option:hover,
 .dimension-option:hover {
-  background: #F1F5F9;
+  background: var(--border-lighter);
 }
 
 .paper-option.disabled {
@@ -1487,7 +1655,7 @@ function evidencePageLabel(page?: number | string) {
 
 .paper-option strong,
 .dimension-option strong {
-  color: #0F172A;
+  color: var(--text-heading);
   font-size: 13px;
   line-height: 1.35;
 }
@@ -1495,7 +1663,7 @@ function evidencePageLabel(page?: number | string) {
 .paper-option em,
 .dimension-option em,
 .evidence-item em {
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-size: 12px;
   font-style: normal;
   line-height: 1.4;
@@ -1504,7 +1672,7 @@ function evidencePageLabel(page?: number | string) {
 .field-label {
   display: block;
   margin: 0 0 7px;
-  color: #334155;
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
 }
@@ -1525,8 +1693,8 @@ function evidencePageLabel(page?: number | string) {
   padding: 0 12px;
   border-radius: 8px;
   border: none;
-  background: #F1F5F9;
-  color: #2563EB;
+  background: var(--border-lighter);
+  color: var(--el-color-primary-hover);
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
@@ -1534,7 +1702,7 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .inline-action:hover:not(:disabled) {
-  background: #E2E8F0;
+  background: var(--border-light);
 }
 
 .inline-action:disabled {
@@ -1548,13 +1716,13 @@ function evidencePageLabel(page?: number | string) {
   border: none;
   border-radius: 8px;
   padding: 9px 12px;
-  color: #334155;
+  color: var(--text-primary);
   font: inherit;
   line-height: 1.5;
   outline: none;
   resize: vertical;
-  background: #fff;
-  box-shadow: 0 0 0 1px #E2E8F0;
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 1px var(--border-light);
 }
 
 .text-field {
@@ -1588,18 +1756,18 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .primary-action {
-  background: #3B82F6;
+  background: var(--el-color-primary);
   color: #fff;
 }
 
 .primary-action:hover:not(:disabled) {
-  background: #2563EB;
+  background: var(--el-color-primary-hover);
 }
 
 .secondary-action {
-  background: #fff;
-  color: #2563EB;
-  box-shadow: 0 0 0 1px #E2E8F0;
+  background: var(--bg-surface);
+  color: var(--el-color-primary-hover);
+  box-shadow: 0 0 0 1px var(--border-light);
 }
 
 .primary-action:disabled,
@@ -1613,17 +1781,16 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .result-meta h3,
-.analysis-section h4,
-.evidence-dimension > h4 {
+.analysis-section h4 {
   margin: 0;
-  color: #0F172A;
+  color: var(--text-heading);
   font-size: 15px;
   font-weight: 600;
 }
 
 .evidence-paper-title {
   margin: 0 0 8px;
-  color: #334155;
+  color: var(--sidebar-accent);
   font-size: 14px;
   font-weight: 600;
   line-height: 1.45;
@@ -1631,7 +1798,7 @@ function evidencePageLabel(page?: number | string) {
 
 .result-meta p {
   margin: 6px 0 0;
-  color: #64748B;
+  color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -1667,15 +1834,15 @@ function evidencePageLabel(page?: number | string) {
   flex-shrink: 0;
   overflow: hidden;
   border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 0 0 1px #E2E8F0;
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 1px var(--border-light);
 }
 
 .table-view-switch button {
   border: 0;
-  border-right: 1px solid #E2E8F0;
+  border-right: 1px solid var(--border-light);
   background: transparent;
-  color: #64748B;
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
@@ -1688,20 +1855,21 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .table-view-switch button.active {
-  background: #EFF6FF;
-  color: #2563EB;
+  background: var(--el-color-primary-light);
+  color: var(--el-color-primary-hover);
 }
 
 .compare-table-wrap {
   overflow: auto;
-  background: #fff;
-  box-shadow: 0 0 0 1px #E2E8F0;
-  border-radius: 8px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+  border-radius: 12px;
 }
 
 .compare-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13px;
   table-layout: fixed;
 }
@@ -1709,17 +1877,23 @@ function evidencePageLabel(page?: number | string) {
 .compare-table th,
 .compare-table td {
   min-width: 190px;
-  padding: 10px 12px;
-  border-bottom: 1px solid #F1F5F9;
+  border: none;
+  border-bottom: 1px solid var(--border-lighter);
+  padding: 16px;
   text-align: left;
   vertical-align: top;
   line-height: 1.55;
 }
 
 .compare-table th {
-  color: #334155;
-  background: #F8FAFC;
+  color: var(--text-primary);
+  background: var(--bg-canvas);
   font-weight: 600;
+  border-bottom: 2px solid var(--academic-border);
+}
+
+.compare-table tbody tr:hover td {
+  background: var(--bg-canvas);
 }
 
 .compare-table th:first-child,
@@ -1729,13 +1903,41 @@ function evidencePageLabel(page?: number | string) {
   z-index: 2;
   width: 140px;
   min-width: 140px;
-  background: #fff;
-  box-shadow: 1px 0 0 #F1F5F9;
+  background: var(--bg-surface);
 }
 
 .compare-table th:first-child {
   z-index: 3;
-  background: #F8FAFC;
+  background: var(--bg-canvas);
+}
+
+.compare-table tbody tr:hover td:first-child {
+  background: var(--bg-canvas);
+}
+
+.compare-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.compare-cell.clickable {
+  cursor: pointer;
+}
+
+.compare-table td.cell-diff {
+  background: linear-gradient(180deg, rgba(204, 251, 241, 0.35) 0%, rgba(239, 246, 255, 0.2) 100%);
+}
+
+.compare-table td.cell-diff .compare-cell-content {
+  background-image: linear-gradient(var(--academic-primary-light), var(--academic-primary-light));
+  background-size: 100% 2px;
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+}
+
+.compare-table td.is-locatable:hover {
+  background: var(--bg-canvas);
 }
 
 .compare-header-text {
@@ -1764,7 +1966,7 @@ function evidencePageLabel(page?: number | string) {
 
 .table-view-hint {
   margin: 8px 0 0;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -1782,15 +1984,29 @@ function evidencePageLabel(page?: number | string) {
   overflow: visible;
 }
 
-.inline-toggle {
-  margin-top: 6px;
+.inline-toggle,
+.hover-action {
   border: 0;
   background: transparent;
-  color: #2563EB;
+  color: var(--sidebar-accent);
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
   padding: 0;
+}
+
+.compare-cell .hover-action {
+  align-self: flex-start;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+.compare-table tbody tr:hover .hover-action,
+.compare-cell .hover-action:focus-visible,
+.compare-cell-content.expanded + .hover-action {
+  opacity: 1;
+  visibility: visible;
 }
 
 .analysis-sections {
@@ -1798,23 +2014,36 @@ function evidencePageLabel(page?: number | string) {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0;
   margin-top: 16px;
-  background: #fff;
-  box-shadow: 0 0 0 1px #E2E8F0;
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 1px var(--border-light);
   border-radius: 8px;
   overflow: hidden;
 }
 
 .evidence-panel {
+  --ev-strong: #b87d6a;
+  --ev-strong-soft: rgba(184, 125, 106, 0.14);
+  --ev-strong-text: #7a5548;
+  --ev-medium: #c49a6c;
+  --ev-medium-soft: rgba(196, 154, 108, 0.14);
+  --ev-medium-text: #8b6640;
+  --ev-related: #9aab96;
+  --ev-related-soft: rgba(154, 171, 150, 0.16);
+  --ev-related-text: #5f7260;
+  --ev-weak: #b8aea4;
+  --ev-weak-soft: rgba(184, 174, 164, 0.2);
+  --ev-weak-text: #8c8275;
+
   margin-top: 20px;
   padding-top: 18px;
-  border-top: 1px solid #E2E8F0;
+  border-top: 1px solid var(--border-light);
 }
 
 .evidence-panel-title {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: #0F172A;
+  color: var(--text-heading);
 }
 
 .evidence-panel-head {
@@ -1823,21 +2052,21 @@ function evidencePageLabel(page?: number | string) {
 
 .evidence-panel-hint {
   margin: 6px 0 0;
-  color: #64748B;
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
 }
 
 .evidence-panel-question {
   margin: 6px 0 0;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-size: 12px;
   line-height: 1.5;
 }
 
 .analysis-section {
   padding: 16px 18px;
-  border-right: 1px solid #F1F5F9;
+  border-right: 1px solid var(--border-lighter);
 }
 
 .analysis-section:last-child {
@@ -1854,56 +2083,143 @@ function evidencePageLabel(page?: number | string) {
 .analysis-section li,
 .analysis-section p,
 .raw-result {
-  color: #475569;
+  color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
 }
 
-.evidence-dimension {
-  padding: 16px 0;
-  border-top: 1px solid #E2E8F0;
+.dimension-section {
+  background: var(--bg-surface);
+  border-radius: 12px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
 
-.evidence-dimension:first-of-type {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.evidence-dimension h4 {
-  margin: 0 0 10px;
-  color: #0F172A;
-  font-size: 14px;
+.dimension-header {
+  padding: 12px 16px;
+  background: rgba(241, 237, 228, 0.75);
+  color: var(--sidebar-accent);
   font-weight: 600;
+  font-size: 14px;
+  border-bottom: 1px solid var(--sidebar-border);
 }
 
-.evidence-dimension:first-of-type h4 {
-  margin-top: 0;
+.dimension-body {
+  padding: 0 16px 16px;
 }
 
 .evidence-group {
-  border-top: 1px solid #F1F5F9;
+  border-top: 1px solid var(--border-lighter);
   padding-top: 14px;
 }
 
+.dimension-body .evidence-group:first-child {
+  border-top: none;
+  padding-top: 12px;
+}
+
 .evidence-item {
+  position: relative;
   width: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 10px;
-  padding: 12px 0;
+  padding: 12px 16px 12px 20px;
   border: none;
-  border-bottom: 1px solid #F1F5F9;
+  border-bottom: 1px solid var(--border-lighter);
   background: transparent;
-  color: #475569;
+  color: var(--text-primary);
   text-align: left;
   cursor: pointer;
   line-height: 1.55;
+  transition: background 0.12s ease, box-shadow 0.12s ease;
+  border-radius: 0 8px 8px 0;
+}
+
+.evidence-item::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--ev-weak);
+}
+
+.evidence-item.support-strong {
+  background: var(--ev-strong-soft);
+}
+
+.evidence-item.support-strong::before {
+  background: var(--ev-strong);
+}
+
+.evidence-item.support-medium {
+  background: var(--ev-medium-soft);
+}
+
+.evidence-item.support-medium::before {
+  background: var(--ev-medium);
+}
+
+.evidence-item.support-related {
+  background: var(--ev-related-soft);
+}
+
+.evidence-item.support-related::before {
+  background: var(--ev-related);
+}
+
+.evidence-item.support-weak {
+  background: var(--ev-weak-soft);
+}
+
+.evidence-item.support-weak::before {
+  background: var(--ev-weak);
 }
 
 .evidence-item:hover {
-  background: #F8FAFC;
+  background: rgba(241, 237, 228, 0.65);
+  box-shadow: inset 0 0 0 1px rgba(218, 212, 198, 0.45);
+}
+
+.evidence-item.support-strong:hover {
+  background: rgba(184, 125, 106, 0.18);
+}
+
+.evidence-item.support-medium:hover {
+  background: rgba(196, 154, 108, 0.18);
+}
+
+.evidence-item.support-related:hover {
+  background: rgba(154, 171, 150, 0.2);
+}
+
+.evidence-item.support-weak:hover {
+  background: rgba(184, 174, 164, 0.28);
+}
+
+.evidence-item:hover .evidence-hover-actions {
+  opacity: 1;
+  visibility: visible;
+}
+
+.evidence-hover-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+.evidence-hover-actions .hover-action:focus-visible {
+  opacity: 1;
+  visibility: visible;
 }
 
 .evidence-item-head {
@@ -1914,7 +2230,7 @@ function evidencePageLabel(page?: number | string) {
 }
 
 .evidence-item-head strong {
-  color: #0F172A;
+  color: var(--text-heading);
   font-size: 13px;
   line-height: 1.4;
 }
@@ -1928,27 +2244,44 @@ function evidencePageLabel(page?: number | string) {
 
 .evidence-tags em {
   border-radius: 999px;
-  background: #F1F5F9;
-  color: #64748B;
+  background: rgba(241, 237, 228, 0.85);
+  color: var(--text-secondary);
   font-size: 11px;
   font-style: normal;
   line-height: 1;
-  padding: 5px 7px;
+  padding: 5px 8px;
+  border: 1px solid rgba(218, 212, 198, 0.5);
+}
+
+.evidence-tags .support-tag {
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-weight: 600;
+  border: 1px solid transparent;
 }
 
 .evidence-tags .support-tag.strong {
-  background: #DCFCE7;
-  color: #166534;
+  background: var(--ev-strong-soft);
+  color: var(--ev-strong-text);
+  border-color: rgba(184, 125, 106, 0.28);
 }
 
 .evidence-tags .support-tag.medium {
-  background: #FEF3C7;
-  color: #92400E;
+  background: var(--ev-medium-soft);
+  color: var(--ev-medium-text);
+  border-color: rgba(196, 154, 108, 0.28);
+}
+
+.evidence-tags .support-tag.related {
+  background: var(--ev-related-soft);
+  color: var(--ev-related-text);
+  border-color: rgba(154, 171, 150, 0.32);
 }
 
 .evidence-tags .support-tag.weak {
-  background: #F1F5F9;
-  color: #475569;
+  background: var(--ev-weak-soft);
+  color: var(--ev-weak-text);
+  border-color: rgba(184, 174, 164, 0.45);
 }
 
 .evidence-snippet {
@@ -1957,7 +2290,7 @@ function evidencePageLabel(page?: number | string) {
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
-  color: #475569;
+  color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.65;
   overflow-wrap: anywhere;
@@ -1973,8 +2306,8 @@ function evidencePageLabel(page?: number | string) {
 .empty-note {
   padding: 12px;
   border-radius: 8px;
-  background: #F8FAFC;
-  color: #64748B;
+  background: var(--bg-canvas);
+  color: var(--text-secondary);
   font-size: 13px;
 }
 
@@ -1997,7 +2330,7 @@ function evidencePageLabel(page?: number | string) {
 
   .analysis-section {
     border-right: none;
-    border-bottom: 1px solid #F1F5F9;
+    border-bottom: 1px solid var(--border-lighter);
   }
 
   .analysis-section:last-child {

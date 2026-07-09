@@ -56,26 +56,23 @@ defineEmits<{ click: [] }>()
   height: 100%;
   min-height: 0;
   padding: 0;
-  border: none;
+  border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 20px;
   background: #ffffff;
   color: var(--academic-text-body);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  box-shadow:
-    0 4px 6px -1px rgba(0, 0, 0, 0.05),
-    0 2px 4px -1px rgba(0, 0, 0, 0.03);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
   transition:
     transform 0.22s cubic-bezier(0.4, 0, 0.2, 1),
     box-shadow 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.bento-card:hover {
+.bento-card:hover,
+.bento-card:focus-visible {
   transform: translateY(-2px);
-  box-shadow:
-    0 12px 28px -6px rgba(0, 0, 0, 0.1),
-    0 4px 10px -2px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 14px 32px -8px rgba(15, 23, 42, 0.1);
 }
 
 .bento-card:active {
@@ -91,26 +88,26 @@ defineEmits<{ click: [] }>()
 
 .tone-blue .bento-mesh {
   background:
-    radial-gradient(ellipse 90% 70% at 88% 12%, rgba(56, 189, 248, 0.42), transparent 68%),
-    radial-gradient(ellipse 75% 55% at 12% 88%, rgba(37, 99, 235, 0.28), transparent 65%),
-    radial-gradient(ellipse 55% 45% at 55% 45%, rgba(99, 102, 241, 0.14), transparent 70%),
-    linear-gradient(155deg, #ffffff 0%, #f8fbff 45%, #eef4ff 100%);
+    radial-gradient(ellipse 90% 70% at 88% 12%, rgba(59, 130, 246, 0.28), transparent 68%),
+    radial-gradient(ellipse 75% 55% at 12% 88%, rgba(37, 99, 235, 0.16), transparent 65%),
+    radial-gradient(ellipse 55% 45% at 55% 45%, rgba(96, 165, 250, 0.1), transparent 70%),
+    linear-gradient(155deg, #ffffff 0%, #f8fbff 45%, #eff6ff 100%);
 }
 
 .tone-violet .bento-mesh {
   background:
-    radial-gradient(ellipse 85% 65% at 90% 18%, rgba(167, 139, 250, 0.45), transparent 68%),
-    radial-gradient(ellipse 70% 55% at 8% 82%, rgba(99, 102, 241, 0.3), transparent 65%),
-    radial-gradient(ellipse 50% 40% at 48% 38%, rgba(192, 132, 252, 0.16), transparent 70%),
-    linear-gradient(155deg, #ffffff 0%, #faf8ff 45%, #f3f0ff 100%);
+    radial-gradient(ellipse 85% 65% at 90% 18%, rgba(99, 102, 241, 0.3), transparent 68%),
+    radial-gradient(ellipse 70% 55% at 8% 82%, rgba(129, 140, 248, 0.18), transparent 65%),
+    radial-gradient(ellipse 50% 40% at 48% 38%, rgba(139, 92, 246, 0.1), transparent 70%),
+    linear-gradient(155deg, #ffffff 0%, #faf9ff 45%, #f5f3ff 100%);
 }
 
 .tone-emerald .bento-mesh {
   background:
-    radial-gradient(ellipse 88% 68% at 92% 20%, rgba(52, 211, 153, 0.42), transparent 68%),
-    radial-gradient(ellipse 72% 58% at 10% 78%, rgba(16, 185, 129, 0.3), transparent 65%),
-    radial-gradient(ellipse 52% 42% at 50% 42%, rgba(45, 212, 191, 0.14), transparent 70%),
-    linear-gradient(155deg, #ffffff 0%, #f0fdf9 45%, #ecfdf5 100%);
+    radial-gradient(ellipse 88% 68% at 92% 20%, rgba(16, 185, 129, 0.28), transparent 68%),
+    radial-gradient(ellipse 72% 58% at 10% 78%, rgba(52, 211, 153, 0.16), transparent 65%),
+    radial-gradient(ellipse 52% 42% at 50% 42%, rgba(110, 231, 183, 0.1), transparent 70%),
+    linear-gradient(155deg, #ffffff 0%, #f6fdf9 45%, #ecfdf5 100%);
 }
 
 .bento-content {
@@ -185,11 +182,20 @@ defineEmits<{ click: [] }>()
   border-radius: 12px;
   flex-shrink: 0;
   background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(15, 23, 42, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.12);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.95),
-    inset 0 -1px 2px rgba(15, 23, 42, 0.04),
-    0 1px 4px rgba(15, 23, 42, 0.05);
+    inset 0 -1px 2px rgba(148, 163, 184, 0.06),
+    0 1px 4px rgba(15, 23, 42, 0.04);
+  transition:
+    transform 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    background 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.bento-card:hover .bento-icon,
+.bento-card:focus-visible .bento-icon {
+  transform: scale(1.05);
 }
 
 .is-hero .bento-icon,
@@ -203,7 +209,7 @@ defineEmits<{ click: [] }>()
   border: 1px solid rgba(255, 255, 255, 0.7);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.8),
-    0 4px 12px rgba(15, 23, 42, 0.06);
+    0 4px 12px rgba(15, 23, 42, 0.05);
 }
 
 .is-compact .bento-icon,
@@ -221,7 +227,7 @@ defineEmits<{ click: [] }>()
 .bento-title {
   font-size: 15px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-heading);
   line-height: 1.3;
   letter-spacing: -0.01em;
 }
@@ -247,7 +253,7 @@ defineEmits<{ click: [] }>()
 .bento-subtitle {
   font-size: 13px;
   line-height: 1.55;
-  color: #64748b;
+  color: var(--text-secondary);
   font-weight: 400;
 }
 
@@ -255,11 +261,11 @@ defineEmits<{ click: [] }>()
   font-size: 12px;
 }
 
-.tone-blue .bento-icon { color: #2563eb; }
+.tone-blue .bento-icon { color: #3b82f6; }
 
 .tone-violet .bento-icon { color: #6366f1; }
 
-.tone-emerald .bento-icon { color: #059669; }
+.tone-emerald .bento-icon { color: #10b981; }
 
 .bento-decor {
   position: absolute;
@@ -269,41 +275,44 @@ defineEmits<{ click: [] }>()
 }
 
 .tone-indigo .bento-icon {
-  background: rgba(99, 102, 241, 0.08);
-  color: #6366f1;
-  border-color: rgba(99, 102, 241, 0.1);
+  background: rgba(99, 102, 241, 0.1);
+  color: #4f46e5;
+  border-color: rgba(99, 102, 241, 0.16);
 }
 
 .tone-indigo.is-compact {
-  background: linear-gradient(160deg, #ffffff 50%, #f5f3ff 100%);
+  background: linear-gradient(160deg, #ffffff 55%, #eef2ff 100%);
 }
 
-.tone-indigo.is-compact:hover .bento-title {
+.tone-indigo.is-compact:hover .bento-title,
+.tone-indigo.is-compact:focus-visible .bento-title {
   color: #4f46e5;
 }
 
 .tone-amber .bento-icon {
   background: rgba(245, 158, 11, 0.1);
-  color: #d97706;
-  border-color: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.18);
 }
 
 .tone-amber.is-compact {
-  background: linear-gradient(160deg, #ffffff 50%, #fffbeb 100%);
+  background: linear-gradient(160deg, #ffffff 55%, #fffbeb 100%);
 }
 
-.tone-amber.is-compact:hover .bento-title {
-  color: #b45309;
+.tone-amber.is-compact:hover .bento-title,
+.tone-amber.is-compact:focus-visible .bento-title {
+  color: #d97706;
 }
 
 .tone-slate .bento-icon {
   background: rgba(100, 116, 139, 0.08);
-  color: #475569;
-  border-color: rgba(100, 116, 139, 0.1);
+  color: #64748b;
+  border-color: rgba(100, 116, 139, 0.14);
 }
 
-.tone-slate:hover .bento-title {
-  color: var(--academic-primary);
+.tone-slate:hover .bento-title,
+.tone-slate:focus-visible .bento-title {
+  color: #475569;
 }
 
 @media (max-width: 860px) {

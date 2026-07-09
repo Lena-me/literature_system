@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useNotebookStore } from '@/stores/notebook'
 import PaperLibraryPicker from '@/components/notebook/PaperLibraryPicker.vue'
@@ -162,23 +162,23 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
   gap: 6px;
   padding: 6px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
+  border: 1px solid rgba(140, 130, 117, 0.35);
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(10px);
   color: var(--academic-text-muted);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 2px 8px rgba(74, 66, 58, 0.06);
   transition: all 0.18s ease;
 }
 
 .island-trigger:hover,
 .island-trigger.active {
-  border-color: rgba(37, 99, 235, 0.35);
+  border-color: rgba(166, 124, 82, 0.35);
   color: var(--academic-primary);
   background: rgba(255, 255, 255, 0.95);
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.1);
+  box-shadow: 0 4px 14px rgba(166, 124, 82, 0.1);
 }
 
 .island-trigger.empty {
@@ -193,9 +193,9 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
   max-height: min(420px, 55vh);
   display: flex;
   flex-direction: column;
-  border-radius: 16px;
-  border: 1px solid var(--academic-border);
-  background: var(--academic-panel);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
   box-shadow: var(--shadow-float);
   overflow: hidden;
 }
@@ -205,7 +205,7 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
   align-items: center;
   justify-content: space-between;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--academic-border);
+  border-bottom: 1px solid var(--border-light);
 }
 
 .panel-title {
@@ -252,9 +252,9 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
   display: flex;
   align-items: stretch;
   gap: 4px;
-  border-radius: 12px;
-  border: 1px solid var(--academic-border);
-  background: var(--academic-canvas);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  background: var(--bg-canvas);
   overflow: hidden;
 }
 
@@ -276,30 +276,8 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
   background: var(--academic-primary-light);
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
+.paper-main .status-dot {
   margin-top: 5px;
-}
-
-.status-dot.ready {
-  background: #10b981;
-}
-
-.status-dot.processing {
-  background: #f59e0b;
-  animation: status-pulse 1.4s ease-in-out infinite;
-}
-
-.status-dot.failed {
-  background: #ef4444;
-}
-
-@keyframes status-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
 }
 
 .paper-text {
@@ -324,7 +302,7 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
   width: 36px;
   flex-shrink: 0;
   border: none;
-  border-left: 1px solid var(--academic-border);
+  border-left: 1px solid var(--border-light);
   background: transparent;
   color: var(--academic-text-muted);
   font-size: 16px;
@@ -339,7 +317,7 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 
 .panel-footer {
   padding: 10px 12px;
-  border-top: 1px solid var(--academic-border);
+  border-top: 1px solid var(--border-light);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -348,9 +326,9 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 .panel-upload {
   margin: 0 12px 8px;
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--academic-primary-light);
-  border: 1px solid rgba(37, 99, 235, 0.2);
+  border: 1px solid var(--border-light);
   font-size: 12px;
   color: var(--academic-primary);
   display: flex;
@@ -361,7 +339,7 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 .upload-spinner {
   width: 8px;
   height: 8px;
-  border: 2px solid rgba(37, 99, 235, 0.25);
+  border: 2px solid rgba(166, 124, 82, 0.25);
   border-top-color: var(--academic-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -383,7 +361,7 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 
 .add-btn.primary {
   border-style: solid;
-  border-color: rgba(37, 99, 235, 0.35);
+  border-color: rgba(166, 124, 82, 0.35);
   color: var(--academic-primary);
   background: var(--academic-primary-light);
 }

@@ -18,7 +18,9 @@ onUnmounted(() => {
   <main class="notebook-layout">
     <UnifiedSidebar />
     <section class="canvas">
-      <router-view />
+      <div class="main-content-container">
+        <router-view />
+      </div>
     </section>
   </main>
 </template>
@@ -29,14 +31,15 @@ onUnmounted(() => {
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-  background: var(--academic-canvas);
+  background: var(--bg-canvas);
 }
 
 .canvas {
   flex: 1;
   min-width: 0;
-  position: relative;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  background: var(--academic-canvas);
+  background: var(--bg-canvas);
 }
 </style>

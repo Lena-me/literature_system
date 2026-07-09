@@ -161,103 +161,7 @@ function quickActions(action: string) {
       </div>
 
       <div class="bento-grid">
-      <!-- 主功能：文档解析 -->
-      <BentoActionCard
-        class="bento-parse"
-        size="hero"
-        tone="blue"
-        title="智能文档解析"
-        subtitle="AI 抽取结构、语义与关键信息"
-        @click="quickActions('upload')"
-      >
-        <template #icon>
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-            <line x1="8" y1="13" x2="16" y2="13" />
-            <line x1="8" y1="17" x2="13" y2="17" />
-          </svg>
-        </template>
-        <template #decor>
-          <div class="decor-docs">
-            <div class="doc-sheet doc-a" />
-            <div class="doc-sheet doc-b" />
-            <div class="doc-scan" />
-          </div>
-        </template>
-      </BentoActionCard>
-
-      <!-- 主功能：知识图谱 -->
-      <BentoActionCard
-        class="bento-graph"
-        size="hero"
-        tone="violet"
-        title="文献知识图谱"
-        subtitle="可视化论文关联，发现方法与主题脉络"
-        @click="quickActions('graph')"
-      >
-        <template #icon>
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="6" cy="6" r="2.5" />
-            <circle cx="18" cy="8" r="2.5" />
-            <circle cx="12" cy="18" r="2.5" />
-            <circle cx="19" cy="17" r="2" />
-            <line x1="8" y1="7" x2="16" y2="8" />
-            <line x1="7" y1="8" x2="11" y2="16" />
-            <line x1="14" y1="17" x2="17" y2="17" />
-          </svg>
-        </template>
-        <template #decor>
-          <svg class="decor-graph" viewBox="0 0 200 200" fill="none">
-            <circle cx="48" cy="52" r="10" fill="rgba(99,102,241,0.18)" stroke="rgba(99,102,241,0.35)" stroke-width="1.5" />
-            <circle cx="130" cy="40" r="8" fill="rgba(99,102,241,0.12)" stroke="rgba(99,102,241,0.3)" stroke-width="1.5" />
-            <circle cx="155" cy="110" r="12" fill="rgba(99,102,241,0.2)" stroke="rgba(99,102,241,0.4)" stroke-width="1.5" />
-            <circle cx="72" cy="140" r="9" fill="rgba(99,102,241,0.14)" stroke="rgba(99,102,241,0.32)" stroke-width="1.5" />
-            <circle cx="108" cy="88" r="14" fill="rgba(99,102,241,0.25)" stroke="rgba(99,102,241,0.45)" stroke-width="1.5" />
-            <line x1="56" y1="58" x2="98" y2="82" stroke="rgba(99,102,241,0.28)" stroke-width="1.5" />
-            <line x1="118" y1="86" x2="146" y2="104" stroke="rgba(99,102,241,0.28)" stroke-width="1.5" />
-            <line x1="104" y1="98" x2="78" y2="132" stroke="rgba(99,102,241,0.28)" stroke-width="1.5" />
-            <line x1="136" y1="46" x2="112" y2="78" stroke="rgba(99,102,241,0.22)" stroke-width="1.5" />
-          </svg>
-        </template>
-      </BentoActionCard>
-
-      <!-- 特色：文献对比（第二行左侧） -->
-      <BentoActionCard
-        class="bento-compare"
-        size="hero"
-        tone="emerald"
-        title="多文献智能对比"
-        subtitle="跨维度横向分析，快速定位差异与共识"
-        @click="quickActions('compare')"
-      >
-        <template #icon>
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
-          </svg>
-        </template>
-        <template #decor>
-          <div class="decor-compare">
-            <div class="compare-panel panel-a">
-              <span class="panel-label">Paper A</span>
-              <div class="dim-bar" style="--w: 72%" />
-              <div class="dim-bar" style="--w: 55%" />
-              <div class="dim-bar" style="--w: 80%" />
-            </div>
-            <div class="compare-vs">
-              <span>VS</span>
-            </div>
-            <div class="compare-panel panel-b">
-              <span class="panel-label">Paper B</span>
-              <div class="dim-bar" style="--w: 48%" />
-              <div class="dim-bar" style="--w: 78%" />
-              <div class="dim-bar" style="--w: 62%" />
-            </div>
-          </div>
-        </template>
-      </BentoActionCard>
-
-      <!-- 辅助：发起研究 -->
+      <!-- 左上：发起研究 + 研读报告 -->
       <BentoActionCard
         class="bento-session"
         size="compact"
@@ -306,6 +210,102 @@ function quickActions(action: string) {
           </div>
         </template>
       </BentoActionCard>
+
+      <!-- 右上：文档解析 -->
+      <BentoActionCard
+        class="bento-parse"
+        size="hero"
+        tone="blue"
+        title="智能文档解析"
+        subtitle="AI 抽取结构、语义与关键信息"
+        @click="quickActions('upload')"
+      >
+        <template #icon>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="8" y1="13" x2="16" y2="13" />
+            <line x1="8" y1="17" x2="13" y2="17" />
+          </svg>
+        </template>
+        <template #decor>
+          <div class="decor-docs">
+            <div class="doc-sheet doc-a" />
+            <div class="doc-sheet doc-b" />
+            <div class="doc-scan" />
+          </div>
+        </template>
+      </BentoActionCard>
+
+      <!-- 左下：知识图谱 -->
+      <BentoActionCard
+        class="bento-graph"
+        size="hero"
+        tone="violet"
+        title="文献知识图谱"
+        subtitle="可视化论文关联，发现方法与主题脉络"
+        @click="quickActions('graph')"
+      >
+        <template #icon>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="6" cy="6" r="2.5" />
+            <circle cx="18" cy="8" r="2.5" />
+            <circle cx="12" cy="18" r="2.5" />
+            <circle cx="19" cy="17" r="2" />
+            <line x1="8" y1="7" x2="16" y2="8" />
+            <line x1="7" y1="8" x2="11" y2="16" />
+            <line x1="14" y1="17" x2="17" y2="17" />
+          </svg>
+        </template>
+        <template #decor>
+          <svg class="decor-graph" viewBox="0 0 200 200" fill="none">
+            <circle cx="48" cy="52" r="10" fill="rgba(99,102,241,0.18)" stroke="rgba(99,102,241,0.35)" stroke-width="1.5" />
+            <circle cx="130" cy="40" r="8" fill="rgba(99,102,241,0.12)" stroke="rgba(99,102,241,0.3)" stroke-width="1.5" />
+            <circle cx="155" cy="110" r="12" fill="rgba(99,102,241,0.2)" stroke="rgba(99,102,241,0.4)" stroke-width="1.5" />
+            <circle cx="72" cy="140" r="9" fill="rgba(99,102,241,0.14)" stroke="rgba(99,102,241,0.32)" stroke-width="1.5" />
+            <circle cx="108" cy="88" r="14" fill="rgba(99,102,241,0.25)" stroke="rgba(99,102,241,0.45)" stroke-width="1.5" />
+            <line x1="56" y1="58" x2="98" y2="82" stroke="rgba(99,102,241,0.28)" stroke-width="1.5" />
+            <line x1="118" y1="86" x2="146" y2="104" stroke="rgba(99,102,241,0.28)" stroke-width="1.5" />
+            <line x1="104" y1="98" x2="78" y2="132" stroke="rgba(99,102,241,0.28)" stroke-width="1.5" />
+            <line x1="136" y1="46" x2="112" y2="78" stroke="rgba(99,102,241,0.22)" stroke-width="1.5" />
+          </svg>
+        </template>
+      </BentoActionCard>
+
+      <!-- 右下：文献对比 -->
+      <BentoActionCard
+        class="bento-compare"
+        size="hero"
+        tone="emerald"
+        title="多文献智能对比"
+        subtitle="跨维度横向分析，快速定位差异与共识"
+        @click="quickActions('compare')"
+      >
+        <template #icon>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+          </svg>
+        </template>
+        <template #decor>
+          <div class="decor-compare">
+            <div class="compare-panel panel-a">
+              <span class="panel-label">Paper A</span>
+              <div class="dim-bar" style="--w: 72%" />
+              <div class="dim-bar" style="--w: 55%" />
+              <div class="dim-bar" style="--w: 80%" />
+            </div>
+            <div class="compare-vs">
+              <span>VS</span>
+            </div>
+            <div class="compare-panel panel-b">
+              <span class="panel-label">Paper B</span>
+              <div class="dim-bar" style="--w: 48%" />
+              <div class="dim-bar" style="--w: 78%" />
+              <div class="dim-bar" style="--w: 62%" />
+            </div>
+          </div>
+        </template>
+      </BentoActionCard>
       </div>
     </section>
 
@@ -320,6 +320,12 @@ function quickActions(action: string) {
 </template>
 
 <style scoped>
+:global(.main-content-container:has(.dashboard-page)) {
+  background-color: #f8fafc;
+  border-color: #e2e8f0;
+  box-shadow: -4px 0 24px rgba(15, 23, 42, 0.03);
+}
+
 .dashboard-page {
   height: 100%;
   min-height: 0;
@@ -329,7 +335,7 @@ function quickActions(action: string) {
   padding: 16px 24px 20px;
   max-width: 1040px;
   margin: 0 auto;
-  background: var(--academic-canvas);
+  background: #f8fafc;
 }
 
 /* ====== 沉浸式 Banner ====== */
@@ -425,7 +431,7 @@ function quickActions(action: string) {
   border-radius: 14px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--academic-primary), var(--academic-primary-hover));
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
   color: #fff;
   font-size: 18px;
   font-weight: 800;
@@ -489,7 +495,7 @@ function quickActions(action: string) {
 
 .stat-icon.upload {
   background: rgba(37, 99, 235, 0.12);
-  color: var(--academic-primary);
+  color: #2563eb;
 }
 
 .stat-icon.parsed {
@@ -609,7 +615,7 @@ function quickActions(action: string) {
 
 .topics-title {
   font-size: 15px;
-  color: var(--academic-text-main);
+  color: #0f172a;
   font-weight: 600;
   margin: 0 0 14px;
 }
@@ -630,20 +636,20 @@ function quickActions(action: string) {
   height: 100%;
 }
 
-.bento-parse,
-.bento-graph {
+.bento-session,
+.bento-reports {
+  grid-column: span 3;
+  grid-row: 1;
+}
+
+.bento-parse {
   grid-column: span 6;
   grid-row: 1;
 }
 
+.bento-graph,
 .bento-compare {
   grid-column: span 6;
-  grid-row: 2;
-}
-
-.bento-session,
-.bento-reports {
-  grid-column: span 3;
   grid-row: 2;
 }
 
@@ -888,7 +894,7 @@ function quickActions(action: string) {
   border-radius: 20px;
   font-size: 13px;
   background: rgba(37, 99, 235, 0.08);
-  color: var(--academic-primary);
+  color: #2563eb;
   border: none;
   font-weight: 500;
   box-shadow: 0 1px 3px rgba(37, 99, 235, 0.06);

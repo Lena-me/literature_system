@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import { useNotebookStore } from '@/stores/notebook'
 import PaperLibraryPicker from '@/components/notebook/PaperLibraryPicker.vue'
@@ -6,7 +6,10 @@ import { useSessionPaperUpload } from '@/composables/useSessionPaperUpload'
 import { parseStatusClass, parseStatusLabel } from '@/utils/parseStatus'
 
 const notebook = useNotebookStore()
-const emit = defineEmits<{ filesUploaded: [paperIds: number[]] }>()
+const emit = defineEmits<{
+  filesUploaded: [paperIds: number[]]
+  paperClick: [paperId: number]
+}>()
 
 const pickerRef = ref<InstanceType<typeof PaperLibraryPicker> | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
@@ -146,23 +149,17 @@ function onBlurPopover() {
   }, 150)
 }
 
-function cancelEdit() {
-  notebook.cancelEditMessage()
-  inputText.value = ''
-}
-
 function removeAttachment(paperId: number) {
   notebook.removeSource(paperId)
+}
+
+function openPaper(paperId: number) {
+  emit('paperClick', paperId)
 }
 </script>
 
 <template>
   <div class="input-dock">
-    <div v-if="notebook.editingMessageId" class="edit-banner">
-      <span>正在编辑消息，发送后将替换该条及之后的对话</span>
-      <button type="button" @click="cancelEdit">取消</button>
-    </div>
-
     <div class="dock-shell">
       <!-- 附件胶囊区：仅展示已挂载文献 -->
       <div v-if="notebook.activeSources.length || uploadChip" class="attachment-strip">
@@ -174,11 +171,13 @@ function removeAttachment(paperId: number) {
             </span>
           </Transition>
 
-          <span
+          <button
             v-for="paper in notebook.activeSources"
             :key="paper.id"
+            type="button"
             class="attach-pill"
             :title="`${paper.title || paper.original_filename} · ${parseStatusLabel(paper.parse_status)}`"
+            @click="openPaper(paper.id)"
           >
             <span
               class="status-dot"
@@ -186,15 +185,18 @@ function removeAttachment(paperId: number) {
               :title="parseStatusLabel(paper.parse_status)"
             />
             <span class="pill-text">{{ paper.title || paper.original_filename }}</span>
-            <button
-              type="button"
+            <span
+              role="button"
+              tabindex="0"
               class="pill-remove"
               title="移出会话"
-              @click="removeAttachment(paper.id)"
+              @click.stop="removeAttachment(paper.id)"
+              @keydown.enter.stop.prevent="removeAttachment(paper.id)"
+              @keydown.space.stop.prevent="removeAttachment(paper.id)"
             >
               ×
-            </button>
-          </span>
+            </span>
+          </button>
         </div>
       </div>
 
@@ -276,7 +278,9 @@ function removeAttachment(paperId: number) {
           title="停止生成"
           @click="notebook.stopStreaming()"
         >
-          ■
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="7" y="7" width="10" height="10" rx="1.5" />
+          </svg>
         </button>
         <button
           v-else
@@ -298,32 +302,11 @@ function removeAttachment(paperId: number) {
 <style scoped>
 .input-dock {
   flex-shrink: 0;
-  padding: 12px 20px 20px;
+  padding: 0;
   background: transparent;
-}
-
-.edit-banner {
-  max-width: 820px;
-  margin: 0 auto 10px;
-  padding: 8px 12px;
-  border-radius: 12px;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  color: #92400e;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.edit-banner button {
-  border: none;
-  background: transparent;
-  color: #b45309;
-  cursor: pointer;
-  font-size: 12px;
-  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 100;
 }
 
 .upload-status-chip {
@@ -333,7 +316,7 @@ function removeAttachment(paperId: number) {
 .chip-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(37, 99, 235, 0.25);
+  border: 2px solid rgba(166, 124, 82, 0.25);
   border-top-color: var(--academic-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -342,37 +325,42 @@ function removeAttachment(paperId: number) {
 
 .chip-tag {
   font-size: 11px;
-  background: rgba(37, 99, 235, 0.1);
+  background: rgba(166, 124, 82, 0.1);
   padding: 2px 8px;
   border-radius: 8px;
   font-weight: 600;
 }
 
 .dock-shell {
-  max-width: 820px;
+  max-width: 860px;
   margin: 0 auto;
-  border-radius: 20px;
-  border: 1px solid var(--academic-border);
-  background: var(--academic-panel);
-  box-shadow: 0 8px 32px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.04);
+  border-radius: 20px 20px 0 0;
+  border: 1px solid var(--border-light);
+  border-bottom: none;
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.04);
   overflow: visible;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: all 0.3s ease;
 }
 
 .dock-shell:focus-within {
-  border-color: rgba(37, 99, 235, 0.45);
-  box-shadow: 0 8px 32px rgba(37, 99, 235, 0.1), 0 0 0 3px rgba(37, 99, 235, 0.08);
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(196, 154, 108, 0.45);
+  box-shadow: 0 -10px 40px rgba(166, 124, 82, 0.08);
 }
 
 .attachment-strip {
   padding: 10px 12px 0;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  background: transparent;
+  border-bottom: 1px dashed var(--border-light);
   border-radius: 20px 20px 0 0;
   overflow: hidden;
 }
 
 .attach-pill.upload-pill {
-  border-color: rgba(37, 99, 235, 0.35);
+  border: 1px solid var(--border-light);
   background: var(--academic-primary-light);
   color: var(--academic-primary);
 }
@@ -380,36 +368,11 @@ function removeAttachment(paperId: number) {
 .attach-pill.upload-pill .chip-spinner {
   width: 8px;
   height: 8px;
-  border: 2px solid rgba(37, 99, 235, 0.25);
+  border: 2px solid rgba(166, 124, 82, 0.25);
   border-top-color: var(--academic-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   flex-shrink: 0;
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.status-dot.ready {
-  background: #10b981;
-}
-
-.status-dot.processing {
-  background: #f59e0b;
-  animation: status-pulse 1.4s ease-in-out infinite;
-}
-
-.status-dot.failed {
-  background: #ef4444;
-}
-
-@keyframes status-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
 }
 
 .attachment-scroll {
@@ -426,12 +389,21 @@ function removeAttachment(paperId: number) {
   gap: 6px;
   flex-shrink: 0;
   max-width: 220px;
-  padding: 5px 8px 5px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--academic-border);
-  background: var(--academic-canvas);
+  padding: 6px 10px 6px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  background: var(--bg-canvas);
   font-size: 12px;
-  color: var(--academic-text-body);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.attach-pill:hover {
+  border-color: rgba(196, 154, 108, 0.4);
+  background: var(--academic-primary-light);
 }
 
 .pill-text {
@@ -548,7 +520,7 @@ function removeAttachment(paperId: number) {
   resize: none;
   line-height: 1.55;
   color: var(--academic-text-body);
-  font-size: 16px;
+  font-size: 15px;
   min-height: 24px;
   max-height: 160px;
   font-family: inherit;
@@ -592,14 +564,15 @@ function removeAttachment(paperId: number) {
 }
 
 .stop-btn {
-  background: #ef4444;
-  color: #fff;
-  font-size: 11px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
 }
 
 .stop-btn:hover {
-  background: #dc2626;
-  transform: scale(1.05);
+  background: var(--bg-canvas);
+  border-color: rgba(196, 154, 108, 0.4);
+  color: var(--text-primary);
 }
 
 .mention-menu {

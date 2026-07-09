@@ -1,8 +1,9 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { papersApi } from '@/api/papers'
 import { usePaperStore } from '@/stores/papers'
 import PaperReader from '@/components/reader/PaperReader.vue'
+import { parseStatusClass, parseStatusLabel } from '@/utils/parseStatus'
 
 // ── 分类接口 ──
 interface Category {
@@ -29,6 +30,7 @@ const activeCategory = ref<string | number>('all')
 const sortBy = ref<'date-desc' | 'date-asc' | 'title-asc' | 'title-desc'>('date-desc')
 const dateRange = ref<[string, string] | null>(null)
 const activeLetter = ref('')
+const showMoreFilters = ref(false)
 const sidebarCollapsed = ref(false)
 const sidebarHovered = ref(false)
 
@@ -40,6 +42,7 @@ function clearAllFilters() {
   activeLetter.value = ''
   dateRange.value = null
   searchQuery.value = ''
+  showMoreFilters.value = false
   setTimeout(() => { isClearing.value = false }, 600)
 }
 
@@ -155,20 +158,6 @@ function formatDate(ts: string | null | undefined) {
   return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
 }
 
-function statusLabel(s: string | null | undefined): string {
-  switch (s) {
-    case 'completed': return '已解析'
-    case 'failed': return '解析失败'
-    case 'queued': return '排队中'
-    case 'extracting': return '抽取中'
-    case 'vectorizing': return '向量化中'
-    case 'processing':
-    case 'parsing': return '解析中'
-    case 'pending': return '等待中'
-    default: return '解析中'
-  }
-}
-
 function parseListField(val: unknown): string[] {
   if (!val) return []
   if (Array.isArray(val)) return val.map(String).map(s => s.trim()).filter(Boolean)
@@ -187,6 +176,28 @@ function parsedAuthors(row: any): string[] {
 }
 
 const ALPHABET = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
+const recentPaperCount = computed(() => {
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+  return store.list.filter(p => {
+    const t = p.upload_time ? new Date(p.upload_time).getTime() : 0
+    return t > sevenDaysAgo
+  }).length
+})
+
+const uncategorizedPaperCount = computed(() =>
+  store.list.filter(p => !p.category_id).length,
+)
+
+const categoryPaperCounts = computed(() => {
+  const map = new Map<number, number>()
+  for (const paper of store.list) {
+    if (paper.category_id) {
+      map.set(paper.category_id, (map.get(paper.category_id) || 0) + 1)
+    }
+  }
+  return map
+})
 
 const filteredPapers = computed(() => {
   let list = [...store.list]
@@ -425,6 +436,7 @@ async function batchDelete() {
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
           </svg>
           最近添加
+          <span class="lib-nav-count">{{ recentPaperCount }}</span>
         </button>
         <button
           class="lib-nav-item"
@@ -435,6 +447,7 @@ async function batchDelete() {
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
           </svg>
           未分类
+          <span class="lib-nav-count">{{ uncategorizedPaperCount }}</span>
         </button>
       </nav>
 
@@ -497,6 +510,9 @@ async function batchDelete() {
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
             <span class="lib-col-name">{{ cat.name }}</span>
+            <span v-if="hoverCategoryId !== cat.id" class="lib-col-count">
+              {{ categoryPaperCounts.get(cat.id) || 0 }}
+            </span>
             <div v-if="hoverCategoryId === cat.id" class="lib-col-actions">
               <button class="lib-col-action-btn" @click.stop="startEditCategory(cat)" title="编辑">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -534,104 +550,126 @@ async function batchDelete() {
     </button>
 
     <!-- ================================= 右侧主内容 ================================= -->
-    <main class="lib-main">
+    <main class="lib-main" :class="{ 'is-sidebar-collapsed': sidebarCollapsed }">
       <!-- Header -->
       <div class="lib-header">
-        <h2 class="lib-header-title">{{ categoryLabel }}</h2>
-        <span class="lib-header-count">{{ filteredPapers.length }} 篇</span>
+        <div class="lib-header-top">
+          <div class="lib-header-title-group">
+            <h2 class="lib-header-title">{{ categoryLabel }}</h2>
+            <span class="lib-header-count">{{ filteredPapers.length }} 篇</span>
+          </div>
 
-        <div class="lib-header-spacer"></div>
+          <div class="lib-toolbar-capsule">
+          <div class="lib-search-box">
+            <svg class="lib-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input
+              v-model="searchQuery"
+              class="lib-search-input"
+              placeholder="搜索标题、期刊、DOI..."
+            />
+            <button
+              v-if="searchQuery"
+              class="lib-search-clear"
+              @click="searchQuery = ''"
+            >&times;</button>
+          </div>
 
-        <select v-model="sortBy" class="lib-sort-select">
-          <option value="date-desc">最新上传</option>
-          <option value="date-asc">最早上传</option>
-          <option value="title-asc">标题 A-Z</option>
-          <option value="title-desc">标题 Z-A</option>
-        </select>
+          <span class="lib-toolbar-divider" />
 
-        <el-date-picker
-          v-model="dateRange"
-          type="daterange"
-          range-separator="—"
-          start-placeholder="开始日期"
-          end-placeholder="结束日期"
-          value-format="YYYY-MM-DD"
-          size="default"
-          class="lib-date-picker"
-        />
-        <button
-          v-if="dateRange"
-          class="lib-filter-clear"
-          @click="dateRange = null"
-        >清除</button>
+          <select v-model="sortBy" class="lib-sort-select">
+            <option value="date-desc">最新上传</option>
+            <option value="date-asc">最早上传</option>
+            <option value="title-asc">标题 A-Z</option>
+            <option value="title-desc">标题 Z-A</option>
+          </select>
 
-        <div class="lib-search-box">
-          <svg class="lib-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-          <input
-            v-model="searchQuery"
-            class="lib-search-input"
-            placeholder="搜索标题、期刊、DOI..."
+          <el-date-picker
+            v-model="dateRange"
+            type="daterange"
+            range-separator="—"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            value-format="YYYY-MM-DD"
+            size="default"
+            class="lib-date-picker"
           />
+
           <button
-            v-if="searchQuery"
-            class="lib-search-clear"
-            @click="searchQuery = ''"
-          >&times;</button>
+            v-if="dateRange"
+            class="lib-filter-clear"
+            @click="dateRange = null"
+          >清除</button>
+
+          <button
+            type="button"
+            class="lib-more-filters-btn"
+            :class="{ active: showMoreFilters || !!activeLetter }"
+            title="更多筛选"
+            @click="showMoreFilters = !showMoreFilters"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+            </svg>
+            <span v-if="activeLetter" class="lib-filter-badge">{{ activeLetter }}</span>
+          </button>
+
+          <button
+            class="lib-alpha-reset"
+            :class="{ 'is-spinning': isClearing }"
+            @click="clearAllFilters"
+            title="重置筛选"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"/>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
+          </button>
+
+          <span class="lib-toolbar-divider" />
+
+          <button type="button" class="lib-upload-btn" @click="openUpload">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            上传
+          </button>
+          </div>
         </div>
 
-        <button class="lib-upload-btn" @click="openUpload">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-          </svg>
-          上传
-        </button>
-      </div>
-
-      <!-- 文献列表 -->
-      <!-- A-Z 首字母筛选 -->
-      <div class="lib-alpha-bar">
-        <button
-          class="lib-alpha-reset"
-          :class="{ 'is-spinning': isClearing }"
-          @click="clearAllFilters"
-          title="刷新"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="23 4 23 10 17 10"/>
-            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-          </svg>
-        </button>
-        <button
-          class="lib-alpha-btn"
-          :class="{ active: activeLetter === '' }"
-          @click="activeLetter = ''"
-        >全部</button>
-        <button
-          v-for="ch in ALPHABET"
-          :key="ch"
-          class="lib-alpha-btn"
-          :class="{ active: activeLetter === ch }"
-          @click="activeLetter = activeLetter === ch ? '' : ch"
-        >{{ ch }}</button>
-      </div>
-
-      <div class="lib-list-wrap" v-if="filteredPapers.length">
-
-        <!-- 全选栏 -->
-        <div class="lib-select-all-bar">
+        <div v-if="filteredPapers.length" class="lib-list-toolbar">
           <label class="lib-select-all" @click.stop>
             <input type="checkbox" :checked="allSelected" @change="toggleSelectAll" />
             <span v-if="!showBatchBar">全选</span>
             <span v-else>已选 {{ selectedPaperIds.size }} 篇</span>
           </label>
         </div>
+      </div>
 
+      <Transition name="panel-fade">
+        <div v-if="showMoreFilters" class="lib-alpha-popover">
+          <button
+            class="lib-alpha-btn"
+            :class="{ active: activeLetter === '' }"
+            @click="activeLetter = ''"
+          >全部</button>
+          <button
+            v-for="ch in ALPHABET"
+            :key="ch"
+            class="lib-alpha-btn"
+            :class="{ active: activeLetter === ch }"
+            @click="activeLetter = activeLetter === ch ? '' : ch"
+          >{{ ch }}</button>
+        </div>
+      </Transition>
+
+      <!-- 文献列表 -->
+      <div class="lib-list-wrap" v-if="filteredPapers.length">
         <div
           v-for="row in filteredPapers"
           :key="row.id"
-          class="lib-list-item"
+          class="lib-list-item paper-item"
           :class="{ selected: selectedPaperIds.has(row.id) }"
         >
           <!-- 复选框 -->
@@ -645,12 +683,19 @@ async function batchDelete() {
 
           <!-- 主信息区 -->
           <div class="lib-item-main" @click="openReader(row)">
-            <div class="lib-item-title">{{ row.title || row.original_filename }}</div>
-            <div class="lib-item-meta">
-              <span v-if="row.publication_year" class="lib-meta-year">{{ row.publication_year }}</span>
-              <span v-if="row.journal_conf" class="lib-meta-journal">{{ row.journal_conf }}</span>
+            <div class="lib-item-title-row">
+              <span
+                class="status-dot"
+                :class="parseStatusClass(row.parse_status)"
+                :title="parseStatusLabel(row.parse_status)"
+              />
+              <div class="lib-item-title paper-title">{{ row.title || row.original_filename }}</div>
+            </div>
+            <div class="lib-item-meta paper-meta">
+              <span v-if="row.publication_year" class="tag tag-year">{{ row.publication_year }}</span>
+              <span v-if="row.journal_conf" class="tag tag-journal">{{ row.journal_conf }}</span>
               <span v-if="parsedAuthors(row).length" class="lib-item-authors">
-                <span v-for="(a, ai) in parsedAuthors(row).slice(0, 3)" :key="ai" class="lib-author-chip">{{ a }}</span>
+                <span v-for="(a, ai) in parsedAuthors(row).slice(0, 3)" :key="ai" class="tag tag-author">{{ a }}</span>
                 <span v-if="parsedAuthors(row).length > 3" class="lib-author-more">+{{ parsedAuthors(row).length - 3 }}</span>
               </span>
               <span v-if="row.upload_time" class="lib-item-date">{{ formatDate(row.upload_time) }}</span>
@@ -660,17 +705,9 @@ async function batchDelete() {
           <!-- 分类标签 -->
           <span
             v-if="getCategoryName(row)"
-            class="lib-item-cat-tag"
+            class="tag lib-item-cat-tag"
             @click.stop
           >{{ getCategoryName(row) }}</span>
-
-          <!-- 状态徽章 -->
-          <span class="lib-item-status" :class="row.parse_status">
-            <span v-if="row.parse_status === 'completed'" class="status-dot completed"></span>
-            <span v-else-if="row.parse_status === 'failed'" class="status-dot failed"></span>
-            <span v-else class="status-dot processing pulsing"></span>
-            {{ statusLabel(row.parse_status) }}
-          </span>
 
           <!-- 操作按钮 -->
           <div class="lib-item-actions" @click.stop>
@@ -790,7 +827,7 @@ async function batchDelete() {
                   hidden
                   @change="handleFilesSelected"
                 />
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
                 </svg>
                 <span class="upload-dropzone-text">点击选择 PDF 文件</span>
@@ -846,7 +883,6 @@ async function batchDelete() {
   position: relative;
   display: flex;
   height: 100%;
-  background: #F8FAFC;
 }
 
 /* ========================================
@@ -870,8 +906,8 @@ async function batchDelete() {
 .lib-sidebar {
   width: 240px;
   height: 100%;
-  background: #fff;
-  box-shadow: 1px 0 0 0 #E2E8F0;
+  background: var(--bg-surface);
+  box-shadow: 1px 0 0 0 var(--sidebar-border);
   display: flex;
   flex-direction: column;
   padding: 20px 12px;
@@ -891,10 +927,10 @@ async function batchDelete() {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #E2E8F0;
+  border: 1px solid var(--border-light);
   border-radius: 50%;
   background: #fff;
-  color: #64748B;
+  color: var(--text-secondary);
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
   opacity: 0;
@@ -917,8 +953,8 @@ async function batchDelete() {
 }
 
 .lib-sidebar-toggle:hover {
-  color: #0F172A;
-  border-color: #CBD5E1;
+  color: var(--text-heading);
+  border-color: var(--border-light);
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
 }
 
@@ -937,45 +973,62 @@ async function batchDelete() {
   border-radius: 8px;
   border: none;
   background: transparent;
-  color: #475569;
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   text-align: left;
   transition: all 0.12s;
   width: 100%;
+  position: relative;
+}
+
+.lib-nav-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: transparent;
+  transition: background 0.12s;
 }
 
 .lib-nav-item:hover {
-  background: #F1F5F9;
-  color: #334155;
+  background: var(--border-lighter);
+  color: var(--text-primary);
 }
 
 .lib-nav-item.active {
-  background: #EFF6FF;
-  color: #1D4ED8;
+  background: rgba(241, 237, 228, 0.85);
+  color: var(--text-heading);
   font-weight: 600;
+}
+
+.lib-nav-item.active::before {
+  background: #c49a6c;
 }
 
 .lib-nav-count {
   margin-left: auto;
   font-size: 11px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-weight: 500;
-  background: #F1F5F9;
+  background: var(--border-lighter);
   padding: 1px 7px;
   border-radius: 10px;
 }
 
 .lib-nav-item.active .lib-nav-count {
-  background: #DBEAFE;
-  color: #1D4ED8;
+  background: #e8ddd0;
+  color: var(--el-color-primary-hover);
 }
 
 /* ---- 分隔线 ---- */
 .lib-divider {
   height: 1px;
-  background: #F1F5F9;
+  background: var(--border-lighter);
 }
 
 /* ---- 我的文件夹 ---- */
@@ -990,7 +1043,7 @@ async function batchDelete() {
 .lib-collections-title {
   font-size: 11px;
   font-weight: 600;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -1004,14 +1057,14 @@ async function batchDelete() {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   cursor: pointer;
   transition: all 0.12s;
 }
 
 .lib-collections-add:hover {
-  background: #F1F5F9;
-  color: #475569;
+  background: var(--border-lighter);
+  color: var(--text-primary);
 }
 
 /* ---- 新建分类输入框 ---- */
@@ -1027,16 +1080,16 @@ async function batchDelete() {
   padding: 6px 10px;
   border: none;
   border-radius: 6px;
-  background: #F8FAFC;
+  background: var(--bg-canvas);
   font-size: 13px;
-  color: #334155;
+  color: var(--text-primary);
   outline: none;
-  box-shadow: 0 0 0 1px #E2E8F0;
+  box-shadow: 0 0 0 1px var(--border-light);
   min-width: 0;
 }
 
 .lib-new-cat-input:focus {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 0 0 2px rgba(166, 124, 82, 0.3);
 }
 
 .lib-new-cat-ok,
@@ -1049,17 +1102,17 @@ async function batchDelete() {
 }
 
 .lib-new-cat-ok {
-  background: #3B82F6;
+  background: var(--el-color-primary);
   color: #fff;
 }
 
 .lib-new-cat-cancel {
   background: transparent;
-  color: #94A3B8;
+  color: var(--text-tertiary);
 }
 
 .lib-new-cat-cancel:hover {
-  background: #F1F5F9;
+  background: var(--border-lighter);
 }
 
 /* ---- 分类列表项 ---- */
@@ -1075,25 +1128,36 @@ async function batchDelete() {
 }
 
 .lib-collection-item:hover {
-  background: #F1F5F9;
+  background: var(--border-lighter);
 }
 
 .lib-collection-item.active {
-  background: #EFF6FF;
+  background: rgba(241, 237, 228, 0.85);
+}
+
+.lib-collection-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: #c49a6c;
 }
 
 .lib-col-icon {
   flex-shrink: 0;
-  color: #94A3B8;
+  color: var(--text-tertiary);
 }
 
 .lib-collection-item.active .lib-col-icon {
-  color: #3B82F6;
+  color: var(--sidebar-accent);
 }
 
 .lib-col-name {
   font-size: 13px;
-  color: #475569;
+  color: var(--text-primary);
   flex: 1;
   min-width: 0;
   white-space: nowrap;
@@ -1102,8 +1166,23 @@ async function batchDelete() {
 }
 
 .lib-collection-item.active .lib-col-name {
-  color: #1D4ED8;
+  color: var(--text-heading);
   font-weight: 600;
+}
+
+.lib-col-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  background: var(--bg-canvas);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.lib-collection-item.active .lib-col-count {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
 }
 
 .lib-col-actions {
@@ -1121,14 +1200,14 @@ async function batchDelete() {
   border: none;
   border-radius: 5px;
   background: transparent;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   cursor: pointer;
   transition: all 0.1s;
 }
 
 .lib-col-action-btn:hover {
-  background: #E2E8F0;
-  color: #475569;
+  background: var(--border-light);
+  color: var(--text-primary);
 }
 
 .lib-col-action-btn.danger:hover {
@@ -1141,11 +1220,11 @@ async function batchDelete() {
   padding: 4px 8px;
   border: none;
   border-radius: 6px;
-  background: #F8FAFC;
+  background: var(--bg-canvas);
   font-size: 13px;
-  color: #334155;
+  color: var(--text-primary);
   outline: none;
-  box-shadow: 0 0 0 2px #3B82F6;
+  box-shadow: 0 0 0 2px var(--el-color-primary);
 }
 
 /* ========================================
@@ -1160,27 +1239,44 @@ async function batchDelete() {
   position: relative;
 }
 
-/* ---- Header (single-row toolbar) ---- */
+/* ---- Header (floating toolbar capsule) ---- */
 .lib-header {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 14px 24px 14px 24px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 24px 0;
   flex-shrink: 0;
-  flex-wrap: nowrap;
+}
+
+.lib-header-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.lib-header-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lib-main.is-sidebar-collapsed .lib-header-title-group {
+  padding-left: 20px;
 }
 
 .lib-header-title {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 700;
-  color: #0F172A;
-  margin: 0 0 0 16px;
+  color: var(--text-heading);
+  margin: 0;
   white-space: nowrap;
 }
 
 .lib-header-count {
-  font-size: 13px;
-  color: #94A3B8;
+  font-size: 12px;
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
@@ -1189,43 +1285,101 @@ async function batchDelete() {
   min-width: 8px;
 }
 
+.lib-toolbar-capsule {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 5px 8px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+  flex-wrap: wrap;
+}
+
+.lib-toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-light);
+  flex-shrink: 0;
+}
+
 .lib-sort-select {
   padding: 6px 10px;
   border: none;
   border-radius: 8px;
-  background: #fff;
+  background: transparent;
   font-size: 13px;
-  color: #475569;
+  color: var(--text-primary);
   outline: none;
-  box-shadow: 0 0 0 1px #E2E8F0;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .lib-date-picker {
-  width: 230px;
+  width: 200px;
 }
 .lib-date-picker .el-input__wrapper {
   border-radius: 8px !important;
-  box-shadow: 0 0 0 1px #E2E8F0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
 }
 .lib-date-picker .el-input__wrapper:hover {
-  box-shadow: 0 0 0 1px #6366F1 !important;
+  box-shadow: none !important;
 }
 
 .lib-filter-clear {
   padding: 4px 10px;
   border: none;
-  border-radius: 6px;
-  background: #FEF2F2;
-  color: #DC2626;
+  border-radius: 999px;
+  background: var(--bg-canvas);
+  color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .lib-filter-clear:hover {
-  background: #FEE2E2;
+  background: var(--border-lighter);
+  color: var(--text-primary);
+}
+
+.lib-more-filters-btn {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.lib-more-filters-btn:hover,
+.lib-more-filters-btn.active {
+  background: var(--bg-canvas);
+  color: var(--el-color-primary);
+}
+
+.lib-filter-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--el-color-primary);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
 }
 
 /* ---- 搜索框 ---- */
@@ -1237,35 +1391,34 @@ async function batchDelete() {
 
 .lib-search-icon {
   position: absolute;
-  left: 12px;
+  left: 10px;
+  color: var(--text-tertiary);
   pointer-events: none;
 }
 
 .lib-search-input {
-  width: 180px;
-  padding: 6px 30px 6px 32px;
+  width: 148px;
+  padding: 5px 28px 5px 28px;
   border: none;
   border-radius: 8px;
-  background: #fff;
+  background: transparent;
   font-size: 13px;
-  color: #334155;
+  color: var(--text-primary);
   outline: none;
-  box-shadow: 0 0 0 1px #E2E8F0;
-  transition: box-shadow 0.15s, width 0.2s;
+  transition: width 0.2s;
 }
 
 .lib-search-input:focus {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
-  width: 220px;
+  width: 188px;
 }
 
 .lib-search-input::placeholder {
-  color: #94A3B8;
+  color: var(--text-tertiary);
 }
 
 .lib-search-clear {
   position: absolute;
-  right: 6px;
+  right: 4px;
   width: 20px;
   height: 20px;
   display: flex;
@@ -1273,58 +1426,60 @@ async function batchDelete() {
   justify-content: center;
   border: none;
   border-radius: 50%;
-  background: #E2E8F0;
-  color: #64748B;
+  background: var(--border-lighter);
+  color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
   line-height: 1;
 }
 
 .lib-search-clear:hover {
-  background: #CBD5E1;
+  background: var(--border-light);
 }
 
-/* ---- 上传按钮 ---- */
+/* ---- 上传按钮（工具栏内，视觉降维） ---- */
 .lib-upload-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 16px;
-  background: #3B82F6;
-  color: #fff;
+  gap: 5px;
+  padding: 6px 12px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
   border: none;
   border-radius: 8px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s, box-shadow 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .lib-upload-btn:hover {
-  background: #2563EB;
+  background: var(--el-color-primary);
+  color: #fff;
 }
 
 /* ---- 文献列表 ---- */
 .lib-list-wrap {
   flex: 1;
   overflow-y: auto;
-  padding: 0 0px 28px;
-  padding-bottom: 80px; /* 为批量操作栏留空 */
+  padding: 0 24px 80px;
 }
 
-/* ── A-Z 首字母筛选 ── */
-.lib-alpha-bar {
+/* ── A-Z 收纳式筛选 ── */
+.lib-alpha-popover {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  padding: 0 24px 8px 0;
-  background: #fff;
-  border-radius: 10px;
-  overflow-x: auto;
-  margin-bottom: 2px;
+  gap: 4px;
+  margin: 0 24px 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
 }
 
-/* 刷新图标按钮 */
 .lib-alpha-reset {
   width: 32px;
   height: 32px;
@@ -1334,20 +1489,17 @@ async function batchDelete() {
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: #64748B;
+  color: var(--text-secondary);
   cursor: pointer;
-  margin-left: 10px;
-  margin-right: 10px;
   flex-shrink: 0;
   transition: background 0.15s, color 0.15s;
 }
 
 .lib-alpha-reset:hover {
-  background: #F1F5F9;
-  color: #0F172A;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
 }
 
-/* 旋转动效 */
 .lib-alpha-reset.is-spinning svg {
   animation: spin 1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
@@ -1364,87 +1516,90 @@ async function batchDelete() {
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 5px;
+  border-radius: 999px;
   background: transparent;
-  color: #64748B;
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0 8px;
   transition: all 0.12s;
   flex-shrink: 0;
 }
 
-.lib-alpha-btn:first-child {
-  color: #94A3B8;
-  font-weight: 600;
-  margin-right: 4px;
-}
-
 .lib-alpha-btn:hover {
-  background: #F1F5F9;
-  color: #334155;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
 }
 
 .lib-alpha-btn.active {
-  background: #3B82F6;
-  color: #fff;
-  font-weight: 700;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-weight: 600;
 }
 
-/* ---- 全选栏 ---- */
-.lib-select-all-bar {
-  padding: 10px 16px;
-  background: #fff;
-  border-radius: 10px 10px 0 0;
-  box-shadow: 0 1px 0 0 #F1F5F9;
+.panel-fade-enter-active,
+.panel-fade-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.panel-fade-enter-from,
+.panel-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* ---- 列表工具条（全选，与行内复选框对齐） ---- */
+.lib-list-toolbar {
+  padding: 2px 0 8px;
+  border-bottom: 1px solid var(--border-lighter);
 }
 
 .lib-select-all {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
-  color: #64748B;
+  padding-left: 20px;
+  font-size: 12px;
+  color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
 }
 
 .lib-select-all input {
-  accent-color: #3B82F6;
+  accent-color: #a67c52;
   width: 15px;
   height: 15px;
   cursor: pointer;
 }
 
-.lib-list-item {
-  display: flex;
+.lib-list-item,
+.paper-item {
+  display: grid;
+  grid-template-columns: 28px 1fr auto auto;
   align-items: center;
-  padding: 14px 16px;
-  background: #fff;
-  border-radius: 0;
-  margin-bottom: 0;
-  box-shadow: 0 1px 0 0 #F1F5F9;
-  transition: background 0.15s;
+  padding: 16px 20px;
+  background: transparent;
+  border-bottom: 1px solid var(--border-lighter);
+  transition: background 0.12s ease;
   gap: 14px;
   cursor: default;
 }
 
 .lib-list-item.selected {
-  background: #EFF6FF;
+  background: var(--el-color-primary-light-9);
 }
 
 .lib-list-item:last-child {
-  border-radius: 0 0 10px 10px;
-  box-shadow: none;
+  border-bottom: none;
 }
 
 .lib-list-item:hover {
-  background: #F1F5F9;
+  background: var(--bg-canvas);
 }
 
 .lib-list-item.selected:hover {
-  background: #DBEAFE;
+  background: var(--el-color-primary-light-9);
 }
 
 /* ---- 复选框 ---- */
@@ -1455,7 +1610,7 @@ async function batchDelete() {
 }
 
 .lib-item-check input {
-  accent-color: #3B82F6;
+  accent-color: #a67c52;
   width: 15px;
   height: 15px;
   cursor: pointer;
@@ -1467,51 +1622,42 @@ async function batchDelete() {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  cursor: pointer;
 }
 
-.lib-item-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #0F172A;
-  white-space: nowrap;
+.lib-item-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.lib-item-title-row .status-dot {
+  margin-top: 6px;
+}
+
+.lib-item-title,
+.paper-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-heading);
+  line-height: 1.45;
+  margin-bottom: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.lib-item-meta {
+.lib-item-meta,
+.paper-meta {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   font-size: 12px;
-  color: #94A3B8;
+  color: var(--text-secondary);
   flex-wrap: wrap;
-}
-
-.lib-meta-year {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
-  font-size: 11px;
-  font-weight: 500;
-  color: #7C3AED;
-  background: #F5F3FF;
-  border-radius: 4px;
-}
-
-.lib-meta-journal {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
-  font-size: 11px;
-  font-style: italic;
-  color: #059669;
-  background: #ECFDF5;
-  border-radius: 4px;
-  max-width: 220px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .lib-item-authors {
@@ -1521,100 +1667,24 @@ async function batchDelete() {
   overflow: hidden;
 }
 
-.lib-author-chip {
-  display: inline-block;
-  padding: 1px 8px;
-  font-size: 11px;
-  color: #3B82F6;
-  background: #EFF6FF;
-  border-radius: 4px;
-  white-space: nowrap;
-  max-width: 100px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .lib-author-more {
   font-size: 11px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   white-space: nowrap;
 }
 
 .lib-item-date {
   font-size: 12px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 /* ---- 分类标签 ---- */
 .lib-item-cat-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 10px;
-  background: #FFF7ED;
-  color: #C2410C;
-  font-size: 11px;
-  font-weight: 500;
-  border-radius: 4px;
-  white-space: nowrap;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
   flex-shrink: 0;
-}
-
-/* ---- 状态徽章 ---- */
-.lib-item-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 12px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.lib-item-status.completed {
-  background: rgba(16, 185, 129, 0.08);
-  color: #059669;
-}
-
-.lib-item-status.failed {
-  background: rgba(239, 68, 68, 0.08);
-  color: #DC2626;
-}
-
-.lib-item-status.queued,
-.lib-item-status.parsing,
-.lib-item-status.extracting,
-.lib-item-status.vectorizing {
-  background: rgba(245, 158, 11, 0.08);
-  color: #D97706;
-}
-
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.status-dot.completed {
-  background: #10B981;
-}
-
-.status-dot.failed {
-  background: #EF4444;
-}
-
-.status-dot.processing {
-  background: #F59E0B;
-  animation: pulse-dot 1.6s ease-in-out infinite;
-}
-
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.35; transform: scale(0.7); }
 }
 
 /* ---- 操作按钮 ---- */
@@ -1639,14 +1709,14 @@ async function batchDelete() {
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   cursor: pointer;
   transition: all 0.12s;
 }
 
 .lib-item-btn:hover {
-  background: #E2E8F0;
-  color: #475569;
+  background: var(--border-light);
+  color: var(--text-primary);
 }
 
 .lib-item-btn.danger:hover {
@@ -1662,7 +1732,7 @@ async function batchDelete() {
   right: 0;
   background: #fff;
   padding: 14px 28px;
-  box-shadow: 0 -1px 0 0 #E2E8F0, 0 -4px 12px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 -1px 0 0 var(--border-light), 0 -4px 12px rgba(0, 0, 0, 0.04);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1682,24 +1752,24 @@ async function batchDelete() {
 .lib-batch-info {
   font-size: 13px;
   font-weight: 600;
-  color: #334155;
+  color: var(--text-primary);
 }
 
 .lib-batch-select {
   padding: 7px 12px;
   border: none;
   border-radius: 8px;
-  background: #F8FAFC;
+  background: var(--bg-canvas);
   font-size: 13px;
-  color: #334155;
+  color: var(--text-primary);
   outline: none;
-  box-shadow: 0 0 0 1px #E2E8F0;
+  box-shadow: 0 0 0 1px var(--border-light);
   cursor: pointer;
 }
 
 .lib-batch-btn {
   padding: 7px 16px;
-  background: #3B82F6;
+  background: var(--el-color-primary);
   color: #fff;
   border: none;
   border-radius: 8px;
@@ -1710,7 +1780,7 @@ async function batchDelete() {
 }
 
 .lib-batch-btn:hover {
-  background: #2563EB;
+  background: var(--el-color-primary-hover);
 }
 
 .lib-batch-btn-danger {
@@ -1734,7 +1804,7 @@ async function batchDelete() {
 .lib-batch-btn-cancel {
   padding: 7px 14px;
   background: transparent;
-  color: #64748B;
+  color: var(--text-secondary);
   border: none;
   border-radius: 8px;
   font-size: 13px;
@@ -1742,40 +1812,69 @@ async function batchDelete() {
 }
 
 .lib-batch-btn-cancel:hover {
-  background: #F1F5F9;
+  background: var(--border-lighter);
 }
 
 /* ---- 上传拖拽区 ---- */
 .upload-dialog {
-  max-width: 520px;
+  max-width: 440px;
+}
+
+.upload-dialog .modal-header {
+  padding: 14px 20px;
+}
+
+.upload-dialog .modal-body {
+  padding: 16px 20px;
+  gap: 12px;
+}
+
+.upload-dialog .modal-footer {
+  padding: 12px 20px;
+}
+
+.upload-dialog .modal-btn-confirm {
+  padding: 7px 16px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  box-shadow: none;
+}
+
+.upload-dialog .modal-btn-confirm:hover:not(:disabled) {
+  background: var(--el-color-primary);
+  color: #fff;
 }
 
 .upload-dropzone {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 36px 24px;
-  border: 2px dashed #E2E8F0;
-  border-radius: 12px;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 20px 16px;
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: all 0.15s;
+  color: var(--text-tertiary);
 }
 
 .upload-dropzone:hover {
-  border-color: #3B82F6;
-  background: #F8FAFC;
+  border-color: var(--el-color-primary-light-5);
+  background: var(--bg-canvas);
+  color: var(--el-color-primary);
 }
 
 .upload-dropzone-text {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  color: #475569;
+  color: var(--text-primary);
 }
 
 .upload-dropzone-hint {
-  font-size: 12px;
-  color: #94A3B8;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
 .upload-list {
@@ -1793,7 +1892,7 @@ async function batchDelete() {
 .upload-list-name {
   font-size: 13px;
   font-weight: 500;
-  color: #334155;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1801,7 +1900,7 @@ async function batchDelete() {
 
 .upload-list-bar {
   height: 4px;
-  background: #F1F5F9;
+  background: var(--border-lighter);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -1810,7 +1909,7 @@ async function batchDelete() {
   height: 100%;
   border-radius: 2px;
   transition: width 0.3s ease;
-  background: #3B82F6;
+  background: var(--el-color-primary);
 }
 
 .upload-list-fill.done {
@@ -1823,7 +1922,7 @@ async function batchDelete() {
 
 .upload-list-status {
   font-size: 11px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
 }
 
 .upload-list-status.done {
@@ -1841,13 +1940,13 @@ async function batchDelete() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #94A3B8;
+  color: var(--text-tertiary);
 }
 
 .lib-empty h3 {
   font-size: 16px;
   font-weight: 600;
-  color: #64748B;
+  color: var(--text-secondary);
   margin: 0 0 8px;
 }
 
@@ -1861,16 +1960,16 @@ async function batchDelete() {
   padding: 6px 16px;
   border: none;
   border-radius: 8px;
-  background: #3B82F6;
+  background: var(--el-color-primary);
   color: #fff;
   font-size: 13px;
   cursor: pointer;
-  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 1px 3px rgba(166, 124, 82, 0.3);
   transition: background 0.15s;
 }
 
 .lib-empty-clear:hover {
-  background: #2563EB;
+  background: var(--el-color-primary-hover);
 }
 
 /* ========================================
@@ -1879,7 +1978,7 @@ async function batchDelete() {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.4);
+  background: rgba(74, 66, 58, 0.4);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -1923,14 +2022,14 @@ async function batchDelete() {
   align-items: center;
   justify-content: space-between;
   padding: 20px 24px;
-  border-bottom: 1px solid #F1F5F9;
+  border-bottom: 1px solid var(--border-lighter);
   flex-shrink: 0;
 }
 
 .modal-title {
   font-size: 17px;
   font-weight: 700;
-  color: #0F172A;
+  color: var(--text-heading);
   margin: 0;
 }
 
@@ -1943,14 +2042,14 @@ async function batchDelete() {
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .modal-close:hover {
-  background: #F1F5F9;
-  color: #475569;
+  background: var(--border-lighter);
+  color: var(--text-primary);
 }
 
 .modal-body {
@@ -1971,7 +2070,7 @@ async function batchDelete() {
 .modal-field-label {
   font-size: 13px;
   font-weight: 600;
-  color: #475569;
+  color: var(--text-primary);
 }
 
 .modal-input {
@@ -1979,18 +2078,18 @@ async function batchDelete() {
   padding: 10px 14px;
   border: none;
   border-radius: 10px;
-  background: #F8FAFC;
+  background: var(--bg-canvas);
   font-size: 14px;
-  color: #334155;
+  color: var(--text-primary);
   outline: none;
-  box-shadow: 0 0 0 1px #E2E8F0;
+  box-shadow: 0 0 0 1px var(--border-light);
   transition: box-shadow 0.15s;
   box-sizing: border-box;
   font-family: inherit;
 }
 
 .modal-input:focus {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 0 0 2px rgba(166, 124, 82, 0.3);
 }
 
 textarea.modal-input {
@@ -2003,30 +2102,30 @@ textarea.modal-input {
   justify-content: flex-end;
   gap: 10px;
   padding: 16px 24px;
-  border-top: 1px solid #F1F5F9;
+  border-top: 1px solid var(--border-lighter);
   flex-shrink: 0;
 }
 
 .modal-btn-cancel {
   padding: 9px 20px;
   background: #fff;
-  color: #64748B;
+  color: var(--text-secondary);
   border: none;
   border-radius: 10px;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  box-shadow: 0 0 0 1px #E2E8F0;
+  box-shadow: 0 0 0 1px var(--border-light);
   transition: all 0.15s;
 }
 
 .modal-btn-cancel:hover {
-  background: #F8FAFC;
+  background: var(--bg-canvas);
 }
 
 .modal-btn-confirm {
   padding: 9px 24px;
-  background: #3B82F6;
+  background: var(--el-color-primary);
   color: #fff;
   border: none;
   border-radius: 10px;
@@ -2034,12 +2133,12 @@ textarea.modal-input {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
-  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 1px 3px rgba(166, 124, 82, 0.3);
 }
 
 .modal-btn-confirm:hover:not(:disabled) {
-  background: #2563EB;
-  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3);
+  background: var(--el-color-primary-hover);
+  box-shadow: 0 4px 6px rgba(166, 124, 82, 0.3);
 }
 
 .modal-btn-confirm:disabled {

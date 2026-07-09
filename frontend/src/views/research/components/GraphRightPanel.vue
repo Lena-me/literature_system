@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type {
   LiteratureGraph,
@@ -65,9 +65,12 @@ const selectedNode = computed(() => props.selectedPanel.kind === 'node' ? props.
 const selectedEdge = computed(() => props.selectedPanel.kind === 'edge' ? props.selectedPanel.edge : null)
 const isOverview = computed(() => props.panelMode === 'overview')
 const actionRailExpanded = ref(false)
+const showResearchPoints = ref(false)
+const showEdgeEvidence = ref(false)
 
 watch(selectedNode, node => {
   actionRailExpanded.value = false
+  showResearchPoints.value = false
 })
 
 function toggleActionRail() {
@@ -217,7 +220,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
       <div v-if="overviewKeywords.length" class="panel-section">
         <h3>仍可参考的主题线索</h3>
-        <div class="tag-list compact">
+        <div class="tag-list compact tag-theme">
           <span v-for="kw in overviewKeywords.slice(0, 8)" :key="kw">{{ kw }}</span>
         </div>
       </div>
@@ -285,7 +288,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
         <div class="panel-section">
           <h3>关系依据</h3>
           <p class="long-text">{{ bestEdge?.explanation || '系统主要依据共同关键词、语义相似度和研究任务相近性判断论文之间存在关联。' }}</p>
-          <div v-if="bestRelationTypes.length" class="tag-list compact relation-tags">
+          <div v-if="bestRelationTypes.length" class="tag-list compact tag-method relation-tags">
             <span v-for="type in bestRelationTypes" :key="type">{{ type }}</span>
           </div>
         </div>
@@ -418,7 +421,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
           </div>
         </div>
 
-        <div class="tag-list compact">
+        <div class="tag-list compact tag-theme">
           <span v-for="kw in selectedNode.keywords || []" :key="kw">{{ kw }}</span>
           <span v-if="!(selectedNode.keywords || []).length" class="tag-muted">暂无关键词</span>
         </div>
@@ -428,8 +431,21 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
           <p class="long-text readable-text">{{ selectedNode.abstract || '该论文暂无摘要信息。' }}</p>
         </section>
 
-        <section class="detail-block detail-block-last">
-          <h3>研究要点</h3>
+        <section v-if="props.relatedEdgesForNode(selectedNode).length" class="detail-block">
+          <h3>关联路径</h3>
+          <button
+            v-for="edge in props.relatedEdgesForNode(selectedNode).slice(0, 4)"
+            :key="edge.id"
+            class="relation-line-item"
+            @click="emit('selectEdge', edge)"
+          >
+            <span>{{ props.edgeLabel(edge) }} · {{ props.strengthText(edge.strength) }}</span>
+            <strong>{{ props.otherNodeTitle(edge, selectedNode) }}</strong>
+          </button>
+        </section>
+
+        <details class="detail-collapse" :open="showResearchPoints" @toggle="showResearchPoints = ($event.target as HTMLDetailsElement).open">
+          <summary>研究要点</summary>
           <dl class="paper-points-flat">
             <div class="point-row">
               <dt>研究问题</dt>
@@ -444,7 +460,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
               <dd>{{ selectedNode.main_results || '-' }}</dd>
             </div>
           </dl>
-        </section>
+        </details>
       </div>
 
       <div
@@ -491,14 +507,14 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
       <div class="panel-section">
         <h3>关系类型</h3>
-        <div class="tag-list compact">
+        <div class="tag-list compact tag-theme">
           <span v-for="type in selectedEdge.relation_types || []" :key="type">{{ type }}</span>
         </div>
       </div>
 
       <div class="panel-section">
         <h3>共同线索</h3>
-        <div class="tag-list compact">
+        <div class="tag-list compact tag-theme">
           <span v-for="kw in (selectedEdge.shared_keywords?.length ? selectedEdge.shared_keywords : selectedEdge.shared_terms || [])" :key="kw">{{ kw }}</span>
           <span v-if="!(selectedEdge.shared_keywords?.length || selectedEdge.shared_terms?.length)">暂无共同关键词</span>
         </div>
@@ -515,8 +531,10 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
       </div>
 
       <div v-if="edgeEvidence(selectedEdge).length" class="panel-section">
-        <h3>证据片段</h3>
-        <p v-for="snippet in edgeEvidence(selectedEdge)" :key="snippet" class="long-text evidence-snippet">{{ snippet }}</p>
+        <details class="detail-collapse" :open="showEdgeEvidence" @toggle="showEdgeEvidence = ($event.target as HTMLDetailsElement).open">
+          <summary>证据片段</summary>
+          <p v-for="snippet in edgeEvidence(selectedEdge)" :key="snippet" class="long-text evidence-snippet">{{ snippet }}</p>
+        </details>
       </div>
 
       <div class="panel-section">
@@ -533,16 +551,18 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 <style scoped>
 .detail-panel {
-  --graph-blue: #2563eb;
+  --graph-blue: var(--el-color-primary);
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   word-break: break-word;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: none;
   border-radius: 0;
-  box-shadow: none;
+  box-shadow: -4px 0 24px rgba(74, 66, 58, 0.04);
   font-size: 13.5px;
 }
 
@@ -558,13 +578,43 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 18px 20px;
+  padding: 18px 20px 22px;
+}
+
+.detail-collapse {
+  margin-bottom: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-lighter);
+  background: rgba(255, 255, 255, 0.55);
+  overflow: hidden;
+}
+
+.detail-collapse summary {
+  padding: 12px 14px;
+  color: var(--text-heading);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.detail-collapse summary::-webkit-details-marker {
+  display: none;
+}
+
+.detail-collapse[open] summary {
+  border-bottom: 1px solid var(--border-lighter);
+}
+
+.detail-collapse .paper-points-flat,
+.detail-collapse .evidence-snippet {
+  padding: 12px 14px;
 }
 
 .detail-topbar {
   flex-shrink: 0;
   padding: 12px 16px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--border-light);
   background: #fff;
 }
 
@@ -582,14 +632,14 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   padding: 0;
   border: none;
   background: transparent;
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
 }
 
 .back-link:hover {
-  color: #2563eb;
+  color: var(--el-color-primary-hover);
 }
 
 .node-back-link {
@@ -621,9 +671,9 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   padding: 12px 0;
   border: none;
   border-radius: 10px 0 0 10px;
-  background: #dbeafe;
+  background: #e8ddd0;
   cursor: pointer;
-  box-shadow: -2px 0 10px rgba(37, 99, 235, 0.12);
+  box-shadow: -2px 0 10px rgba(166, 124, 82, 0.12);
   transition: background 0.15s ease;
 }
 
@@ -636,7 +686,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   width: 3px;
   height: 16px;
   border-radius: 999px;
-  background: #2563eb;
+  background: var(--el-color-primary-hover);
   opacity: 0.85;
 }
 
@@ -650,9 +700,9 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   min-width: 136px;
   padding: 10px;
   background: #fff;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border-light);
   border-radius: 10px 0 0 10px;
-  box-shadow: -8px 0 28px rgba(15, 23, 42, 0.1);
+  box-shadow: -8px 0 28px rgba(74, 66, 58, 0.1);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%) translateX(12px);
@@ -669,10 +719,10 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 .detail-action-tab {
   padding: 9px 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: #f8fafc;
-  color: #334155;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
@@ -684,8 +734,8 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 .detail-action-tab:hover {
   border-color: #bfdbfe;
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--el-color-primary-light);
+  color: var(--el-color-primary-hover);
 }
 
 .node-detail-body {
@@ -713,7 +763,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   margin: 0 0 12px;
   padding-left: 10px;
   border-left: 3px solid var(--graph-blue);
-  color: #475569;
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
@@ -721,7 +771,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 .section-hint {
   margin: 0 0 12px;
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -754,14 +804,14 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   margin: 0 0 8px;
   padding-left: 10px;
   border-left: 3px solid var(--graph-blue);
-  color: #475569;
+  color: var(--text-primary);
   font-size: 12px;
   font-weight: 600;
 }
 
 .point-row dd {
   margin: 0;
-  color: #334155;
+  color: var(--text-primary);
   font-size: 13.5px;
   line-height: 1.8;
 }
@@ -782,25 +832,25 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 }
 
 .action-primary {
-  border: 1px solid #2563eb;
-  background: #2563eb;
+  border: 1px solid var(--el-color-primary-hover);
+  background: var(--el-color-primary-hover);
   color: #fff;
 }
 
 .action-primary:hover {
-  background: #1d4ed8;
-  border-color: #1d4ed8;
+  background: var(--el-color-primary-hover);
+  border-color: var(--el-color-primary-hover);
 }
 
 .action-secondary {
   border: 1px solid #dbe7f3;
   background: #fff;
-  color: #2563eb;
+  color: var(--el-color-primary-hover);
 }
 
 .action-secondary:hover {
   border-color: #bfdbfe;
-  background: #eff6ff;
+  background: var(--el-color-primary-light);
 }
 
 .inline-actions {
@@ -808,8 +858,8 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 }
 
 .tag-muted {
-  background: #f1f5f9 !important;
-  color: #94a3b8 !important;
+  background: var(--border-lighter) !important;
+  color: var(--text-tertiary) !important;
 }
 
 .eyebrow {
@@ -921,7 +971,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 .source-note p {
   margin: 0;
-  color: #64748b;
+  color: var(--text-secondary);
   line-height: 1.65;
   font-size: 13px;
 }
@@ -938,7 +988,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   border-radius: 999px;
   background: #f1f7fb;
   border: 1px solid #e1ebf4;
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 11px;
   font-weight: 800;
 }
@@ -964,7 +1014,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 .two-metrics div {
   padding: 10px;
   border-radius: 6px;
-  background: #f8fafc;
+  background: var(--bg-canvas);
   border: 1px solid #edf3f8;
 }
 
@@ -1000,10 +1050,21 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 .tag-list span {
   padding: 5px 9px;
   border-radius: 999px;
-  background: #e8faf7;
-  color: #0f766e;
+  background: var(--tag-author-bg);
+  color: var(--tag-author-text);
   font-size: 11.5px;
-  font-weight: 800;
+  font-weight: 600;
+}
+
+.tag-list.tag-theme span,
+.relation-tags span {
+  background: var(--tag-year-bg);
+  color: var(--tag-year-text);
+}
+
+.tag-list.tag-method span {
+  background: var(--tag-journal-bg);
+  color: var(--tag-journal-text);
 }
 
 .tag-list.compact span {
@@ -1026,7 +1087,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   margin-top: 8px;
   text-align: left;
   border-radius: 6px;
-  background: #f8fafc;
+  background: var(--bg-canvas);
   color: #1e293b;
   border: 1px solid #edf3f8;
   transition: border-color 0.16s, background 0.16s;
@@ -1035,7 +1096,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 .related-paper:hover,
 .relation-line-item:hover {
   border-color: #bfdbfe;
-  background: #eff6ff;
+  background: var(--el-color-primary-light);
 }
 
 .related-paper strong,
@@ -1112,7 +1173,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   border: 1px solid #dbe7f3;
   border-radius: 10px;
   background: #fff;
-  color: #2563eb;
+  color: var(--el-color-primary-hover);
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
@@ -1121,7 +1182,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 .action-row button:hover {
   border-color: #bfdbfe;
-  background: #eff6ff;
+  background: var(--el-color-primary-light);
 }
 
 .evidence-snippet {
@@ -1136,14 +1197,14 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   min-height: 66px;
   padding: 10px 12px;
   border-radius: 6px;
-  background: #f8fafc;
+  background: var(--bg-canvas);
   color: #1e293b;
   border: 1px solid #dce5ee;
   line-height: 1.45;
 }
 
 .muted {
-  color: #64748b;
+  color: var(--text-secondary);
   line-height: 1.65;
 }
 
@@ -1152,7 +1213,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 }
 
 .detail-scroll::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--border-light);
   border-radius: 999px;
 }
 
@@ -1164,7 +1225,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 .progress-card p {
   margin: 8px 0 0;
-  color: #64748b;
+  color: var(--text-secondary);
   line-height: 1.6;
 }
 
@@ -1172,14 +1233,14 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
-  background: #e2e8f0;
+  background: var(--border-light);
 }
 
 .paper-progress span {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #2563eb, #14b8a6);
+  background: linear-gradient(90deg, var(--el-color-primary-hover), #14b8a6);
 }
 
 .advice-list,
@@ -1197,7 +1258,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 }
 
 .priority-actions {
-  background: linear-gradient(135deg, #f8fbff, #eef6ff);
+  background: linear-gradient(135deg, #faf7f2, #eef6ff);
   border-color: #cfe0ff;
 }
 
@@ -1206,7 +1267,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 }
 
 .emphasis-section {
-  background: linear-gradient(135deg, #f8fbff, #eff6ff);
+  background: linear-gradient(135deg, #faf7f2, var(--el-color-primary-light));
   border-color: #cfe0ff;
 }
 
@@ -1231,13 +1292,13 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   border-radius: 13px;
   border: 1px solid #dbe6f0;
   background: #fff;
-  color: #334155;
+  color: var(--text-primary);
   font-weight: 850;
   font-family: inherit;
 }
 
 .action-pill.primary {
-  background: linear-gradient(135deg, #2563eb, #0ea5e9);
+  background: linear-gradient(135deg, var(--el-color-primary-hover), #0ea5e9);
   color: #fff;
   border-color: transparent;
 }
@@ -1247,7 +1308,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
   width: 100%;
   margin-top: 7px;
   padding: 8px 11px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border-light);
   border-radius: 13px;
   background: #fff;
   color: #1e293b;
@@ -1271,7 +1332,7 @@ function edgeEvidence(edge: LiteratureGraphEdge) {
 
 .compact-suggestion {
   margin: 2px 2px 0;
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 12.5px;
   line-height: 1.6;
 }

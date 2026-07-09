@@ -12,8 +12,10 @@ export const featuresApi = {
     http.delete(`/comparisons/${id}`) as unknown as Promise<any>,
   guide: (paper_id: number) => http.post('/experiments/reproducibility-guides', { paper_id }),
   overview: () => http.get('/learning-records/overview'),
-  monthlyReport: (month: string) => http.get('/learning-records/monthly-report', { params: { month } }) as unknown as Promise<{
+  monthlyReport: (month: string, force = false) => http.get('/learning-records/monthly-report', { params: { month, force } }) as unknown as Promise<{
     month: string
+    period_type: 'monthly'
+    period: string
     paper_count: number
     report_count: number
     graph_count: number
@@ -22,10 +24,20 @@ export const featuresApi = {
     focus_minutes: number
     paper_titles: string[]
     summary: string
+    cached?: boolean
+    generated_at?: string
+    questions?: Array<{ question: string; session: string }>
   }>,
   record: (payload: { paper_id?: number; event_type: string; event_data?: Record<string, unknown> }) => http.post('/learning-records', payload),
   evidenceMatrix: (payload: { paper_ids: number[]; question?: string; dimensions?: string[] }) =>
     http.post('/analytics/evidence-matrix', payload) as unknown as Promise<any>,
   researchRadar: (payload: { paper_ids: number[] }) => http.post('/analytics/research-radar', payload),
-  hotspots: () => http.get('/analytics/hotspots')
+  hotspots: () => http.get('/analytics/hotspots'),
+  greeting: () => http.get('/dashboard/greeting') as unknown as Promise<{
+    greeting: string
+    emoji?: string
+    recent_focus: string[]
+    suggestion: string
+    generated_at?: string
+  }>,
 }

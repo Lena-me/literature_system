@@ -1,46 +1,104 @@
 /* ============================================================================
-   学术级浅色主题 (Academic Light Mode Design Tokens)
-   设计理念："纸质呼吸感"、"极简弱边框"、"高对比度柔和文本"、"知性蓝点缀"
+   Paper-Material System — 莫兰迪浅咖 · Canvas / Surface 分层
    ============================================================================ */
 
 :root {
-  /* ── 1. 背景系统 ── */
-  --academic-canvas: #F8FAFC;       /* 全局底色 / 极窄侧边栏 */
-  --academic-panel: #FFFFFF;        /* 内容面板 / 卡片 / 抽屉 */
+  /* ==========================================
+     1. 品牌色彩 (Brand Colors)
+  ========================================== */
+  --el-color-primary: #a67c52 !important;
+  --el-color-primary-hover: #8b6640 !important;
+  --el-color-primary-light: #f1ede4 !important;
+  --el-color-primary-light-3: #d4c4a8 !important;
+  --el-color-primary-light-5: #d4c4a8 !important;
+  --el-color-primary-light-7: #e8ddd0 !important;
+  --el-color-primary-light-8: #ede4d4 !important;
+  --el-color-primary-light-9: #f1ede4 !important;
 
-  /* ── 2. 边框系统 ── */
-  --academic-border: #E2E8F0;       /* 柔和分割线 */
-  --academic-border-hover: #CBD5E1; /* 交互态边框 */
+  /* ==========================================
+     2. 背景与空间 (Surfaces & Canvas)
+  ========================================== */
+  --bg-canvas: #f8f6f0;
+  --bg-surface: #ffffff;
+  --bg-sidebar: #f5f2eb;
 
-  /* ── 3. 文本系统 ── */
-  --academic-text-main: #0F172A;    /* 标题 / 强调文字 */
-  --academic-text-body: #334155;    /* 正文深灰，防眩光 */
-  --academic-text-muted: #64748B;   /* 次要信息：DOI / 时间 / 占位符 */
+  /* ==========================================
+     3. 文本层级 (Typography)
+  ========================================== */
+  --text-heading: #4a423a;
+  --text-primary: #5d534a;
+  --text-secondary: #8c8275;
+  --text-tertiary: #a89f93;
+  --text-muted: var(--text-secondary);
 
-  /* ── 4. 主题色系统 ── */
-  --academic-primary: #2563EB;      /* 知性蓝 */
-  --academic-primary-hover: #1D4ED8;
-  --academic-primary-light: #EFF6FF;/* 极浅蓝：选中背景 / 筹码底色 */
+  /* ==========================================
+     4. 分割与边框 (Borders)
+  ========================================== */
+  --border-light: #e8e2d6;
+  --border-lighter: #f1ede4;
 
-  /* ── 5. 阴影 ── */
-  --shadow-soft: 0 2px 10px -2px rgba(0, 0, 0, 0.04);
-  --shadow-float: 0 10px 30px -5px rgba(0, 0, 0, 0.08);
+  /* ==========================================
+     5. 圆角
+  ========================================== */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
 
-  /* ── 6. 排版 ── */
+  /* ==========================================
+     6. 阴影系统 (Shadows)
+  ========================================== */
+  --shadow-sm: 0 1px 2px 0 rgba(93, 83, 74, 0.06);
+  --shadow-md: 0 4px 6px -1px rgba(93, 83, 74, 0.08), 0 2px 4px -2px rgba(93, 83, 74, 0.04);
+  --shadow-lg: 0 20px 25px -5px rgba(93, 83, 74, 0.1), 0 8px 10px -6px rgba(93, 83, 74, 0.04);
+
+  /* ==========================================
+     7. 语义化标签 (Tags)
+  ========================================== */
+  --tag-author-bg: #f1ede4;
+  --tag-author-text: #6b5f52;
+  --tag-year-bg: #ede8dc;
+  --tag-year-text: #7a6548;
+  --tag-journal-bg: #e8efe4;
+  --tag-journal-text: #4a6b45;
+
+  /* ==========================================
+     8. 侧边栏 & 强调色
+  ========================================== */
+  --sidebar-text-main: var(--text-heading);
+  --sidebar-text-muted: var(--text-secondary);
+  --sidebar-bg-subtle: var(--el-color-primary-light);
+  --sidebar-border: rgba(218, 212, 198, 0.55);
+  --sidebar-accent: #8b7355;
+  --sidebar-indicator: #c49a6c;
+  --accent-caramel: #c49a6c;
+  --accent-sage: #7d9b76;
+
+  /* ── 兼容旧变量（全站组件渐进迁移） ── */
+  --academic-canvas: var(--bg-canvas);
+  --academic-panel: var(--bg-surface);
+  --academic-border: var(--border-light);
+  --academic-border-hover: #d8d0c4;
+  --academic-text-main: var(--text-heading);
+  --academic-text-body: var(--text-primary);
+  --academic-text-muted: var(--text-secondary);
+  --academic-primary: var(--el-color-primary);
+  --academic-primary-hover: var(--el-color-primary-hover);
+  --academic-primary-light: var(--el-color-primary-light);
+  --shadow-soft: var(--shadow-sm);
+  --shadow-float: var(--shadow-lg);
   --line-academic: 1.65;
 
-  /* ── 兼容旧变量（用于未迁移的旧组件） ── */
-  --brand: #2563EB;
-  --brand-2: #1D4ED8;
-  --brand-3: #10B981;
-  --danger: #EF4444;
-  --bg: var(--academic-canvas);
-  --panel: rgba(255, 255, 255, 0.0);
-  --panel-2: rgba(0, 0, 0, 0.04);
-  --line: var(--academic-border);
-  --text: var(--academic-text-main);
-  --muted: var(--academic-text-muted);
-  --shadow: var(--shadow-soft);
+  --brand: var(--el-color-primary);
+  --brand-2: var(--el-color-primary-hover);
+  --brand-3: var(--accent-sage);
+  --danger: #c45c5c;
+  --bg: var(--bg-canvas);
+  --panel: rgba(255, 255, 255, 0);
+  --panel-2: rgba(74, 66, 58, 0.04);
+  --line: var(--border-light);
+  --text: var(--text-heading);
+  --muted: var(--text-secondary);
+  --shadow: var(--shadow-sm);
 }
 
 * { box-sizing: border-box; }
@@ -49,61 +107,85 @@ html, body, #app {
   margin: 0;
   min-height: 100%;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-  background: var(--academic-canvas);
-  color: var(--academic-text-body);
   text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 h1, h2, h3, h4, h5, h6 {
-  color: var(--academic-text-main);
+  color: var(--text-heading);
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 
 a { color: inherit; text-decoration: none; }
 
-/* ── 全局工具类 ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--border-light);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-tertiary);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .glass {
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  box-shadow: var(--shadow-soft);
-  /* 浅色主题不需要 backdrop-filter blur，保留做渐进增强 */
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-sm);
 }
 
 .page-shell {
   min-height: 100vh;
-  background: var(--academic-canvas);
+  background: var(--bg-canvas);
 }
 
 .gradient-title {
-  background: linear-gradient(120deg, var(--academic-text-main) 0%, var(--academic-primary) 50%, var(--brand-3) 100%);
+  background: linear-gradient(120deg, var(--text-heading) 0%, var(--el-color-primary) 50%, var(--accent-sage) 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   color: transparent;
 }
 
 .soft-card {
-  border-radius: 24px;
+  border-radius: var(--radius-lg);
   padding: 22px;
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  box-shadow: var(--shadow-soft);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-sm);
 }
 
 .slim-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+  scrollbar-color: var(--border-light) transparent;
 }
 
 .slim-scroll::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 .slim-scroll::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.12);
-  border-radius: 999px;
+  background-color: var(--border-light);
+  border-radius: 4px;
+}
+
+.slim-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-tertiary);
 }
 
 .status-dot {
@@ -112,27 +194,45 @@ a { color: inherit; text-decoration: none; }
   border-radius: 50%;
   display: inline-block;
   margin-right: 7px;
-  background: var(--brand-3);
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+  background: var(--accent-sage);
+  box-shadow: 0 0 12px rgba(125, 155, 118, 0.25);
 }
 
-/* Element Plus 全局覆盖 */
-.el-card, .el-table {
-  background: var(--academic-panel) !important;
+.el-card,
+.el-dialog,
+.el-popover,
+.el-table {
+  border-color: var(--border-light) !important;
+  box-shadow: var(--shadow-sm) !important;
+  background: var(--bg-surface) !important;
 }
 
-.el-input__wrapper, .el-textarea__inner {
-  background: var(--academic-panel) !important;
+.el-input__wrapper,
+.el-textarea__inner {
+  background: var(--bg-surface) !important;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--el-color-primary);
+  --el-button-border-color: var(--el-color-primary);
+  --el-button-hover-bg-color: var(--el-color-primary-hover);
+  --el-button-hover-border-color: var(--el-color-primary-hover);
 }
 
 .el-button.is-glow {
-  background: linear-gradient(135deg, var(--academic-primary), var(--academic-primary-hover));
+  background: linear-gradient(135deg, var(--el-color-primary), var(--el-color-primary-hover));
   border: 0;
   color: #fff;
   font-weight: 700;
-  box-shadow: var(--shadow-float);
+  box-shadow: var(--shadow-md);
 }
 
 .el-button.is-glow:hover {
-  background: linear-gradient(135deg, var(--academic-primary-hover), var(--academic-primary));
+  background: linear-gradient(135deg, var(--el-color-primary-hover), var(--el-color-primary));
+}
+
+/* 原生表单控件 — 避免系统默认蓝色 */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: #a67c52;
 }

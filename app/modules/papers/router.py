@@ -25,6 +25,7 @@ from app.models import Category, ContentItem, FiguresTable, Paper, ParseTask, Us
 from app.schemas import CategoryIn, ChunkUploadCompleteIn, ChunkUploadInitIn, PaperOut, PaperUpdateIn
 from app.services.audit_service import audit_action
 from app.services.parse_status_events import TERMINAL_PARSE_STATUSES, channel_for_user, publish_parse_status
+from app.services.pipeline_service import PaperPipelineService
 from app.services.quota_service import QuotaService
 from app.utils.json_utils import dumps, loads
 from app.utils.mineru_text import unwrap_mineru_json_text
@@ -615,6 +616,28 @@ async def reparse_paper(paper_id: int, db: AsyncSession = Depends(get_db), user:
         title=paper.title or paper.original_filename,
     )
     return {'message': '已重新加入解析队列', 'task_id': task.id}
+
+
+@router.post('/{paper_id}/rebuild-subject-hierarchy')
+async def rebuild_subject_hierarchy(
+    paper_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """基于已有 subject_labels 重建学科层级（不重新跑 PDF 解析）。"""
+    paper = await db.get(Paper, paper_id)
+    if not paper or paper.user_id != user.id or paper.is_deleted:
+        raise HTTPException(404, '文献不存在')
+
+    try:
+        label_count = await asyncio.to_thread(
+            PaperPipelineService().rebuild_subject_hierarchy_for_paper,
+            paper.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {'message': '学科层级已重建', 'label_count': label_count}
 
 
 @router.get('/{paper_id}/file')

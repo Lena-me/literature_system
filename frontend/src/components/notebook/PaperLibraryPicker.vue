@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useNotebookStore } from '@/stores/notebook'
@@ -128,7 +128,7 @@ defineExpose({ openPicker })
 .picker-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.3);
+  background: rgba(74, 66, 58, 0.3);
   display: grid;
   place-items: center;
   z-index: 200;

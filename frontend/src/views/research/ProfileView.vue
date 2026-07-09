@@ -1,15 +1,14 @@
-<script setup lang="ts">
-import { onMounted, ref, computed, nextTick } from 'vue'
+﻿<script setup lang="ts">
+import { onMounted, onUnmounted, ref, computed, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { usePaperStore } from '@/stores/papers'
 import { featuresApi } from '@/api/features'
 import { authApi } from '@/api/auth'
 import * as echarts from 'echarts'
-import MarkdownIt from 'markdown-it'
+import MarkdownRenderer from '@/components/common/MarkdownRenderer.vue'
+import { NODE_PALETTE } from '@/utils/graphColors'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
-
-const md = new MarkdownIt({ breaks: true, html: false })
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -25,16 +24,16 @@ const showPhoneModal = ref(false)
 const showEmailModal = ref(false)
 const showUsernameModal = ref(false)
 const showPasswordModal = ref(false)
-const sidebarCollapsed = ref(false)
 const heatmapMode = ref<'upload' | 'focus'>('upload')
+const heatmapTooltip = ref({ visible: false, x: 0, y: 0, text: '' })
 const reportLoading = ref(false)
 const reportLoadingText = ref('正在生成报告...')
 const monthlyReportData = ref<any>(null)
 const reportSummaryRef = ref<HTMLElement | null>(null)
 const loadingPhrases = [
-  'AI 正在翻阅你本月挑灯夜读的文献...',
+  'AI 正在翻阅你最近挑灯夜读的文献...',
   '正在分析你的知识图谱结构...',
-  '复盘本月科研问答记录中...',
+  '复盘近期科研问答记录中...',
   '提炼你的研究脉络与进展...',
   '正在生成个性化学习建议...',
   '马上就好，AI正在推敲措辞...',
@@ -128,234 +127,200 @@ async function updatePassword() {
   }
 }
 
-// ============ 学科覆盖雷达图模态框 ============
+// ============ 学科覆盖雷达图 ============
 const showDomainModal = ref(false)
-const selectedDomainIndex = ref(0)
-const radarChartRef = ref<HTMLDivElement | null>(null)
-const radarChartInstance = ref<echarts.ECharts | null>(null)
+const modalDomainIndex = ref(0)
+const mainRoseChartRef = ref<HTMLDivElement | null>(null)
+const mainRoseChartInstance = ref<echarts.ECharts | null>(null)
+const mainSubRadarChartRef = ref<HTMLDivElement | null>(null)
+const mainSubRadarChartInstance = ref<echarts.ECharts | null>(null)
+const modalRadarChartRef = ref<HTMLDivElement | null>(null)
+const modalRadarChartInstance = ref<echarts.ECharts | null>(null)
 
 const domainList = computed(() => overview.value.knowledge_domains?.top_domains || [])
-const selectedDomain = computed(() => domainList.value[selectedDomainIndex.value] || null)
 const crossDomainRate = computed(() => overview.value.knowledge_domains?.cross_domain_rate || 0)
 const crossDomainPapers = computed(() => overview.value.knowledge_domains?.cross_domain_papers || 0)
 const totalDomainPapers = computed(() => overview.value.knowledge_domains?.total_papers || 0)
 const subDomainGranularity = computed(() => overview.value.knowledge_domains?.sub_domain_granularity || 0)
 
+const primaryCoverageDomains = computed(() =>
+  domainList.value.filter((d: any) => !d.is_interdisciplinary),
+)
+
+function getEffectiveSubDomains(domain: any) {
+  if (!domain?.sub_domains?.length) return []
+  return domain.sub_domains.filter((s: any) => !s.is_primary_only)
+}
+
+function shouldShowSubDomainRadar(domain: any) {
+  if (!domain || domain.is_interdisciplinary || domain.is_coverage_overview) return false
+  return getEffectiveSubDomains(domain).length >= 3
+}
+
+/** 左侧列表：仅保留有效子领域 ≥3 的一级学科，其余归入「领域分布」 */
+const radarSidebarDomains = computed(() =>
+  domainList.value.filter((d: any) =>
+    !d.is_interdisciplinary && getEffectiveSubDomains(d).length >= 3,
+  ),
+)
+
+const sidebarDomainList = computed(() => {
+  const radarItems = radarSidebarDomains.value
+  const backendFallback = domainList.value.find((d: any) => d.is_interdisciplinary)
+  const hasNonRadarPrimaries = primaryCoverageDomains.value.some(
+    (d: any) => !radarItems.some((r: any) => r.name === d.name),
+  )
+
+  if (!hasNonRadarPrimaries && !backendFallback) return radarItems
+
+  if (backendFallback) return [...radarItems, backendFallback]
+
+  return [...radarItems, {
+    name: '领域分布',
+    frequency: primaryCoverageDomains.value.reduce((sum: number, d: any) => sum + (d.frequency || 0), 0),
+    is_interdisciplinary: true,
+    is_coverage_overview: true,
+    sub_domains: [],
+    sub_domain_count: primaryCoverageDomains.value.length,
+  }]
+})
+
+const primaryDomain = computed(() => radarSidebarDomains.value[0] || sidebarDomainList.value[0] || null)
+
+const topRadarDomain = computed(() => {
+  if (!radarSidebarDomains.value.length) return null
+  return [...radarSidebarDomains.value].sort((a: any, b: any) => b.frequency - a.frequency)[0]
+})
+
+const roseLegendDomains = computed(() =>
+  primaryCoverageDomains.value.slice(0, 4).map((d: any, i: number) => ({
+    name: d.name,
+    frequency: d.frequency,
+    color: [NODE_PALETTE.caramel, NODE_PALETTE.sage, NODE_PALETTE.terracotta, NODE_PALETTE.mauve][i % 4],
+  })),
+)
+
+const modalSelectedDomain = computed(() => radarSidebarDomains.value[modalDomainIndex.value] || null)
+
+const modalChartTitle = computed(() => {
+  if (!modalSelectedDomain.value) return '子领域分布'
+  return `${modalSelectedDomain.value.name} · 子领域分布`
+})
+
+const coverageOverviewItem = computed(() =>
+  sidebarDomainList.value.find((d: any) => !shouldShowSubDomainRadar(d)) || null,
+)
+
 function openDomainModal() {
+  if (!radarSidebarDomains.value.length) return
   showDomainModal.value = true
-  selectedDomainIndex.value = 0
-  setTimeout(renderRadarChart, 100)
+  modalDomainIndex.value = 0
 }
 
-function selectDomain(index: number) {
-  selectedDomainIndex.value = index
-  setTimeout(renderRadarChart, 50)
+function selectModalDomain(index: number) {
+  modalDomainIndex.value = index
 }
 
-function renderRadarChart() {
-  if (!radarChartRef.value) return
-  if (radarChartInstance.value) {
-    radarChartInstance.value.dispose()
+watch([showDomainModal, modalDomainIndex], ([open]) => {
+  if (!open) return
+  nextTick(() => renderModalRadarChart())
+})
+
+function initChart(el: HTMLDivElement | null, instanceRef: { value: echarts.ECharts | null }) {
+  if (!el) return null
+  if (instanceRef.value) {
+    instanceRef.value.dispose()
+    instanceRef.value = null
   }
-  radarChartInstance.value = echarts.init(radarChartRef.value)
+  instanceRef.value = echarts.init(el, undefined, { renderer: 'canvas' })
+  return instanceRef.value
+}
 
-  const domain = selectedDomain.value
-  if (!domain || !domain.sub_domains || domain.sub_domains.length === 0) {
-    radarChartInstance.value.setOption({
+function formatRadarAxisName(name: string, charsPerLine = 4): string {
+  if (name.length <= charsPerLine) return name
+  const lines: string[] = []
+  for (let i = 0; i < name.length; i += charsPerLine) {
+    lines.push(name.slice(i, i + charsPerLine))
+  }
+  return lines.join('\n')
+}
+
+function renderRoseChart(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  instance: any,
+  domains: Array<{ name: string; frequency: number }>,
+  isCompact: boolean,
+) {
+  if (!domains.length) {
+    instance.setOption({
       backgroundColor: 'transparent',
       title: {
-        text: '暂无子领域数据',
+        text: '暂无数据',
         left: 'center',
         top: 'center',
-        textStyle: { color: '#94a3b8', fontSize: 14, fontWeight: 'normal' }
-      }
+        textStyle: { color: 'var(--text-tertiary)', fontSize: 12, fontWeight: 'normal' },
+      },
     })
     return
   }
 
-  const subDomains = domain.sub_domains.slice(0, 8)
+  const sorted = [...domains].sort((a, b) => b.frequency - a.frequency)
+  const palette = [
+    NODE_PALETTE.caramel,
+    NODE_PALETTE.sage,
+    NODE_PALETTE.terracotta,
+    NODE_PALETTE.mauve,
+    '#d4c4a8',
+    '#b8aea4',
+  ]
+
+  instance.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item',
+      formatter: (p: any) => `${p.name}<br/><span style="color:#a67c52;font-weight:600">${p.value} 篇 · ${p.percent}%</span>`,
+    },
+    series: [{
+      type: 'pie',
+      roseType: 'area',
+      radius: isCompact ? ['14%', '76%'] : [26, 96],
+      center: ['50%', '50%'],
+      itemStyle: {
+        borderRadius: 5,
+        borderColor: '#fff',
+        borderWidth: 2,
+      },
+      label: { show: false },
+      labelLine: { show: false },
+      emphasis: {
+        scale: true,
+        scaleSize: 6,
+      },
+      data: sorted.map((d, i) => ({
+        name: d.name,
+        value: d.frequency,
+        itemStyle: { color: palette[i % palette.length] },
+      })),
+      animationDuration: 600,
+      animationEasing: 'cubicOut',
+    }],
+  })
+}
+
+function buildRadarOption(domain: any, isCompact: boolean) {
+  const color = '#a67c52'
+  const subDomains = getEffectiveSubDomains(domain).slice(0, 8)
+  if (!subDomains.length) return null
+
   const maxFreq = Math.max(...subDomains.map((s: any) => s.frequency), 1)
-
-  const radarColors = ['#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f97316']
-  const color = domain.is_interdisciplinary ? '#8b5cf6' : radarColors[selectedDomainIndex.value % radarColors.length]
-
-  if (domain.is_interdisciplinary) {
-    const count = subDomains.length
-    const allSubDomains = subDomains
-
-    const minF = Math.min(...allSubDomains.map((s: any) => s.frequency))
-    const maxF = maxFreq
-    const freqRange = maxF - minF || 1
-
-    const scatterData = allSubDomains.map((sd: any, i: number) => {
-      const baseAngle = (i / count) * 360
-      const angleJitter = (Math.random() - 0.5) * 40
-      const angle = (baseAngle + angleJitter + 360) % 360
-
-      const freqRatio = (sd.frequency - minF) / freqRange
-      const radiusBase = 75 - freqRatio * 50
-      const stagger = (i % 3) * 4
-      const radius = Math.max(22, Math.min(78, radiusBase + stagger))
-
-      const size = Math.max(6, Math.min(18, sd.frequency * 2.5 + 6))
-
-      return {
-        value: [radius, angle],
-        name: sd.name,
-        symbolSize: size,
-        frequency: sd.frequency,
-        papers: sd.papers || []
-      }
-    })
-
-    radarChartInstance.value.setOption({
-      backgroundColor: 'transparent',
-      tooltip: {
-        trigger: 'item',
-        formatter: (params: any) => {
-          const name = params.name
-          if (!name || name === '用户') return ''
-          const data = params.data || {}
-          const freq = data.frequency
-          const papers: string[] = data.papers || []
-          let html = `<div style="font-weight:600;font-size:13px;margin-bottom:4px;">${name}</div>`
-          if (freq != null) {
-            html += `<div style="color:#8b5cf6;font-weight:600;font-size:12px;margin-bottom:${papers.length > 0 ? '6px' : '0'};">${freq}篇</div>`
-          }
-          if (papers.length > 0) {
-            const list = papers.slice(0, 8).map((t: string) =>
-              `<div style="padding:2px 0;font-size:12px;color:#475569;border-bottom:1px solid #f1f5f9;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">· ${t}</div>`
-            ).join('')
-            html += `<div style="margin-top:2px;">${list}</div>`
-          }
-          return html
-        }
-      },
-      polar: {
-        center: ['50%', '50%'],
-        radius: '88%',
-        axisLine: {
-          show: true,
-          lineStyle: { color: '#e2e8f0', width: 1 }
-        },
-        splitLine: {
-          show: true,
-          lineStyle: { color: '#e2e8f0', type: 'dashed', width: 1 }
-        },
-        splitArea: {
-          show: true,
-          areaStyle: {
-            color: ['rgba(139, 92, 246, 0.02)', 'rgba(139, 92, 246, 0.04)', 'rgba(139, 92, 246, 0.06)', 'rgba(139, 92, 246, 0.08)', 'rgba(139, 92, 246, 0.1)']
-          }
-        }
-      },
-      angleAxis: {
-        type: 'value',
-        min: 0,
-        max: 360,
-        show: false
-      },
-      radiusAxis: {
-        type: 'value',
-        min: 0,
-        max: 100,
-        show: false
-      },
-      series: [
-        {
-          name: '用户',
-          type: 'scatter',
-          coordinateSystem: 'polar',
-          data: [{
-            value: [0, 0],
-            name: '用户',
-            symbol: 'circle',
-            symbolSize: 18,
-            itemStyle: {
-              color: '#8b5cf6',
-              borderColor: '#fff',
-              borderWidth: 3,
-              shadowBlur: 10,
-              shadowColor: 'rgba(139, 92, 246, 0.4)'
-            },
-            label: {
-              show: true,
-              formatter: '用户',
-              color: '#8b5cf6',
-              fontSize: 11,
-              fontWeight: 600,
-              offset: [0, 14]
-            }
-          }],
-          z: 20
-        },
-        {
-          name: domain.name,
-          type: 'scatter',
-          coordinateSystem: 'polar',
-          data: scatterData,
-          symbol: 'circle',
-          itemStyle: {
-            color: '#8b5cf6',
-            borderColor: '#fff',
-            borderWidth: 2,
-            shadowBlur: 8,
-            shadowColor: 'rgba(139, 92, 246, 0.4)'
-          },
-          label: {
-            show: true,
-            position: 'bottom',
-            formatter: (params: any) => params.name,
-            color: '#475569',
-            fontSize: 11,
-            fontWeight: 500,
-            distance: 4
-          },
-          emphasis: {
-            scale: true,
-            itemStyle: {
-              shadowBlur: 18,
-              shadowColor: 'rgba(139, 92, 246, 0.6)',
-              borderWidth: 3
-            },
-            label: {
-              fontSize: 12,
-              fontWeight: 600
-            }
-          },
-          z: 10
-        }
-      ]
-    })
-    return
-  }
-
-  const indicators = subDomains.map((s: any) => ({
-    name: s.name,
-    max: maxFreq
-  }))
-
+  const indicators = subDomains.map((s: any) => ({ name: s.name, max: maxFreq }))
   const values = subDomains.map((s: any) => s.frequency)
 
-  if (indicators.length < 3) {
-    const placeholders = ['基础理论', '应用技术', '交叉研究']
-    let added = 0
-    for (const ph of placeholders) {
-      if (indicators.length >= 3) break
-      if (!indicators.find((i: any) => i.name === ph)) {
-        indicators.push({ name: ph, max: maxFreq })
-        values.push(0)
-        added++
-      }
-    }
-  }
-
-  radarChartInstance.value.setOption({
+  return {
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
       formatter: (params: any) => {
-        const name = params.name
         const val = params.value
         let html = `<div style="font-weight:bold;margin-bottom:6px;color:${color};">${domain.name}</div>`
         if (Array.isArray(val)) {
@@ -368,33 +333,26 @@ function renderRadarChart() {
           })
         }
         return html
-      }
+      },
     },
     radar: {
       indicator: indicators,
       shape: 'polygon',
-      splitNumber: 5,
-      center: ['50%', '52%'],
-      radius: '68%',
+      splitNumber: 4,
+      center: ['50%', isCompact ? '53%' : '52%'],
+      radius: isCompact ? '50%' : '64%',
+      nameGap: isCompact ? 10 : 8,
       axisName: {
-        color: '#475569',
-        fontSize: 12,
+        color: '#7a7268',
+        fontSize: isCompact ? 11 : 11,
         fontWeight: 500,
-        formatter: (name: string) => {
-          return name.length > 6 ? name.slice(0, 6) + '\n' + name.slice(6) : name
-        }
+        lineHeight: 15,
+        padding: [2, 4],
+        formatter: (name: string) => formatRadarAxisName(name, isCompact ? 4 : 5),
       },
-      splitLine: {
-        lineStyle: { color: '#e2e8f0' }
-      },
-      splitArea: {
-        areaStyle: {
-          color: ['rgba(99, 102, 241, 0.02)', 'rgba(99, 102, 241, 0.05)']
-        }
-      },
-      axisLine: {
-        lineStyle: { color: '#cbd5e1' }
-      }
+      splitLine: { lineStyle: { color: '#ebe6de' } },
+      splitArea: { show: true, areaStyle: { color: ['#fff', '#faf8f5'] } },
+      axisLine: { lineStyle: { color: '#e8e4dc' } },
     },
     series: [{
       name: domain.name,
@@ -402,20 +360,65 @@ function renderRadarChart() {
       data: [{
         value: values,
         name: domain.name,
-        areaStyle: {
-          color: new echarts.graphic.RadialGradient(0.5, 0.5, 1, [
-            { offset: 0, color: color + '40' },
-            { offset: 1, color: color + '10' }
-          ])
-        },
-        lineStyle: { color: color, width: 2 },
-        itemStyle: { color: color },
-        label: {
-          show: false,
-        }
-      }]
-    }]
+        areaStyle: { color: 'rgba(91, 143, 185, 0.14)' },
+        lineStyle: { color, width: 2 },
+        itemStyle: { color, borderColor: '#fff', borderWidth: 2 },
+        symbolSize: isCompact ? 5 : 6,
+        label: { show: false },
+      }],
+    }],
+  }
+}
+
+function renderDomainRadar(instance: any, domain: any, isCompact: boolean) {
+  const option = domain && shouldShowSubDomainRadar(domain)
+    ? buildRadarOption(domain, isCompact)
+    : null
+
+  if (!option) {
+    instance.setOption({
+      backgroundColor: 'transparent',
+      title: {
+        text: '暂无足够子领域',
+        subtext: '需 3 个及以上子方向',
+        left: 'center',
+        top: 'center',
+        textStyle: { color: 'var(--text-tertiary)', fontSize: 12, fontWeight: 'normal' },
+        subtextStyle: { color: '#d8d0c4', fontSize: 11 },
+      },
+    })
+    return
+  }
+
+  instance.setOption(option)
+}
+
+function renderMainPanoramaCharts() {
+  const rose = initChart(mainRoseChartRef.value, mainRoseChartInstance)
+  if (rose) renderRoseChart(rose, primaryCoverageDomains.value, true)
+
+  const radar = initChart(mainSubRadarChartRef.value, mainSubRadarChartInstance)
+  if (radar) renderDomainRadar(radar, topRadarDomain.value, true)
+
+  nextTick(() => {
+    observeChartContainers()
+    handleChartResize()
   })
+}
+
+let chartResizeObserver: ResizeObserver | null = null
+
+function observeChartContainers() {
+  chartResizeObserver?.disconnect()
+  chartResizeObserver = new ResizeObserver(() => handleChartResize())
+  if (mainRoseChartRef.value) chartResizeObserver.observe(mainRoseChartRef.value)
+  if (mainSubRadarChartRef.value) chartResizeObserver.observe(mainSubRadarChartRef.value)
+}
+
+function renderModalRadarChart() {
+  const instance = initChart(modalRadarChartRef.value, modalRadarChartInstance)
+  if (!instance) return
+  renderDomainRadar(instance, modalSelectedDomain.value, false)
 }
 
 const weekDays = ['日', '一', '二', '三', '四', '五', '六']
@@ -462,52 +465,49 @@ const currentHeatmap = computed(() =>
 const heatmapRows = computed(() => {
   const data = currentHeatmap.value?.data || {}
   const monthData = data[currentMonth.value] || []
-  
+
   const parts = currentMonth.value.split('-')
-  const year = parseInt(parts[0])
-  const m = parseInt(parts[1])
+  const year = parseInt(parts[0], 10)
+  const m = parseInt(parts[1], 10)
   const daysInMonth = new Date(year, m, 0).getDate()
   const firstDay = new Date(year, m - 1, 1).getDay()
-  
+
   const allCells: { day: number | null; count: number; date: string | null }[] = []
-  
+
   for (let i = 0; i < firstDay; i++) {
     allCells.push({ day: null, count: 0, date: null })
   }
-  
+
   for (let day = 1; day <= daysInMonth; day++) {
     const count = monthData[day - 1] || 0
-    allCells.push({ 
-      day, 
-      count, 
-      date: `${year}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}` 
+    allCells.push({
+      day,
+      count,
+      date: `${year}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
     })
   }
-  
+
   const totalCells = Math.ceil(allCells.length / 7) * 7
   while (allCells.length < totalCells) {
     allCells.push({ day: null, count: 0, date: null })
   }
-  
-  const rows: { month: string; data: { day: number | null; count: number; date: string | null }[] }[] = []
+
+  const rows: { data: { day: number | null; count: number; date: string | null }[] }[] = []
   for (let i = 0; i < allCells.length; i += 7) {
-    rows.push({ 
-      month: currentMonth.value, 
-      data: allCells.slice(i, i + 7) 
-    })
+    rows.push({ data: allCells.slice(i, i + 7) })
   }
-  
+
   return rows
 })
 
 const getCellColor = (day: number | null, count: number) => {
   if (day === null) return 'transparent'
   const maxValue = currentHeatmap.value?.max_value || 1
-  if (count === 0) return '#e8f4fd'
-  if (count <= Math.ceil(maxValue * 0.25)) return '#a5d8ff'
-  if (count <= Math.ceil(maxValue * 0.5)) return '#69c0ff'
-  if (count <= Math.ceil(maxValue * 0.75)) return '#2f80ed'
-  return '#1971c2'
+  if (count === 0) return '#f3f0e9'
+  if (count <= Math.ceil(maxValue * 0.25)) return '#ede4d4'
+  if (count <= Math.ceil(maxValue * 0.5)) return '#d4c4a8'
+  if (count <= Math.ceil(maxValue * 0.75)) return '#c49a6c'
+  return '#a67c52'
 }
 
 const currentMonthTotal = computed(() => {
@@ -517,6 +517,102 @@ const currentMonthTotal = computed(() => {
 })
 
 const heatmapUnit = computed(() => heatmapMode.value === 'upload' ? '篇' : '分钟')
+
+const heroMetrics = computed(() => ({
+  parsed: completedCount.value || overview.value.paper_count || 0,
+  todayMinutes: learningDuration.value?.today || learningOverview.value?.today_minutes || 0,
+  reports: overview.value.deep_research_outputs?.reports || overview.value.report_count || 0,
+  domainSpan: Math.round((crossDomainRate.value || 0) * 100),
+}))
+
+const currentMonthLabel = computed(() => {
+  const parts = currentMonth.value.split('-')
+  return `${parseInt(parts[1], 10)}月`
+})
+
+const reportTitle = computed(() => {
+  if (reportLoading.value) return reportLoadingText.value
+  if (monthlyReportData.value?.summary) {
+    return `本月学习小结已生成（${currentMonthLabel.value}）`
+  }
+  return `生成本月学习小结（${currentMonthLabel.value}）`
+})
+const reportEditorialTitle = computed(() => {
+  const parts = currentMonth.value.split('-')
+  return `${parts[0]}年${parseInt(parts[1], 10)}月·研读总结`
+})
+
+const reportHighlights = computed(() => [
+  {
+    label: '研读报告',
+    value: overview.value.deep_research_outputs?.reports || overview.value.report_count || 0,
+  },
+  {
+    label: '知识图谱',
+    value: overview.value.deep_research_outputs?.graphs || 0,
+  },
+  {
+    label: '跨学科占比',
+    value: `${heroMetrics.value.domainSpan}%`,
+  },
+])
+
+const domainDoughnutStyle = computed(() => {
+  const domains = (overview.value.knowledge_domains?.top_domains || []).slice(0, 5)
+  const total = domains.reduce((sum: number, d: any) => sum + d.frequency, 0)
+  if (!total) return { background: 'var(--border-light)' }
+  const colors = ['var(--el-color-primary-hover)', 'var(--el-color-primary)', 'var(--text-secondary)', 'var(--text-tertiary)', 'var(--border-light)']
+  let acc = 0
+  const stops = domains.map((d: any, i: number) => {
+    const pct = (d.frequency / total) * 100
+    const start = acc
+    acc += pct
+    return `${colors[i % colors.length]} ${start}% ${acc}%`
+  })
+  return { background: `conic-gradient(${stops.join(', ')})` }
+})
+
+const domainLegend = computed(() =>
+  (overview.value.knowledge_domains?.top_domains || []).slice(0, 3).map((d: any) => ({
+    name: d.name,
+    count: d.frequency,
+  })),
+)
+
+function showCellTooltip(event: MouseEvent, cell: { day: number | null; count: number; date: string | null }) {
+  if (!cell.day || !cell.date) {
+    heatmapTooltip.value.visible = false
+    return
+  }
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  heatmapTooltip.value = {
+    visible: true,
+    x: rect.left + rect.width / 2,
+    y: rect.top - 8,
+    text: `${cell.date} · ${cell.count} ${heatmapUnit.value}`,
+  }
+}
+
+function hideCellTooltip() {
+  heatmapTooltip.value.visible = false
+}
+
+async function loadMonthlyReport(force = false) {
+  try {
+    const result = await featuresApi.monthlyReport(currentMonth.value, force)
+    monthlyReportData.value = result
+    return result
+  } catch (error) {
+    console.error('加载月度报告失败:', error)
+    return null
+  }
+}
+
+async function ensureMonthlyReport() {
+  const cached = await loadMonthlyReport()
+  if (cached?.summary) return
+  await generateMonthlyReport()
+}
 
 const calendarYears = computed(() => {
   const years = new Set<string>()
@@ -539,37 +635,58 @@ const monthsForYear = (year: string) => {
 }
 
 onMounted(async () => {
+  window.addEventListener('resize', handleChartResize)
+
   await store.load()
   paperCount.value = store.list.length
-  completedCount.value = store.list.filter(p => p.parse_status === 'completed').length
+  completedCount.value = store.list.filter(
+    p => p.parse_status === 'completed' || p.parse_status === 'indexed',
+  ).length
 
   try {
-    learningOverview.value = await featuresApi.overview()
+    const overviewData = await featuresApi.overview()
+    overview.value = overviewData
+    overview.value.records = overview.value.records || overview.value.recent_records || []
+    learningOverview.value = overviewData
   } catch { /* ignore */ }
+
+  await ensureMonthlyReport().catch(() => {})
 
   try {
     learningDuration.value = await authApi.getAllLearningDuration()
   } catch { /* ignore */ }
 
-  try {
-    overview.value = await featuresApi.overview()
-    overview.value.records = overview.value.records || overview.value.recent_records || []
-  } catch { /* ignore */ }
+  await nextTick()
+  renderMainPanoramaCharts()
 })
 
-const renderedReportSummary = computed(() => {
-  const summary = monthlyReportData.value?.summary
-  if (!summary) return ''
-  try {
-    return md.render(summary)
-  } catch {
-    return summary.replace(/\n/g, '<br/>')
-  }
+watch(domainList, () => {
+  nextTick(() => renderMainPanoramaCharts())
 })
 
-async function generateMonthlyReport() {
-  reportLoading.value = true
+function handleChartResize() {
+  mainRoseChartInstance.value?.resize()
+  mainSubRadarChartInstance.value?.resize()
+  modalRadarChartInstance.value?.resize()
+}
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleChartResize)
+  chartResizeObserver?.disconnect()
+  chartResizeObserver = null
+  mainRoseChartInstance.value?.dispose()
+  mainSubRadarChartInstance.value?.dispose()
+  modalRadarChartInstance.value?.dispose()
+})
+
+watch(currentMonth, () => {
   monthlyReportData.value = null
+  ensureMonthlyReport().catch(() => {})
+})
+
+async function generateMonthlyReport(force = false) {
+  reportLoading.value = true
+  if (!force) monthlyReportData.value = null
 
   // 滚动加载文案
   const phraseInterval = setInterval(() => {
@@ -579,7 +696,7 @@ async function generateMonthlyReport() {
   reportLoadingText.value = loadingPhrases[0]
 
   try {
-    const result = await featuresApi.monthlyReport(currentMonth.value)
+    const result = await featuresApi.monthlyReport(currentMonth.value, force)
     monthlyReportData.value = result
     await nextTick()
     if (reportSummaryRef.value) {
@@ -599,7 +716,10 @@ async function generateMonthlyReport() {
 function exportReport(format: 'md' | 'txt') {
   const summary = monthlyReportData.value?.summary
   if (!summary) return
-  const month = monthlyReportData.value?.month || currentMonth.value
+  const period = monthlyReportData.value?.period
+    || monthlyReportData.value?.month
+    || currentMonth.value
+  const prefix = '本月学习小结'
 
   let content: string
   let mimeType: string
@@ -619,7 +739,7 @@ function exportReport(format: 'md' | 'txt') {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `月度科研学习报告_${month}.${ext}`
+  a.download = `${prefix}_${period}.${ext}`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -631,309 +751,177 @@ function logout() {
 </script>
 
 <template>
-  <div class="profile-page">
-    <div class="main-content">
-      <div class="learning-archive">
-        <h2 class="page-title">学习档案</h2>
+  <div class="profile-page profile-container">
+    <!-- 左栏：身份名片 -->
+    <aside class="profile-col profile-col--left">
+      <section class="profile-card identity-card">
+        <div class="avatar-wrapper">
+          <div class="avatar-box">{{ user.username?.slice(0, 1)?.toUpperCase() }}</div>
+        </div>
+        <div class="profile-identity-text">
+          <h2>{{ user.name || user.username }}</h2>
+        </div>
 
-        <div class="stats-row-new">
-          <div class="stat-card-new domain-card clickable" @click="openDomainModal">
-            <div class="stat-header">
-              <div class="stat-icon domain-icon">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/>
-                  <line x1="12" y1="22" x2="12" y2="15.5"/>
-                  <polyline points="22 8.5 12 15.5 2 8.5"/>
-                  <polyline points="2 15.5 12 8.5 22 15.5"/>
-                  <line x1="12" y1="2" x2="12" y2="8.5"/>
-                </svg>
-              </div>
-              <div class="stat-title">学科覆盖</div>
-              <div class="click-hint">点击查看 →</div>
-            </div>
-            <div class="domain-stats-row">
-              <div class="domain-stat-main">
-                <div class="stat-value-large">{{ overview.knowledge_domains?.count || 0 }}</div>
-                <div class="stat-label-large">学科领域</div>
-              </div>
-              <div class="domain-stat-divider"></div>
-              <div class="domain-stat-side">
-                <div class="domain-side-value">{{ subDomainGranularity }}</div>
-                <div class="domain-side-label">子领域细分</div>
-              </div>
-              <div class="domain-stat-divider"></div>
-              <div class="domain-stat-side">
-                <div class="domain-side-value">{{ (crossDomainRate * 100).toFixed(1) }}%</div>
-                <div class="domain-side-label">领域跨度</div>
-              </div>
-            </div>
-            <div class="domain-list">
-              <div v-for="domain in (overview.knowledge_domains?.top_domains || []).slice(0, 3)" :key="domain.name" class="domain-item">
-                <span class="domain-dot"></span>
-                <span class="domain-name">{{ domain.name }}</span>
-                <span class="domain-freq">{{ domain.frequency }}篇 · {{ domain.sub_domain_count }}子领域</span>
-              </div>
-            </div>
+        <div v-if="overview.research_interests?.length" class="profile-tags">
+          <span v-for="tag in overview.research_interests.slice(0, 3)" :key="tag" class="profile-tag">{{ tag }}</span>
+        </div>
+
+        <nav class="profile-settings">
+          <button type="button" class="settings-row" @click="editUsername = user.username; showUsernameModal = true">
+            <span class="settings-row-label">用户名</span>
+            <span class="settings-row-value">{{ user.username }}</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+          </button>
+          <button type="button" class="settings-row" @click="showEmailModal = true">
+            <span class="settings-row-label">邮箱</span>
+            <span class="settings-row-value">{{ user.email || '未设置' }}</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button type="button" class="settings-row" @click="showPhoneModal = true">
+            <span class="settings-row-label">手机</span>
+            <span class="settings-row-value">{{ user.phone ? maskPhone(user.phone) : '未设置' }}</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button type="button" class="settings-row" @click="showPasswordModal = true">
+            <span class="settings-row-label">修改密码</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </nav>
+
+        <button type="button" class="logout-btn" @click="logout">退出登录</button>
+      </section>
+
+      <section class="heatmap-compact profile-card heatmap-card--left">
+        <div class="heatmap-card-head">
+          <h3>科研热力</h3>
+          <div class="heatmap-mode-row heatmap-mode-row--inline">
+            <button type="button" class="heatmap-mode-btn" :class="{ active: heatmapMode === 'upload' }" @click="heatmapMode = 'upload'">上传</button>
+            <button type="button" class="heatmap-mode-btn" :class="{ active: heatmapMode === 'focus' }" @click="heatmapMode = 'focus'">专注</button>
           </div>
-
-          <div class="stat-card-new output-card">
-            <div class="stat-header">
-              <div class="stat-icon output-icon">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                  <line x1="16" y1="13" x2="8" y2="13"/>
-                  <line x1="16" y1="17" x2="8" y2="17"/>
-                  <polyline points="10 9 9 9 8 9"/>
-                </svg>
-              </div>
-              <div class="stat-title">深度科研产出</div>
-            </div>
-            <div class="output-grid">
-              <div class="output-item">
-                <span class="output-value">{{ overview.deep_research_outputs?.reports || 0 }}</span>
-                <span class="output-label">研读报告</span>
-              </div>
-              <div class="output-item">
-                <span class="output-value">{{ overview.deep_research_outputs?.comparisons || 0 }}</span>
-                <span class="output-label">对比卡片</span>
-              </div>
-              <div class="output-item">
-                <span class="output-value">{{ overview.deep_research_outputs?.graphs || 0 }}</span>
-                <span class="output-label">知识图谱</span>
-              </div>
-            </div>
+        </div>
+        <div class="heatmap-calendar">
+          <div class="heatmap-dow-head">
+            <span v-for="day in weekDays" :key="day">{{ day }}</span>
           </div>
-
-          <div class="stat-card-new output-card">
-            <div class="stat-header">
-              <div class="stat-icon output-icon">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                  <line x1="16" y1="13" x2="8" y2="13"/>
-                  <line x1="16" y1="17" x2="8" y2="17"/>
-                  <polyline points="10 9 9 9 8 9"/>
-                </svg>
-              </div>
-              <div class="stat-title">学习成果</div>
-            </div>
-            <div class="output-grid">
-              <div class="output-item">
-                <span class="output-value">{{ learningDuration?.today || learningOverview?.today_minutes || 0 }}</span>
-                <span class="output-label">今日专注时长</span>
-              </div>
-              <div class="output-item">
-                <span class="output-value">{{ overview.knowledge_domains?.core_papers || 0 }}</span>
-                <span class="output-label">累计解析文献</span>
-              </div>
-              <div class="output-item">
-                <span class="output-value">{{ overview.knowledge_domains?.count || 0 }}</span>
-                <span class="output-label">学科覆盖</span>
-              </div>
+          <div class="heatmap-calendar-grid">
+            <div v-for="(row, rowIndex) in heatmapRows" :key="rowIndex" class="heatmap-calendar-row">
+              <div
+                v-for="(cell, idx) in row.data"
+                :key="`${rowIndex}-${idx}`"
+                class="heatmap-cell"
+                :class="{ empty: !cell.day }"
+                :style="{ backgroundColor: getCellColor(cell.day, cell.count) }"
+                @mouseenter="showCellTooltip($event, cell)"
+                @mouseleave="hideCellTooltip"
+              />
             </div>
           </div>
         </div>
+      </section>
+    </aside>
 
-        <section class="grid2">
-          <div class="card monthly-report-card">
-            <div class="card-header">
-              <div class="header-top">
-                <h3>月度科研学习报告</h3>
-                <div v-if="monthlyReportData?.summary" class="report-header-actions">
-                  <button class="export-btn" @click="exportReport('md')">导出 MD</button>
-                  <button class="export-btn" @click="exportReport('txt')">导出 TXT</button>
-                </div>
-              </div>
-            </div>
-            <div class="monthly-report-body">
-              <p class="report-desc">综合本月上传文献、研读报告、知识图谱、问答数据，自动生成 AI 总结</p>
-
-              <!-- 未生成状态 -->
-              <div v-if="!monthlyReportData?.summary && !reportLoading" class="report-empty-state">
-                <!-- 数据源概览 -->
-                <div class="report-sources">
-                  <div class="report-source-item">
-                    <span class="source-icon">📄</span>
-                    <span class="source-value">{{ monthlyReportData?.paper_count ?? overview.paper_count ?? 0 }}篇</span>
-                    <span class="source-label">上传文献</span>
-                  </div>
-                  <div class="report-source-item">
-                    <span class="source-icon">📊</span>
-                    <span class="source-value">{{ monthlyReportData?.report_count ?? overview.report_count ?? 0 }}份</span>
-                    <span class="source-label">研读报告</span>
-                  </div>
-                  <div class="report-source-item">
-                    <span class="source-icon">🔗</span>
-                    <span class="source-value">{{ monthlyReportData?.graph_count ?? overview.deep_research_outputs?.graphs ?? 0 }}个</span>
-                    <span class="source-label">知识图谱</span>
-                  </div>
-                  <div class="report-source-item">
-                    <span class="source-icon">💬</span>
-                    <span class="source-value">{{ monthlyReportData?.qa_count ?? overview.qa_count ?? 0 }}次</span>
-                    <span class="source-label">AI问答</span>
-                  </div>
-                </div>
-
-                <!-- 生成按钮 -->
-                <button
-                  class="generate-report-btn"
-                  :disabled="reportLoading"
-                  @click="generateMonthlyReport"
-                >
-                  <svg v-if="reportLoading" class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10" opacity="0.25" />
-                    <path d="M12 2a10 10 0 019.95 9" />
-                  </svg>
-                  {{ reportLoading ? reportLoadingText : '生成本月报告' }}
-                </button>
-              </div>
-
-              <!-- 加载状态 -->
-              <div v-else-if="reportLoading" class="report-loading">
-                <svg class="spinner-large" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10" opacity="0.25" />
-                  <path d="M12 2a10 10 0 019.95 9" />
-                </svg>
-                <p class="loading-text">{{ reportLoadingText }}</p>
-              </div>
-
-              <!-- AI总结结果 -->
-              <div v-else class="report-summary">
-                <div class="report-summary-content" ref="reportSummaryRef" v-html="renderedReportSummary"></div>
-              </div>
-            </div>
+    <!-- 中栏：月度报告 & 技能图谱 -->
+    <main class="profile-col profile-col--center">
+      <section class="report-editorial profile-card report-editorial--always">
+        <div class="report-editorial-head">
+          <div class="report-month-nav">
+            <button type="button" class="nav-btn" :class="{ disabled: !canPrev }" :disabled="!canPrev" @click="prevMonth">
+              <ArrowLeft />
+            </button>
+            <button type="button" class="month-btn" @click="showCalendar = !showCalendar">{{ currentMonth }}</button>
+            <button type="button" class="nav-btn" :class="{ disabled: !canNext }" :disabled="!canNext" @click="nextMonth">
+              <ArrowRight />
+            </button>
           </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div class="header-top">
-                <h3>热力图</h3>
-                <div class="month-nav">
-                <button 
-                  class="nav-btn" 
-                  :class="{ disabled: !canPrev }"
-                  @click="prevMonth"
-                  :disabled="!canPrev"
-                >
-                  <ArrowLeft />
-                </button>
-                <button class="month-btn" @click="showCalendar = !showCalendar">
-                  {{ currentMonth }}
-                  <span class="nav-arrow">▼</span>
-                </button>
-                <button 
-                  class="nav-btn" 
-                  :class="{ disabled: !canNext }"
-                  @click="nextMonth"
-                  :disabled="!canNext"
-                >
-                  <ArrowRight />
-                </button>
-                </div>
-              </div>
-            </div>
-            <div class="heatmap-container">
-              <div class="heatmap-toggle">
-                <button 
-                  class="toggle-btn" 
-                  :class="{ active: heatmapMode === 'upload' }"
-                  @click="heatmapMode = 'upload'"
-                >文献上传</button>
-                <button 
-                  class="toggle-btn" 
-                  :class="{ active: heatmapMode === 'focus' }"
-                  @click="heatmapMode = 'focus'"
-                >专注时间</button>
-              </div>
-              <div class="heatmap-header">
-                <div class="weekday-labels">
-                  <span v-for="day in weekDays" :key="day" class="weekday-label">{{ day }}</span>
-                </div>
-              </div>
-              <div class="heatmap-body">
-                <div v-for="(row, rowIndex) in heatmapRows" :key="rowIndex" class="heatmap-row">
-                  <div class="cells">
-                    <div 
-                      v-for="(cell, idx) in row.data" 
-                      :key="`${rowIndex}-${idx}`"
-                      class="cell"
-                      :class="{ empty: !cell.day }"
-                      :style="{ backgroundColor: getCellColor(cell.day, cell.count) }"
-                      :title="cell.date ? `${cell.date}: ${cell.count} ${heatmapUnit}` : ''"
-                    ></div>
-                  </div>
-                </div>
-              </div>
-              <div class="month-summary">
-                <span class="summary-text">{{ currentMonth }} 共{{ heatmapMode === 'upload' ? '上传' : '专注' }} {{ currentMonthTotal }} {{ heatmapUnit }}</span>
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
-
-      <div class="profile-sidebar" :class="{ collapsed: sidebarCollapsed }">
-        <button class="sidebar-toggle" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? '展开' : '收起'">
-          <svg v-if="sidebarCollapsed" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="15 18 9 12 15 6"></polyline>
-          </svg>
-          <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="9 18 15 12 9 6"></polyline>
-          </svg>
-        </button>
-
-        <div class="sidebar-content">
-          <div class="profile-card">
-            <div class="avatar-wrapper">
-              <div class="avatar-box">{{ user.username?.slice(0, 1)?.toUpperCase() }}</div>
-            </div>
-            <div class="profile-info">
-              <h2>{{ user.name || user.username }}</h2>
-              <div class="research-tags">
-                <span v-for="tag in overview.research_interests?.slice(0, 3) || []" :key="tag" class="research-tag">{{ tag }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="sidebar-section">
-            <h3>账号设置</h3>
-            <div class="settings-list">
-              <div class="settings-item" @click="editUsername = user.username; showUsernameModal = true">
-                <span class="settings-label">用户名</span>
-                <div class="settings-right">
-                  <span>{{ user.username }}</span>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
-                </div>
-              </div>
-              <div class="settings-item" @click="showEmailModal = true">
-                <span class="settings-label">邮箱</span>
-                <div class="settings-right">
-                  <span>{{ user.email || '未设置' }}</span>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                </div>
-              </div>
-              <div class="settings-item" @click="showPhoneModal = true">
-                <span class="settings-label">手机</span>
-                <div class="settings-right">
-                  <span>{{ user.phone ? maskPhone(user.phone) : '未设置' }}</span>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                </div>
-              </div>
-              <div class="settings-item" @click="showPasswordModal = true">
-                <span class="settings-label">修改密码</span>
-                <div class="settings-right">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                </div>
-              </div>
-              <div class="settings-item logout-item" @click="logout">
-                <span class="settings-label">退出登录</span>
-              </div>
-            </div>
+          <div class="report-editorial-actions">
+            <button
+              v-if="monthlyReportData?.summary"
+              type="button"
+              class="btn-ghost btn-ghost--sm"
+              @click="exportReport('md')"
+            >导出 MD</button>
+            <button
+              type="button"
+              class="btn-ghost btn-ghost--sm"
+              :disabled="reportLoading"
+              @click="generateMonthlyReport(true)"
+            >重新生成</button>
           </div>
         </div>
+
+        <h3 class="report-header-title">{{ reportEditorialTitle }}</h3>
+        <p class="report-header-sub">{{ reportLoading ? reportLoadingText : reportSubtitle }}</p>
+
+        <div class="report-highlights">
+          <div v-for="item in reportHighlights" :key="item.label" class="report-highlight">
+            <span class="report-highlight-value">{{ item.value }}</span>
+            <span class="report-highlight-label">{{ item.label }}</span>
+          </div>
+        </div>
+
+        <div v-if="reportLoading && !monthlyReportData?.summary" class="report-loading">
+          <span class="report-loading-spinner" aria-hidden="true" />
+          <span>{{ reportLoadingText }}</span>
+        </div>
+        <div v-else-if="monthlyReportData?.summary" class="report-detail-inline">
+          <div ref="reportSummaryRef" class="report-summary-content">
+            <MarkdownRenderer :content="monthlyReportData.summary" />
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- 右栏：学科分布 & 学科领域 -->
+    <aside class="profile-col profile-col--right">
+      <section class="domain-charts-panel profile-card">
+        <div class="domain-chart-block domain-chart-block--rose">
+          <div class="panel-head">
+            <h3>学科分布</h3>
+            <button
+              type="button"
+              class="btn-detail"
+              :disabled="!radarSidebarDomains.length"
+              @click="openDomainModal"
+            >详情</button>
+          </div>
+          <div ref="mainRoseChartRef" class="skill-chart skill-chart--rose" />
+          <div v-if="roseLegendDomains.length" class="skill-domain-legend skill-domain-legend--stack">
+            <span
+              v-for="item in roseLegendDomains"
+              :key="item.name"
+              class="skill-domain-legend-item"
+              :title="`${item.name} · ${item.frequency} 篇`"
+            >
+              <i :style="{ background: item.color }" />
+              {{ item.name }}
+            </span>
+          </div>
+        </div>
+
+        <div class="domain-charts-divider" aria-hidden="true" />
+
+        <div class="domain-chart-block domain-chart-block--sub">
+          <div class="panel-head panel-head--compact">
+            <div class="panel-head-main">
+              <h3>学科领域</h3>
+              <span v-if="topRadarDomain" class="insights-domain-badge insights-domain-badge--inline">{{ topRadarDomain.name }}</span>
+            </div>
+          </div>
+          <div ref="mainSubRadarChartRef" class="skill-chart skill-chart--side skill-chart--sub" />
+        </div>
+      </section>
+    </aside>
+
+    <!-- 热力图 Tooltip -->
+    <Teleport to="body">
+      <div
+        v-if="heatmapTooltip.visible"
+        class="heatmap-tooltip"
+        :style="{ left: `${heatmapTooltip.x}px`, top: `${heatmapTooltip.y}px` }"
+      >
+        {{ heatmapTooltip.text }}
       </div>
-    </div>
+    </Teleport>
 
     <Teleport to="body">
       <div v-if="showPhoneModal" class="modal-overlay" @click="showPhoneModal = false">
@@ -1035,30 +1023,26 @@ function logout() {
           </div>
 
           <div class="domain-modal-body">
-            <aside class="domain-sidebar">
-              <div class="sidebar-title">学科领域</div>
+            <div v-if="radarSidebarDomains.length > 1" class="domain-view-tabs">
               <button
-                v-for="(domain, index) in domainList"
+                v-for="(domain, index) in radarSidebarDomains"
                 :key="domain.name"
-                class="domain-side-item"
-                :class="{ active: selectedDomainIndex === index }"
-                @click="selectDomain(index)"
+                type="button"
+                class="domain-view-tab"
+                :class="{ active: modalDomainIndex === index }"
+                @click="selectModalDomain(index)"
               >
-                <div class="domain-side-name">{{ domain.name }}</div>
-                <div class="domain-side-meta">
-                  <span>{{ domain.frequency }}篇</span>
-                  <span class="dot-sep">·</span>
-                  <span>{{ domain.sub_domain_count }}子领域</span>
-                </div>
+                {{ domain.name }}
+                <span class="domain-view-tab-sub">{{ getEffectiveSubDomains(domain).length }} 子领域</span>
               </button>
-            </aside>
+            </div>
 
             <section class="domain-main">
-              <div v-if="selectedDomain" class="radar-section">
+              <div v-if="modalSelectedDomain" class="radar-section">
                 <div class="radar-header">
-                  <h5>{{ selectedDomain.name }} · 子领域分布</h5>
+                  <h5>{{ modalChartTitle }}</h5>
                 </div>
-                <div ref="radarChartRef" class="radar-chart"></div>
+                <div ref="modalRadarChartRef" class="radar-chart" />
 
                 <div class="sub-domain-table">
                   <div class="table-header">
@@ -1067,15 +1051,18 @@ function logout() {
                     <span class="header-right">占比</span>
                   </div>
                   <div
-                    v-for="sub in selectedDomain.sub_domains"
+                    v-for="sub in getEffectiveSubDomains(modalSelectedDomain)"
                     :key="sub.name"
                     class="table-row"
                   >
                     <span class="sub-name">{{ sub.name }}</span>
                     <span class="sub-freq">{{ sub.frequency }}</span>
-                    <span class="sub-ratio">{{ ((sub.frequency / selectedDomain.sub_domains.reduce((s: number, x: any) => s + x.frequency, 0)) * 100).toFixed(1) }}%</span>
+                    <span class="sub-ratio">{{ ((sub.frequency / getEffectiveSubDomains(modalSelectedDomain).reduce((s: number, x: any) => s + x.frequency, 0)) * 100).toFixed(1) }}%</span>
                   </div>
                 </div>
+              </div>
+              <div v-else class="domain-modal-empty">
+                暂无子领域雷达数据（需 3 个及以上子方向）
               </div>
             </section>
           </div>
@@ -1103,413 +1090,1056 @@ function logout() {
 
 <style scoped>
 .profile-page {
+  --bg-surface: #f3f0e9;
+  --text-main: var(--text-heading);
+  --text-muted: var(--text-secondary);
+  --accent-caramel: var(--accent-caramel);
   height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.main-content {
-  flex: 1;
-  display: flex;
-  gap: 24px;
-  padding: 24px 32px;
   overflow-y: auto;
 }
 
-.learning-archive {
+.profile-container {
+  background: var(--bg-canvas);
+  padding: 20px 28px;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 280px;
+  gap: 12px;
+  align-items: stretch;
+  box-sizing: border-box;
+}
+
+.profile-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  height: 100%;
+}
+
+.profile-col--left .identity-card {
+  flex-shrink: 0;
+}
+
+.profile-col--left .heatmap-card--left {
+  margin-top: auto;
+}
+
+.profile-col--center .report-editorial {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  min-height: 0;
 }
 
-.profile-sidebar {
-  width: 280px;
-  flex-shrink: 0;
+.profile-col--right .domain-charts-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+.profile-card {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 16px;
+  border: 1px solid rgba(220, 215, 205, 0.4);
+  box-shadow: 0 4px 16px rgba(93, 83, 74, 0.04);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.profile-card:hover {
+  box-shadow: 0 6px 20px rgba(93, 83, 74, 0.08);
+}
+
+/* ============ 左栏身份名片 ============ */
+.identity-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  align-items: center;
+  text-align: center;
+}
+
+.avatar-wrapper {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  border: 3px solid #ffffff;
+  outline: 1px solid var(--text-muted);
   overflow: hidden;
-  align-self: flex-start;
-  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  margin-bottom: 8px;
 }
 
-.profile-sidebar.collapsed {
-  width: 44px;
-  gap: 0;
-}
-
-.sidebar-toggle {
-  align-self: flex-end;
-  padding: 8px;
-  border: none;
-  background: var(--academic-panel);
-  border-radius: 8px;
-  color: var(--academic-text-muted);
-  cursor: pointer;
-  transition: all 0.2s;
-  flex-shrink: 0;
-}
-
-.sidebar-toggle:hover {
-  color: var(--academic-primary);
-  background: var(--academic-border);
-}
-
-.sidebar-content {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-height: 1200px;
-  opacity: 1;
-  overflow: hidden;
-  transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
-              opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.profile-sidebar.collapsed .sidebar-content {
-  max-height: 0;
-  opacity: 0;
-  margin: 0;
-  gap: 0;
-}
-
-.page-title {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--academic-text-main);
-  margin: 0;
-}
-
-.stats-row-new {
+.avatar-box {
+  width: 100%;
+  height: 100%;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
+  place-items: center;
+  background: linear-gradient(145deg, #c49a6c, #7d9b76);
+  color: #fff;
+  font-size: 30px;
+  font-weight: 800;
 }
 
-.stat-card-new {
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  border-radius: 18px;
-  padding: 24px;
+.profile-identity-text h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-main);
 }
 
-.stat-header {
+.profile-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.profile-tag {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text-main);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.profile-settings {
+  width: 100%;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.12s;
+}
+
+.settings-row:hover {
+  background: var(--bg-surface);
+}
+
+.settings-row-label {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-main);
+}
+
+.settings-row-value {
+  font-size: 12px;
+  color: var(--text-muted);
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-row svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.logout-btn {
+  margin-top: 8px;
+  padding-top: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.logout-btn:hover {
+  color: #ef4444;
+}
+
+/* ============ 中栏：杂志化报告 ============ */
+.profile-col--center,
+.profile-col--left,
+.profile-col--right {
+  gap: 12px;
+}
+
+.domain-charts-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 14px;
+  height: 100%;
+}
+
+.domain-chart-block {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.domain-chart-block--rose {
+  flex: 1;
+}
+
+.domain-chart-block--sub {
+  flex: 1.08;
+}
+
+.domain-charts-divider {
+  height: 1px;
+  background: rgba(220, 215, 205, 0.55);
+  margin: 6px 0;
+  flex-shrink: 0;
+}
+
+.domain-chart-block .panel-head {
+  margin-bottom: 2px;
+  flex-shrink: 0;
+}
+
+.domain-charts-panel,
+.heatmap-card--left,
+.report-editorial {
+  margin: 0;
+}
+
+.report-editorial.profile-card {
+  padding: 16px 18px;
+  background: var(--bg-canvas);
+  border-color: rgba(220, 215, 205, 0.35);
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.01), 0 4px 16px rgba(93, 83, 74, 0.04);
+  min-height: 0;
+}
+
+.report-editorial.profile-card:hover {
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.01), 0 4px 16px rgba(93, 83, 74, 0.04);
+}
+
+.report-editorial:hover {
+  transform: none;
+}
+
+.report-editorial--always:hover {
+  transform: none;
+}
+
+.report-detail-inline {
+  width: 100%;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.report-loading {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 16px;
+  margin-top: 10px;
+  padding: 12px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  flex: 1;
 }
 
-.stat-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+.report-loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e8e4dc;
+  border-top-color: var(--accent-caramel);
+  border-radius: 50%;
+  animation: reportSpin 0.8s linear infinite;
+}
+
+@keyframes reportSpin {
+  to { transform: rotate(360deg); }
+}
+
+.report-editorial.is-expanded {
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.015), 0 6px 20px rgba(93, 83, 74, 0.06);
+}
+
+.report-editorial-head {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 
-.domain-icon {
-  background: linear-gradient(135deg, #6366f115, #8b5cf615);
-  color: #6366f1;
+.report-editorial .nav-btn,
+.report-editorial .month-btn,
+.report-editorial .btn-ghost {
+  background: transparent;
+  border-color: rgba(156, 148, 140, 0.28);
+  color: var(--text-muted);
+  box-shadow: none;
 }
 
-.output-icon {
-  background: linear-gradient(135deg, #ec489915, #f43f5e15);
-  color: #ec4899;
-}
-
-.stat-title {
-  font-size: 14px;
+.report-editorial .month-btn {
+  color: var(--text-main);
   font-weight: 600;
-  color: var(--academic-text-main);
 }
 
-.stat-value-large {
-  font-size: 42px;
-  font-weight: 800;
-  color: var(--academic-primary);
-  margin-bottom: 4px;
+.report-editorial .nav-btn:hover:not(.disabled),
+.report-editorial .month-btn:hover,
+.report-editorial .btn-ghost:hover:not(:disabled) {
+  background: rgba(243, 240, 233, 0.85);
+  border-color: rgba(196, 154, 108, 0.4);
+  color: var(--text-main);
 }
 
-.stat-label-large {
-  font-size: 13px;
-  color: var(--academic-text-muted);
-  margin-bottom: 16px;
+.report-editorial .btn-ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
-.domain-list {
+.report-month-nav {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
 }
 
-.domain-item {
+.report-editorial-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.domain-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--academic-primary);
-  flex-shrink: 0;
-}
-
-.domain-name {
-  font-size: 13px;
-  color: var(--academic-text-body);
-}
-
-.domain-freq {
-  font-size: 11px;
-  color: var(--academic-text-muted);
-  background: var(--academic-canvas);
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-
-.clickable {
-  cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
-  position: relative;
-}
-
-.clickable:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.15);
-  border-color: var(--academic-primary);
-}
-
-.click-hint {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--academic-primary);
+.report-header-title {
+  margin: 0;
+  font-family: Georgia, 'Source Han Serif CN', 'Noto Serif SC', serif;
+  color: var(--text-main);
+  font-size: 20px;
   font-weight: 600;
-  opacity: 0.7;
+  position: relative;
+  padding-bottom: 6px;
 }
 
-.clickable:hover .click-hint {
-  opacity: 1;
+.report-header-title::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 40px;
+  height: 2px;
+  background: var(--accent-caramel);
 }
 
-.domain-stats-row {
-  display: flex;
-  align-items: stretch;
-  gap: 12px;
-  margin-bottom: 16px;
+.report-header-sub {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
-.domain-stat-main {
-  flex: 0 0 auto;
-}
-
-.domain-stat-side {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.domain-stat-divider {
-  width: 1px;
-  background: var(--academic-border);
-  margin: 4px 0;
-}
-
-.domain-side-value {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--academic-text-main);
-  line-height: 1.2;
-}
-
-.domain-side-label {
-  font-size: 11px;
-  color: var(--academic-text-muted);
-  margin-top: 2px;
-}
-
-.output-grid {
+.report-highlights {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(220, 215, 205, 0.5);
 }
 
-.output-item {
+.report-highlight {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 12px 8px;
-  background: var(--academic-canvas);
-  border-radius: 12px;
+  gap: 2px;
 }
 
-.output-icon-text {
-  font-size: 20px;
-}
-
-.output-value {
+.report-highlight-value {
   font-size: 24px;
+  font-weight: 800;
+  color: var(--accent-caramel);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.report-highlight-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.panel-head--compact {
+  margin-bottom: 2px;
+}
+
+.panel-head-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* ============ 图表卡片 ============ */
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.panel-head h3 {
+  margin: 0;
+  font-size: 15px;
   font-weight: 700;
-  color: var(--academic-text-main);
+  color: var(--text-main);
 }
 
-.output-label {
+.panel-sub {
   font-size: 11px;
-  color: var(--academic-text-muted);
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
 }
 
-.grid2 {
+.insights-domain-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  margin: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #a67c52;
+  background: rgba(91, 143, 185, 0.1);
+}
+
+.insights-domain-badge--inline {
+  align-self: flex-start;
+}
+
+/* ============ 右栏数据魔方 ============ */
+.stats-cube-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 18px;
-  flex: 1;
-  min-height: 0;
+  gap: 12px;
 }
 
-.card {
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  border-radius: 16px;
-  padding: 22px;
-  min-height: 440px;
-  display: flex;
-  flex-direction: column;
-}
-
-.card-header {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.header-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.card > div:last-child {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.card h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--academic-text-main);
-  margin: 0;
-}
-
-/* ============ 月度科研学习报告 ============ */
-.monthly-report-card .card-header {
-  margin-bottom: 12px;
-}
-
-.report-header-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.report-header-actions .export-btn {
-  padding: 5px 14px;
-  font-size: 12px;
-}
-
-.monthly-report-body {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  flex: 1;
-  min-height: 0;
-  justify-content: flex-start !important;
-}
-
-.report-desc {
-  margin: 0;
-  font-size: 13px;
-  color: var(--academic-text-muted);
-  line-height: 1.6;
-  flex-shrink: 0;
-}
-
-.report-empty-state {
+.stat-cube {
+  aspect-ratio: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 20px;
-  flex: 1;
-  min-height: 0;
+  gap: 6px;
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--bg-surface);
+  transition: transform 0.2s ease;
 }
 
-.report-sources {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
+.stat-cube:hover {
+  transform: translateY(-2px);
+}
+
+.stat-cube-value {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--text-main);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.stat-cube-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.skill-graph-card,
+.domain-mini-card {
+  padding: 20px;
+}
+
+.skill-chart {
   width: 100%;
 }
 
-.report-source-item {
+.skill-chart--rose {
+  flex: 1;
+  min-height: 128px;
+  height: auto;
+}
+
+.skill-chart--sub,
+.skill-chart--side.skill-chart--sub {
+  flex: 1;
+  min-height: 148px;
+  height: auto;
+}
+
+.skill-domain-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.skill-domain-legend--stack {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.skill-domain-legend--stack .skill-domain-legend-item {
+  max-width: 100%;
+}
+
+.skill-domain-legend-item {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 5px;
+  max-width: calc(50% - 5px);
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+  word-break: break-all;
+}
+
+.skill-domain-legend-item i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.btn-detail {
+  border: none;
+  background: transparent;
+  color: #a67c52;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.btn-detail:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ============ 共享组件 ============ */
+.card-surface {
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid rgba(220, 215, 205, 0.4);
+  box-shadow: 0 4px 16px rgba(93, 83, 74, 0.04);
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+/* Hero Metrics */
+.hero-metrics {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 20px;
+}
+
+.hero-metric {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: 4px;
-  padding: 14px 8px;
-  border-radius: 12px;
-  background: var(--academic-canvas);
+  padding: 0 16px;
 }
 
-.source-icon {
-  font-size: 22px;
+.hero-metric:first-child {
+  padding-left: 0;
 }
 
-.source-value {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--academic-text-main);
+.hero-metric-value {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text-heading);
+  letter-spacing: -0.03em;
+  line-height: 1;
 }
 
-.source-label {
+.hero-metric-value small {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--graph-muted);
+  margin-left: 2px;
+}
+
+.hero-metric-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--graph-muted);
+}
+
+.hero-metric-divider {
+  width: 1px;
+  height: 36px;
+  background: var(--graph-line);
+  flex-shrink: 0;
+}
+
+.hero-metric-divider--wide {
+  height: 48px;
+  margin: 0 8px;
+}
+
+.hero-domain-viz {
+  flex: 1.4;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 0 0 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: opacity 0.15s;
+}
+
+.hero-domain-viz:hover {
+  opacity: 0.85;
+}
+
+.domain-doughnut-wrap {
+  flex-shrink: 0;
+}
+
+.domain-doughnut {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  position: relative;
+}
+
+.domain-doughnut-hole {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: #fff;
+  display: grid;
+  place-items: center;
+}
+
+.domain-doughnut-count {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--graph-blue);
+}
+
+.hero-domain-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hero-domain-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+.hero-domain-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hero-domain-tag {
   font-size: 11px;
-  color: var(--academic-text-muted);
+  color: var(--graph-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.generate-report-btn {
+.hero-domain-empty {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* 第二层 Middle Row */
+.middle-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 20px;
+  align-items: stretch;
+}
+
+.report-row {
+  margin-top: 16px;
+}
+
+.domain-panorama-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.domain-panorama-split {
+  display: grid;
+  grid-template-columns: minmax(0, 0.36fr) 1px minmax(0, 0.64fr);
+  gap: 0;
+  min-height: 280px;
+  align-items: stretch;
+}
+
+.panorama-half {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.panorama-half:first-child {
+  padding-left: 0;
+  padding-right: 4px;
+}
+
+.panorama-half:last-child {
+  padding-left: 6px;
+  padding-right: 0;
+}
+
+.panorama-half-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panorama-divider {
+  background: var(--border-light);
+  margin: 24px 0;
+}
+
+.panorama-chart {
+  flex: 1;
+  width: 100%;
+  min-height: 240px;
+}
+
+/* 紧凑热力图 */
+.heatmap-compact {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 14px;
+}
+
+.heatmap-mode-row--inline {
+  margin-bottom: 0;
+  gap: 6px;
+}
+
+.heatmap-mode-row--inline .heatmap-mode-btn {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.heatmap-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.heatmap-card-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.month-nav--card {
+  flex-shrink: 0;
+}
+
+.month-btn--card {
+  min-width: 96px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  gap: 4px;
+}
+
+.heatmap-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.heatmap-mode-btn {
+  border: none;
+  background: transparent;
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.heatmap-mode-btn:hover:not(.active) {
+  color: var(--text-heading);
+}
+
+.heatmap-mode-btn.active {
+  background: #a67c52;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(91, 168, 217, 0.28);
+}
+
+.heatmap-calendar {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.heatmap-dow-head {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.heatmap-dow-head span {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: 1;
+}
+
+.heatmap-calendar-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.heatmap-calendar-row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  width: 100%;
+}
+
+.heatmap-compact .heatmap-cell {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  min-height: 0;
+  border-radius: 3px;
+  align-self: start;
+}
+
+.heatmap-compact .heatmap-cell.empty {
+  background: transparent !important;
+}
+
+.link-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--graph-blue);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.link-btn:hover {
+  opacity: 0.75;
+}
+
+/* 月度报告 CTA */
+.report-cta--compact {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  background: linear-gradient(160deg, var(--bg-canvas) 0%, var(--border-lighter) 45%, var(--el-color-primary-light) 100%);
+}
+
+.report-cta-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+}
+
+.report-cta--compact .report-cta-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+}
+
+.report-cta-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.report-cta--compact .report-cta-body {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.report-cta--compact .report-cta-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.report-cta--compact .report-cta-text h3 {
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.report-cta--compact .report-cta-text p {
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.report-cta--compact .report-cta-actions {
+  flex-direction: row;
+  align-items: center;
+  width: auto;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.report-detail-inline .report-summary-content {
+  overflow: visible;
+}
+
+.dashboard-bottom-row {
+  margin-top: 20px;
+}
+
+.report-cta-icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  border: 1px solid var(--graph-line);
+  color: var(--graph-blue);
+}
+
+.report-cta-text h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-heading);
+  letter-spacing: -0.01em;
+}
+
+.report-cta-text p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--graph-muted);
+  line-height: 1.5;
+}
+
+.report-cta-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.btn-primary--sm {
+  padding: 8px 14px;
+  font-size: 12px;
+}
+
+.btn-primary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 11px 32px;
+  gap: 6px;
+  padding: 9px 18px;
   border: none;
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--academic-primary), var(--academic-primary-hover));
+  border-radius: 8px;
+  background: var(--graph-blue);
   color: #fff;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
-  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.3);
+  transition: background 0.15s;
+  white-space: nowrap;
 }
 
-.generate-report-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(139, 92, 246, 0.4);
+.btn-primary:hover:not(:disabled) {
+  background: var(--el-color-primary-hover);
 }
 
-.generate-report-btn:disabled {
-  opacity: 0.7;
+.btn-primary:disabled {
+  opacity: 0.65;
   cursor: wait;
+}
+
+.btn-ghost {
+  padding: 9px 14px;
+  border: 1px solid var(--graph-line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--graph-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.btn-ghost:hover {
+  border-color: var(--graph-blue);
+  color: var(--graph-blue);
+}
+
+.btn-ghost--sm {
+  padding: 7px 12px;
+  font-size: 11px;
 }
 
 .spinner {
@@ -1521,486 +2151,456 @@ function logout() {
   to { transform: rotate(360deg); }
 }
 
-.report-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  flex: 1;
-  min-height: 0;
-}
-
-.spinner-large {
-  animation: spin 1s linear infinite;
-  color: var(--academic-primary);
-  width: 36px;
-  height: 36px;
-}
-
-.loading-text {
-  margin: 0;
-  font-size: 13px;
-  color: var(--academic-text-muted);
-  text-align: center;
-  line-height: 1.6;
-}
-
-.report-summary {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-
 .report-summary-content {
-  font-size: 13px;
-  color: var(--academic-text-body);
-  line-height: 1.8;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  line-height: 1.58;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 14px 16px;
-  background: var(--academic-canvas);
-  border-radius: 10px;
   scrollbar-width: thin;
-  scrollbar-color: var(--academic-border) transparent;
-}
-
-.report-summary-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.report-summary-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.report-summary-content::-webkit-scrollbar-thumb {
-  background: var(--academic-border);
-  border-radius: 3px;
-}
-
-.report-summary-content::-webkit-scrollbar-thumb:hover {
-  background: var(--academic-text-muted);
+  scrollbar-color: var(--graph-line) transparent;
 }
 
 .report-summary-content :deep(h2) {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
-  color: var(--academic-text-main);
-  margin: 0 0 10px;
-  padding-bottom: 8px;
-  border-bottom: 2px solid var(--academic-primary);
-  display: inline-block;
-}
-
-.report-summary-content :deep(h2):first-child {
-  margin-top: 0;
+  color: var(--text-heading);
+  margin: 0 0 6px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--graph-line);
 }
 
 .report-summary-content :deep(h3) {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--academic-text-main);
-  margin: 14px 0 6px;
-}
-
-.report-summary-content :deep(h3):first-child {
-  margin-top: 0;
+  color: var(--text-heading);
+  margin: 10px 0 4px;
 }
 
 .report-summary-content :deep(p) {
-  margin: 8px 0;
-  text-align: justify;
+  margin: 5px 0;
 }
 
 .report-summary-content :deep(ul),
 .report-summary-content :deep(ol) {
-  margin: 8px 0;
-  padding-left: 20px;
+  margin: 5px 0;
+  padding-left: 18px;
 }
 
-.report-summary-content :deep(li) {
-  margin: 4px 0;
-}
-
-.report-actions {
+.heatmap-strip-head {
   display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-}
-
-.export-btn {
-  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 18px;
-  border: 1px solid var(--academic-border);
-  border-radius: 8px;
-  background: var(--academic-canvas);
-  color: var(--academic-text-body);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
-.export-btn:hover {
-  border-color: var(--academic-primary);
-  color: var(--academic-primary);
-  background: rgba(139, 92, 246, 0.06);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.1);
+.heatmap-strip-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--graph-muted);
+}
+
+.heatmap-strip-title h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+.heatmap-strip-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .heatmap-toggle {
   display: inline-flex;
-  gap: 4px;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--graph-line);
 }
 
 .toggle-btn {
-  padding: 6px 16px;
+  padding: 5px 12px;
   border: none;
-  border-radius: 6px;
+  border-radius: 5px;
   background: transparent;
-  color: var(--academic-text-muted);
-  font-size: 13px;
+  color: var(--graph-muted);
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.15s;
   white-space: nowrap;
 }
 
 .toggle-btn:hover {
-  color: var(--academic-text-main);
+  color: var(--text-heading);
 }
 
 .toggle-btn.active {
-  background: var(--academic-primary);
-  color: #fff;
-  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.35);
-  transform: translateY(-1px);
+  background: #fff;
+  color: var(--graph-blue);
+  box-shadow: 0 1px 2px rgba(74, 66, 58, 0.06);
 }
 
 .month-nav {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .nav-btn {
-  width: 32px;
-  height: 32px;
-  border: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--graph-line);
   border-radius: 6px;
-  background: transparent;
-  color: var(--academic-text-main);
+  background: #fff;
+  color: var(--graph-muted);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
 }
 
 .nav-btn:hover:not(.disabled) {
-  background: rgba(139, 92, 246, 0.1);
+  border-color: var(--graph-blue);
+  color: var(--graph-blue);
 }
 
 .nav-btn.disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
 .month-btn {
-  padding: 6px 16px;
-  border: none;
+  padding: 5px 12px;
+  border: 1px solid var(--graph-line);
   border-radius: 6px;
   background: #fff;
-  color: var(--academic-text-main);
-  font-size: 14px;
+  color: var(--text-heading);
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 6px;
-  transition: all 0.2s;
-}
-
-.month-btn:hover {
-  opacity: 0.9;
+  gap: 4px;
 }
 
 .nav-arrow {
-  font-size: 10px;
-  transition: transform 0.2s;
+  font-size: 9px;
+  color: var(--graph-muted);
 }
 
-.heatmap-container {
+.heatmap-github {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  align-items: center;
-  padding: 16px;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
-.heatmap-header {
-  display: flex;
-}
-
-.weekday-labels {
-  display: flex;
-  gap: 3px;
-}
-
-.weekday-label {
-  width: 32px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  color: var(--academic-text-muted);
-}
-
-.heatmap-body {
+.heatmap-github-labels {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  padding-top: 0;
+  flex-shrink: 0;
 }
 
-.heatmap-row {
-  display: flex;
-  align-items: center;
+.heatmap-github-label {
+  width: 14px;
+  height: 11px;
+  font-size: 9px;
+  line-height: 11px;
+  color: var(--text-tertiary);
+  text-align: right;
 }
 
-.cells {
+.heatmap-github-grid {
   display: flex;
-  gap: 3px;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
 }
 
-.cell {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
+.heatmap-github-row {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  gap: 2px;
+}
+
+.heatmap-cell {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  flex-shrink: 0;
   cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s;
+  transition: transform 0.1s, outline 0.1s;
 }
 
-.cell:hover {
-  transform: scale(1.2);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  z-index: 10;
+.heatmap-cell:hover:not(.empty) {
+  transform: scale(1.25);
+  outline: 1px solid rgba(74, 66, 58, 0.25);
+  outline-offset: 1px;
+  z-index: 2;
 }
 
-.cell.empty {
-  background: transparent;
+.heatmap-cell.empty {
+  background: transparent !important;
   cursor: default;
 }
 
-.cell.empty:hover {
-  transform: none;
-  box-shadow: none;
-}
-
-.month-summary {
-  text-align: center;
-  padding-top: 8px;
+.heatmap-strip-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--graph-line);
 }
 
 .summary-text {
-  font-size: 13px;
-  color: var(--academic-text-muted);
+  font-size: 12px;
+  color: var(--graph-muted);
 }
 
-.profile-card {
-  position: relative;
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.legend-label {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin: 0 2px;
+}
+
+.legend-cell {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+}
+
+/* 热力图 Tooltip */
+.heatmap-tooltip {
+  position: fixed;
+  z-index: 2000;
+  transform: translate(-50%, -100%);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--text-heading);
+  color: var(--bg-canvas);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(74, 66, 58, 0.15);
+}
+
+.heatmap-tooltip::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: var(--text-heading);
+}
+
+/* ============ 右侧个人中心 ============ */
+.profile-center {
+  position: sticky;
+  top: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 20px 24px;
-  border-radius: 22px;
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  box-shadow: var(--shadow-soft);
-  overflow: hidden;
 }
 
-
-
-.avatar-wrapper {
-  position: relative;
-  z-index: 1;
+.profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
 }
 
 .avatar-box {
-  width: 64px;
-  height: 64px;
-  border-radius: 14px;
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--academic-primary), var(--academic-primary-hover));
+  background: var(--graph-blue);
   color: #fff;
-  font-size: 26px;
-  font-weight: 800;
-  border: 3px solid var(--academic-panel);
-  box-shadow: 0 4px 16px rgba(139, 92, 246, 0.3);
-}
-
-.profile-info {
-  position: relative;
-  z-index: 1;
-  text-align: center;
-}
-
-.profile-info h2 {
-  margin: 0;
   font-size: 20px;
-  color: var(--academic-text-main);
-}
-
-.research-tags {
-  display: flex;
-  flex-wrap: nowrap;
-  justify-content: center;
-  gap: 5px;
-  margin-top: 6px;
-  overflow: hidden;
-}
-
-.research-tag {
-  padding: 4px 10px;
-  border-radius: 20px;
-  white-space: nowrap;
+  font-weight: 700;
   flex-shrink: 0;
-  background-color: #f5f6fa;
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
-  overflow: hidden;
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-  color: var(--academic-text-body);
+}
+
+.profile-identity-text h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-heading);
+  letter-spacing: -0.01em;
+}
+
+.profile-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.profile-tag {
+  padding: 3px 10px;
+  border-radius: 999px;
   font-size: 11px;
   font-weight: 500;
+  color: var(--graph-muted);
+  background: var(--bg-canvas);
+  border: 1px solid var(--graph-line);
 }
 
-.sidebar-section {
-  margin-top: 14px;
-  padding: 16px 20px;
-  border-radius: 16px;
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-}
-
-.sidebar-section h3 {
-  font-size: 14px;
-  color: var(--academic-text-main);
-  margin: 0 0 10px;
-  font-weight: 600;
-}
-
-.settings-list {
+.profile-settings {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 2px;
+  flex: 1;
 }
 
-.settings-item {
+.settings-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 14px 0;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.settings-item:not(:last-child) {
-  border-bottom: 1px solid var(--academic-border);
-}
-
-.settings-item:hover {
-  background: rgba(139, 92, 246, 0.04);
-  margin: 0 -16px;
-  padding-left: 16px;
-  padding-right: 16px;
+  width: 100%;
+  padding: 11px 10px;
+  border: none;
   border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.12s;
 }
 
-.settings-icon {
-  font-size: 16px;
+.settings-row:hover {
+  background: var(--bg-canvas);
 }
 
-.settings-label {
+.settings-row-label {
   flex: 1;
   font-size: 13px;
-  color: var(--academic-text-body);
+  color: var(--text-primary);
 }
 
-.settings-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.settings-row-value {
   font-size: 12px;
-  color: var(--academic-text-muted);
+  color: var(--graph-muted);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.logout-item {
-  color: var(--danger);
+.settings-row svg {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
 }
 
-.logout-item .settings-label {
-  color: var(--danger);
-}
-
-.sidebar-stats {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
-  margin-bottom: 8px;
-}
-
-.sidebar-stat-item {
-  padding: 8px 8px;
-  border-radius: 10px;
-  background: var(--academic-panel);
-  border: 1px solid var(--academic-border);
-  text-align: center;
-}
-
-.sidebar-stat-value {
-  display: block;
-  font-size: 19px;
-  font-weight: 700;
-  color: var(--academic-primary);
-  line-height: 1.2;
-}
-
-.sidebar-stat-label {
-  display: block;
-  font-size: 10px;
-  color: var(--academic-text-muted);
-  margin-top: 1px;
-}
-
-.arrow-btn {
-  width: 24px;
-  height: 24px;
+.logout-btn {
+  margin-top: auto;
+  padding-top: 16px;
   border: none;
   background: transparent;
-  color: var(--academic-text-muted);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  text-align: center;
+  transition: color 0.15s;
 }
 
-.arrow-btn:hover {
-  color: var(--academic-primary);
-  background: var(--academic-primary-light);
+.logout-btn:hover {
+  color: #ef4444;
+}
+
+/* ============ 响应式 ============ */
+@media (max-width: 1200px) {
+  .profile-container {
+    grid-template-columns: 240px minmax(0, 1fr) 240px;
+    padding: 24px;
+    gap: 18px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .profile-container {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .profile-col--right {
+    grid-column: 1 / -1;
+    position: static;
+  }
+
+  .profile-col--left {
+    grid-column: 1 / -1;
+  }
+
+  .identity-card {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    text-align: left;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .avatar-wrapper {
+    margin-bottom: 0;
+  }
+
+  .profile-settings {
+    flex: 1 1 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .profile-container {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+
+  .profile-col--right {
+    grid-template-columns: 1fr;
+  }
+
+  .report-highlights {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .report-editorial-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .report-highlight-value {
+    font-size: 24px;
+  }
+
+  .stat-cube-value {
+    font-size: 22px;
+  }
 }
 
 .modal-overlay {
@@ -2009,7 +2609,7 @@ function logout() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: rgba(74, 66, 58, 0.45);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -2029,7 +2629,7 @@ function logout() {
   padding: 28px 32px;
   min-width: 420px;
   max-width: 480px;
-  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.18);
+  box-shadow: 0 20px 60px rgba(74, 66, 58, 0.18);
   animation: modalSlideUp 0.25s ease;
 }
 
@@ -2084,13 +2684,13 @@ function logout() {
 .modal-input:focus {
   outline: none;
   border-color: var(--academic-primary);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  box-shadow: 0 0 0 3px rgba(156, 136, 120, 0.1);
 }
 
 .modal-textarea:focus {
   outline: none;
   border-color: var(--academic-primary);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  box-shadow: 0 0 0 3px rgba(156, 136, 120, 0.1);
 }
 
 .modal-actions {
@@ -2114,7 +2714,7 @@ function logout() {
 
 .modal-close:hover, .modal-cancel:hover {
   background: var(--academic-canvas);
-  border-color: #cbd5e1;
+  border-color: var(--border-light);
 }
 
 .modal-confirm {
@@ -2131,7 +2731,7 @@ function logout() {
 
 .modal-confirm:hover {
   background: var(--academic-primary-hover);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+  box-shadow: 0 4px 12px rgba(156, 136, 120, 0.25);
 }
 
 .pwd-field {
@@ -2253,7 +2853,7 @@ function logout() {
 .domain-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.55);
+  background: rgba(74, 66, 58, 0.55);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -2291,7 +2891,7 @@ function logout() {
   justify-content: space-between;
   padding: 20px 24px;
   border-bottom: 1px solid var(--academic-border);
-  background: linear-gradient(135deg, #6366f108, #8b5cf608);
+  background: linear-gradient(135deg, rgba(196, 154, 108, 0.08), rgba(166, 124, 82, 0.06));
 }
 
 .domain-modal-title {
@@ -2320,81 +2920,72 @@ function logout() {
 .domain-modal-body {
   flex: 1;
   display: flex;
+  flex-direction: column;
   min-height: 0;
   overflow: hidden;
 }
 
-.domain-sidebar {
-  width: 220px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--academic-border);
-  padding: 16px 12px;
-  overflow-y: auto;
-  background: #fafbfc;
-}
-
-.sidebar-title {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--academic-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 0 8px 12px;
-}
-
-.domain-side-item {
-  width: 100%;
+.domain-view-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-  margin-bottom: 6px;
-  transition: all 0.15s;
-  font-family: inherit;
+  gap: 8px;
+  padding: 12px 20px 0;
+  border-bottom: 1px solid var(--academic-border);
+  background: var(--bg-canvas);
 }
 
-.domain-side-item:hover {
-  background: #fff;
-  border-color: var(--academic-border);
-}
-
-.domain-side-item.active {
-  background: #fff;
-  border-color: var(--academic-primary);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.12);
-}
-
-.domain-side-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--academic-text-main);
-}
-
-.domain-side-item.active .domain-side-name {
-  color: var(--academic-primary);
-}
-
-.domain-side-meta {
-  font-size: 11px;
-  color: var(--academic-text-muted);
-  display: flex;
-  gap: 4px;
+.domain-view-tab {
+  position: relative;
+  display: inline-flex;
   align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.15s, background 0.15s;
 }
 
-.dot-sep {
-  opacity: 0.6;
+.domain-view-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.domain-view-tab.active {
+  color: var(--el-color-primary-hover);
+  background: #fff;
+  font-weight: 600;
+}
+
+.domain-view-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--el-color-primary-hover);
+  border-radius: 2px 2px 0 0;
+}
+
+.domain-view-tab-sub {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(166, 124, 82, 0.08);
+  color: var(--el-color-primary-hover);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .domain-main {
   flex: 1;
   overflow-y: auto;
   padding: 20px 24px;
+  background: #fff;
 }
 
 .radar-section {
@@ -2405,8 +2996,9 @@ function logout() {
 
 .radar-header {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 .radar-header h5 {
@@ -2417,13 +3009,22 @@ function logout() {
 }
 
 .radar-hint {
+  margin: 6px 0 0;
   font-size: 11px;
   color: var(--academic-text-muted);
+  line-height: 1.5;
 }
 
 .radar-chart {
   width: 100%;
   height: 360px;
+}
+
+.domain-modal-empty {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
 }
 
 .sub-domain-table {
@@ -2443,7 +3044,7 @@ function logout() {
 }
 
 .table-header {
-  background: #f8fafc;
+  background: var(--bg-canvas);
   font-size: 11px;
   font-weight: 700;
   color: var(--academic-text-muted);
@@ -2461,7 +3062,7 @@ function logout() {
 }
 
 .table-row:hover {
-  background: #f8fafc;
+  background: var(--bg-canvas);
 }
 
 .sub-name {
@@ -2490,7 +3091,7 @@ function logout() {
   gap: 0;
   padding: 16px 24px;
   border-top: 1px solid var(--academic-border);
-  background: #fafbfc;
+  background: var(--bg-canvas);
 }
 
 .footer-stat {

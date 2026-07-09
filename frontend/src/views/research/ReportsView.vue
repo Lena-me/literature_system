@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -26,8 +26,11 @@ const sidebarCollapsed = ref(false)
 const sidebarHovered = ref(false)
 const exportOpen = ref(false)
 const exportMenuRef = ref<HTMLElement | null>(null)
+const tocDrawerOpen = ref(false)
 const reportBodyRef = ref<HTMLElement | null>(null)
 const activeTocId = ref('')
+const citationPopover = ref<{ item: ReportReferenceLink; anchor: { x: number; y: number } } | null>(null)
+let citationHideTimer: ReturnType<typeof setTimeout> | null = null
 let tocObserver: IntersectionObserver | null = null
 
 function toggleSidebar() {
@@ -150,6 +153,7 @@ function scrollToSection(id: string) {
   if (el) {
     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
     activeTocId.value = id
+    tocDrawerOpen.value = false
   }
 }
 
@@ -205,15 +209,61 @@ function toggleExportMenu() {
 }
 
 function onDocumentClick(event: MouseEvent) {
-  if (!exportOpen.value) return
   const target = event.target as Node
-  if (!exportMenuRef.value?.contains(target)) {
+  if (exportOpen.value && !exportMenuRef.value?.contains(target)) {
     exportOpen.value = false
+  }
+}
+
+function onCitationHover(event: MouseEvent) {
+  const el = (event.target as HTMLElement).closest('.citation-mark') as HTMLElement | null
+  if (!el) return
+  if (citationHideTimer) {
+    clearTimeout(citationHideTimer)
+    citationHideTimer = null
+  }
+  const index = Number.parseInt(el.getAttribute('data-source-index') || '', 10)
+  if (Number.isNaN(index)) return
+  const item = referenceLinks.value[index]
+  if (!item) return
+  const rect = el.getBoundingClientRect()
+  citationPopover.value = {
+    item,
+    anchor: { x: rect.left + rect.width / 2, y: rect.bottom },
+  }
+}
+
+function onCitationOut(event: MouseEvent) {
+  const related = event.relatedTarget as HTMLElement | null
+  if (related?.closest('.citation-mark') || related?.closest('.reference-popover')) return
+  citationHideTimer = setTimeout(() => {
+    citationPopover.value = null
+  }, 160)
+}
+
+function keepCitationPopover() {
+  if (citationHideTimer) {
+    clearTimeout(citationHideTimer)
+    citationHideTimer = null
+  }
+}
+
+function hideCitationPopover() {
+  citationPopover.value = null
+}
+
+function citationPopoverStyle() {
+  if (!citationPopover.value) return {}
+  return {
+    left: `${citationPopover.value.anchor.x}px`,
+    top: `${citationPopover.value.anchor.y}px`,
   }
 }
 
 watch([current, tocItems], async () => {
   activeTocId.value = tocItems.value[0]?.id || ''
+  tocDrawerOpen.value = false
+  citationPopover.value = null
   await nextTick()
   setupTocObserver()
 }, { flush: 'post' })
@@ -400,61 +450,75 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 
     <!-- 右侧内容 -->
     <main class="report-main" :class="{ 'is-sidebar-collapsed': sidebarCollapsed }">
-      <div class="report-header">
-        <div class="report-header-copy">
-          <h2 class="report-header-title" :title="fullTitle">{{ displayTitle }}</h2>
-          <span v-if="fullTitle !== displayTitle" class="report-header-subtitle" :title="fullTitle">{{ fullTitle }}</span>
-        </div>
-
-        <div class="report-header-spacer" />
-
-        <div class="report-header-actions">
-          <button
-            v-if="currentOfficialUrl"
-            type="button"
-            class="report-action-btn official"
-            @click="openOfficialPaper"
-          >
-            {{ officialLinkLabel(currentOfficialUrl) }} ↗
-          </button>
-          <div ref="exportMenuRef" class="export-dropdown">
+      <div v-if="current" class="report-stage">
+        <div class="report-toolbar-float">
+          <div class="report-toolbar-capsule">
             <button
+              v-if="tocItems.length"
               type="button"
-              class="report-action-btn primary export-trigger"
-              :disabled="!current"
-              @click.stop="toggleExportMenu"
+              class="toolbar-btn"
+              :class="{ active: tocDrawerOpen }"
+              @click="tocDrawerOpen = !tocDrawerOpen"
             >
-              导出报告
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
+              目录
             </button>
-            <div v-if="exportOpen" class="export-menu">
-              <button type="button" @click="downloadReport('md')">Markdown (.md)</button>
-              <button type="button" @click="downloadReport('docx')">Word (.docx)</button>
-              <button type="button" @click="downloadReport('pdf')">PDF (.pdf)</button>
+            <button
+              v-if="currentOfficialUrl"
+              type="button"
+              class="toolbar-btn"
+              @click="openOfficialPaper"
+            >
+              {{ officialLinkLabel(currentOfficialUrl) }}
+            </button>
+            <div ref="exportMenuRef" class="export-dropdown">
+              <button
+                type="button"
+                class="toolbar-btn export-trigger"
+                :disabled="!current"
+                @click.stop="toggleExportMenu"
+              >
+                导出
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+              <div v-if="exportOpen" class="export-popover">
+                <button type="button" @click="downloadReport('md')">Markdown (.md)</button>
+                <button type="button" @click="downloadReport('docx')">Word (.docx)</button>
+                <button type="button" @click="downloadReport('pdf')">PDF (.pdf)</button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <div v-if="current" class="report-reading">
-        <nav v-if="tocItems.length" class="report-toc slim-scroll" aria-label="报告目录">
-          <span class="toc-label">目录</span>
-          <button
-            v-for="item in tocItems"
-            :key="item.id"
-            type="button"
-            class="toc-item"
-            :class="{ active: activeTocId === item.id, sub: item.level === 2 }"
-            @click="scrollToSection(item.id)"
+        <div class="report-reading">
+          <div
+            ref="reportBodyRef"
+            class="report-body slim-scroll"
+            @mouseover="onCitationHover"
+            @mouseout="onCitationOut"
           >
-            {{ item.label }}
-          </button>
-        </nav>
+            <header class="report-cover">
+              <p class="report-cover-eyebrow">研读报告</p>
+              <h1 class="report-cover-title">{{ fullTitle }}</h1>
+              <div class="report-cover-meta">
+                <span v-if="current.created_at">生成于 {{ formatDate(current.created_at) }}</span>
+                <span v-if="currentPaper" class="report-cover-dot">·</span>
+                <button
+                  v-if="currentPaper && currentOfficialUrl"
+                  type="button"
+                  class="report-cover-paper-link"
+                  @click="openOfficialPaper"
+                >
+                  {{ currentPaper.title || currentPaper.original_filename }}
+                </button>
+                <span v-else-if="currentPaper" class="report-cover-paper">
+                  {{ currentPaper.title || currentPaper.original_filename }}
+                </span>
+              </div>
+            </header>
 
-        <div ref="reportBodyRef" class="report-body slim-scroll">
-          <section v-if="visualSummary" id="section-visual-summary" class="content-panel">
+            <section v-if="visualSummary" id="section-visual-summary" class="content-panel visual-panel">
             <header class="panel-head">
               <h3>速览</h3>
             </header>
@@ -513,14 +577,19 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
             <MarkdownRenderer :content="markdown(current)" :linkify-references="false" heading-anchors />
           </section>
 
-          <section v-if="referenceLinks.length" id="section-references" class="content-panel">
+          <section v-if="referenceLinks.length" id="section-references" class="content-panel references-panel">
             <header class="panel-head">
               <h3>延伸阅读</h3>
               <span class="panel-head-meta">{{ referenceLinks.length }} 篇</span>
             </header>
-            <div class="reference-rows">
-              <article v-for="(item, index) in referenceLinks" :key="`${item.raw}-${index}`" class="reference-row">
-                <div class="reference-main">
+            <div class="reference-cards">
+              <article
+                v-for="(item, index) in referenceLinks"
+                :key="`${item.raw}-${index}`"
+                class="reference-card"
+              >
+                <span class="reference-card-index">[{{ index + 1 }}]</span>
+                <div class="reference-card-body">
                   <p class="reference-citation">{{ referenceTitle(item) }}</p>
                   <p v-if="displayReferenceReason(item.reason)" class="reference-reason">{{ displayReferenceReason(item.reason) }}</p>
                 </div>
@@ -535,6 +604,56 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
               </article>
             </div>
           </section>
+          </div>
+        </div>
+
+        <div
+          v-if="tocDrawerOpen"
+          class="toc-drawer-backdrop"
+          @click="tocDrawerOpen = false"
+        />
+
+        <aside
+          v-if="tocItems.length"
+          class="toc-drawer slim-scroll"
+          :class="{ open: tocDrawerOpen }"
+          aria-label="报告目录"
+        >
+          <div class="toc-drawer-head">
+            <span>目录</span>
+            <button type="button" class="toc-drawer-close" @click="tocDrawerOpen = false">×</button>
+          </div>
+          <button
+            v-for="item in tocItems"
+            :key="item.id"
+            type="button"
+            class="toc-item"
+            :class="{ active: activeTocId === item.id, sub: item.level === 2 }"
+            @click="scrollToSection(item.id)"
+          >
+            {{ item.label }}
+          </button>
+        </aside>
+
+        <div
+          v-if="citationPopover"
+          class="reference-popover"
+          :style="citationPopoverStyle()"
+          @mouseenter="keepCitationPopover"
+          @mouseleave="hideCitationPopover"
+        >
+          <p class="reference-popover-title">{{ referenceTitle(citationPopover.item) }}</p>
+          <p v-if="displayReferenceReason(citationPopover.item.reason)" class="reference-popover-reason">
+            {{ displayReferenceReason(citationPopover.item.reason) }}
+          </p>
+          <button
+            v-if="citationPopover.item.url"
+            type="button"
+            class="reference-popover-link"
+            @click="openReference(citationPopover.item)"
+          >
+            {{ referenceButtonLabel(citationPopover.item) }} ↗
+          </button>
         </div>
       </div>
 
@@ -553,7 +672,6 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background: #F8FAFC;
 }
 
 /* ====== 左侧栏 ====== */
@@ -572,8 +690,8 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 .report-sidebar {
   width: 260px;
   height: 100%;
-  background: #fff;
-  box-shadow: 1px 0 0 0 #E2E8F0;
+  background: var(--bg-surface);
+  box-shadow: 1px 0 0 0 var(--sidebar-border);
   display: flex;
   flex-direction: column;
   padding: 20px 12px;
@@ -591,10 +709,10 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #E2E8F0;
+  border: 1px solid var(--border-light);
   border-radius: 50%;
   background: #fff;
-  color: #64748B;
+  color: var(--text-secondary);
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
   opacity: 0;
@@ -617,8 +735,8 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 }
 
 .report-sidebar-toggle:hover {
-  color: #0F172A;
-  border-color: #CBD5E1;
+  color: var(--text-heading);
+  border-color: var(--border-light);
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
 }
 
@@ -633,21 +751,21 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   margin: 0;
   font-size: 16px;
   font-weight: 700;
-  color: #0F172A;
+  color: var(--text-heading);
 }
 
 .report-count {
   font-size: 11px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-weight: 500;
-  background: #F1F5F9;
+  background: var(--border-lighter);
   padding: 1px 7px;
   border-radius: 10px;
 }
 
 .report-divider {
   height: 1px;
-  background: #F1F5F9;
+  background: var(--border-lighter);
 }
 
 .report-create-block {
@@ -663,22 +781,22 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   padding: 0 10px;
   border: none;
   border-radius: 8px;
-  background: #F8FAFC;
-  color: #334155;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
   font-size: 13px;
   outline: none;
-  box-shadow: 0 0 0 1px #E2E8F0;
+  box-shadow: 0 0 0 1px var(--border-light);
 }
 
 .report-field:focus {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 0 0 2px rgba(166, 124, 82, 0.3);
 }
 
 .report-create-btn {
   height: 34px;
   border: none;
   border-radius: 8px;
-  background: #3B82F6;
+  background: var(--el-color-primary);
   color: #fff;
   font-size: 13px;
   font-weight: 600;
@@ -687,7 +805,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 }
 
 .report-create-btn:hover:not(:disabled) {
-  background: #2563EB;
+  background: var(--el-color-primary-hover);
 }
 
 .report-create-btn:disabled {
@@ -709,19 +827,36 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   padding: 12px 16px;
   cursor: pointer;
   transition: background 0.12s;
-  box-shadow: 0 1px 0 0 #F1F5F9;
+  box-shadow: 0 1px 0 0 var(--border-lighter);
+  position: relative;
+}
+
+.report-list-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: transparent;
+  transition: background 0.12s;
 }
 
 .report-list-item:hover {
-  background: #F1F5F9;
+  background: var(--border-lighter);
 }
 
 .report-list-item.active {
-  background: #EFF6FF;
+  background: rgba(241, 237, 228, 0.85);
+}
+
+.report-list-item.active::before {
+  background: #c49a6c;
 }
 
 .report-list-item.active:hover {
-  background: #DBEAFE;
+  background: rgba(241, 237, 228, 0.95);
 }
 
 .report-item-main {
@@ -732,7 +867,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 .report-item-title {
   font-size: 13px;
   font-weight: 600;
-  color: #0F172A;
+  color: var(--text-heading);
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
@@ -741,20 +876,20 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 }
 
 .report-list-item.active .report-item-title {
-  color: #1D4ED8;
+  color: var(--text-heading);
 }
 
 .report-item-meta {
   margin-top: 4px;
   font-size: 11px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
 }
 
 .report-item-summary {
   margin: 4px 0 0;
   font-size: 12px;
   line-height: 1.45;
-  color: #64748B;
+  color: var(--text-secondary);
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
@@ -771,7 +906,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   cursor: pointer;
   opacity: 0;
   transition: all 0.12s;
@@ -789,7 +924,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 .report-empty-side {
   padding: 32px 16px;
   text-align: center;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-size: 13px;
 }
 
@@ -801,95 +936,65 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--bg-canvas);
 }
 
-.report-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 24px;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
-.report-main.is-sidebar-collapsed .report-header {
-  padding-left: 48px;
-}
-
-.report-header-copy {
-  min-width: 0;
-}
-
-.report-header-title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  color: #0F172A;
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-height: 1.35;
-}
-
-.report-header-subtitle {
-  display: block;
-  margin-top: 2px;
-  font-size: 12px;
-  color: #94A3B8;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.report-header-spacer {
+.report-stage {
+  position: relative;
   flex: 1;
-  min-width: 8px;
-}
-
-.report-header-actions {
+  min-height: 0;
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.report-action-btn {
-  padding: 7px 14px;
+.report-toolbar-float {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  z-index: 20;
+}
+
+.report-main.is-sidebar-collapsed .report-toolbar-float {
+  right: 16px;
+}
+
+.report-toolbar-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(218, 212, 198, 0.65);
+  box-shadow: 0 4px 18px rgba(74, 66, 58, 0.06);
+}
+
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
   border: none;
-  border-radius: 8px;
-  background: #fff;
-  color: #475569;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  box-shadow: 0 0 0 1px #E2E8F0;
-  transition: all 0.12s;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
-.report-action-btn:hover:not(:disabled) {
-  background: #F8FAFC;
-  color: #334155;
+.toolbar-btn:hover:not(:disabled),
+.toolbar-btn.active {
+  background: var(--border-lighter);
+  color: var(--text-primary);
 }
 
-.report-action-btn.primary {
-  background: #3B82F6;
-  color: #fff;
-  box-shadow: none;
-}
-
-.report-action-btn.primary:hover:not(:disabled) {
-  background: #2563EB;
-}
-
-.report-action-btn.official {
-  color: #7C3AED;
-  background: #F5F3FF;
-  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.2);
-}
-
-.report-action-btn:disabled {
-  opacity: 0.35;
+.toolbar-btn:disabled {
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -897,81 +1002,190 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   position: relative;
 }
 
-.export-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.export-trigger svg {
+  opacity: 0.7;
 }
 
-.export-menu {
+.export-popover {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 8px);
   right: 0;
-  min-width: 168px;
+  min-width: 156px;
   padding: 6px;
-  background: #fff;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12), 0 0 0 1px #E2E8F0;
+  background: var(--bg-surface);
+  border-radius: 12px;
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-md);
   z-index: 30;
 }
 
-.export-menu button {
+.export-popover button {
   display: block;
   width: 100%;
   padding: 8px 12px;
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: #334155;
+  color: var(--text-primary);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
   transition: background 0.12s;
 }
 
-.export-menu button:hover {
-  background: #F1F5F9;
-  color: #1D4ED8;
+.export-popover button:hover {
+  background: var(--border-lighter);
+  color: var(--academic-primary);
 }
 
 .report-reading {
   flex: 1;
   min-height: 0;
   display: flex;
+  justify-content: center;
+  padding: 56px 20px 40px;
   overflow: hidden;
 }
 
-.report-toc {
-  width: 196px;
-  flex-shrink: 0;
+.report-body {
+  width: 100%;
+  max-width: 820px;
+  min-width: 0;
   min-height: 0;
-  padding: 8px 10px 24px 24px;
   overflow-y: auto;
-  border-right: 1px solid #E2E8F0;
-  background: #fff;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 
-.toc-label {
-  display: block;
-  padding: 0 10px 10px;
-  font-size: 11px;
+.report-cover {
+  margin-bottom: 36px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--border-lighter);
+}
+
+.report-cover-eyebrow {
+  margin: 0 0 8px;
+  font-size: 12px;
   font-weight: 600;
-  color: #94A3B8;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--text-tertiary);
+}
+
+.report-cover-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--text-heading);
+  letter-spacing: -0.02em;
+}
+
+.report-cover-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.report-cover-dot {
+  color: var(--text-tertiary);
+}
+
+.report-cover-paper-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--academic-primary);
+  font-size: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: rgba(166, 124, 82, 0.35);
+  text-underline-offset: 3px;
+}
+
+.report-cover-paper-link:hover {
+  color: var(--academic-primary-hover);
+}
+
+.report-cover-paper {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.toc-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 24;
+  background: rgba(74, 66, 58, 0.12);
+}
+
+.toc-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 25;
+  width: 260px;
+  height: 100%;
+  padding: 16px 14px 24px;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-light);
+  box-shadow: -8px 0 24px rgba(74, 66, 58, 0.08);
+  transform: translateX(100%);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow-y: auto;
+}
+
+.toc-drawer.open {
+  transform: translateX(0);
+}
+
+.toc-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 0 8px 10px;
+  border-bottom: 1px solid var(--border-lighter);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+.toc-drawer-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.toc-drawer-close:hover {
+  background: var(--border-lighter);
+  color: var(--text-primary);
 }
 
 .toc-item {
   display: block;
   width: 100%;
-  padding: 7px 10px;
+  padding: 8px 10px;
   margin-bottom: 2px;
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: #64748B;
+  color: var(--text-secondary);
   font-size: 13px;
-  line-height: 1.4;
+  line-height: 1.45;
   text-align: left;
   cursor: pointer;
   transition: all 0.12s;
@@ -983,37 +1197,77 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 }
 
 .toc-item:hover {
-  background: #F8FAFC;
-  color: #334155;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
 }
 
 .toc-item.active {
-  background: #EFF6FF;
-  color: #1D4ED8;
+  background: var(--academic-primary-light);
+  color: var(--academic-primary);
   font-weight: 600;
 }
 
-.report-body {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 0 24px 28px;
-  overscroll-behavior: contain;
+.reference-popover {
+  position: fixed;
+  z-index: 1200;
+  min-width: 240px;
+  max-width: 340px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  transform: translate(-50%, 10px);
+  pointer-events: auto;
+}
+
+.reference-popover-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text-heading);
+}
+
+.reference-popover-reason {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.reference-popover-link {
+  margin-top: 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--academic-primary-light);
+  color: var(--academic-primary);
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reference-popover-link:hover {
+  background: #e8ddd0;
 }
 
 .content-panel {
-  background: #fff;
-  border-radius: 10px;
-  padding: 20px 24px;
-  margin-bottom: 2px;
-  box-shadow: 0 1px 0 0 #F1F5F9;
-  scroll-margin-top: 16px;
+  margin-bottom: 28px;
+  scroll-margin-top: 24px;
 }
 
-.content-panel:last-child {
-  box-shadow: none;
+.visual-panel {
+  padding: 20px 0 8px;
+  border-bottom: 1px solid var(--border-lighter);
+}
+
+.markdown-panel {
+  padding: 8px 0 12px;
+}
+
+.references-panel {
+  padding-top: 8px;
 }
 
 .panel-head {
@@ -1027,18 +1281,18 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   margin: 0;
   font-size: 16px;
   font-weight: 700;
-  color: #0F172A;
+  color: var(--text-heading);
 }
 
 .panel-head-meta {
   font-size: 12px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
 }
 
 .panel-section {
   padding-top: 4px;
   padding-bottom: 16px;
-  border-bottom: 1px solid #F1F5F9;
+  border-bottom: 1px solid var(--border-lighter);
   scroll-margin-top: 16px;
 }
 
@@ -1053,7 +1307,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   margin: 0 0 10px;
   font-size: 14px;
   font-weight: 600;
-  color: #334155;
+  color: var(--text-primary);
 }
 
 .panel-subtitle {
@@ -1067,7 +1321,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 .reference-reason,
 .reference-raw p {
   margin: 0;
-  color: #64748B;
+  color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.65;
   overflow-wrap: anywhere;
@@ -1090,7 +1344,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   display: flex;
   gap: 10px;
   padding: 12px 0;
-  border-left: 3px solid #3B82F6;
+  border-left: 3px solid var(--sidebar-indicator);
   padding-left: 12px;
 }
 
@@ -1101,8 +1355,8 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   display: grid;
   place-items: center;
   border-radius: 999px;
-  background: #EFF6FF;
-  color: #1D4ED8;
+  background: var(--el-color-primary-light);
+  color: var(--el-color-primary-hover);
   font-size: 11px;
   font-weight: 700;
 }
@@ -1115,7 +1369,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   display: block;
   margin-bottom: 4px;
   font-size: 13px;
-  color: #0F172A;
+  color: var(--text-heading);
 }
 
 .flow-step-body p {
@@ -1129,14 +1383,14 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 .flow-connector {
   align-self: center;
   justify-self: center;
-  color: #CBD5E1;
+  color: var(--border-light);
   font-weight: 700;
   font-size: 16px;
 }
 
 .data-table-panel {
-  background: #F8FAFC;
-  border: 1px solid #E2E8F0;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-light);
   border-radius: 10px;
   overflow: hidden;
 }
@@ -1157,14 +1411,14 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   text-align: left;
   vertical-align: top;
   font-size: 13px;
-  color: #334155;
-  border-bottom: 1px solid #E2E8F0;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-light);
   overflow-wrap: anywhere;
 }
 
 .flat-table th {
-  background: #EFF6FF;
-  color: #1E40AF;
+  background: var(--el-color-primary-light);
+  color: var(--sidebar-accent);
   font-weight: 700;
   font-size: 12px;
   letter-spacing: 0.02em;
@@ -1178,7 +1432,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 .flat-table th:last-child,
 .flat-table td:last-child {
   width: 100px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
 }
 
 .flat-table tbody tr:last-child td {
@@ -1189,21 +1443,21 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 0;
-  border: 1px solid #DBEAFE;
+  border: 1px solid #e8ddd0;
   border-radius: 10px;
   overflow: hidden;
-  background: #F8FAFC;
+  background: var(--bg-canvas);
 }
 
 .metric-cell {
   padding: 16px 18px;
-  border-right: 1px solid #DBEAFE;
-  border-bottom: 1px solid #DBEAFE;
-  background: linear-gradient(180deg, #fff 0%, #F8FAFC 100%);
+  border-right: 1px solid #e8ddd0;
+  border-bottom: 1px solid #e8ddd0;
+  background: linear-gradient(180deg, #fff 0%, var(--bg-canvas) 100%);
 }
 
 .metric-label {
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -1212,7 +1466,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 
 .metric-value {
   margin: 6px 0 4px;
-  color: #1D4ED8;
+  color: var(--el-color-primary-hover);
   font-size: 20px;
   font-weight: 800;
   overflow-wrap: anywhere;
@@ -1223,50 +1477,44 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   margin-top: 6px;
 }
 
-.markdown-panel {
-  padding: 28px 32px 32px;
-}
-
 .markdown-panel :deep(.markdown-body h2) {
-  margin-top: 36px;
-  padding-top: 22px;
-  border-top: 1px solid #E2E8F0;
-  scroll-margin-top: 20px;
-  font-size: 18px;
+  margin-top: 40px;
+  padding-top: 0;
+  border-top: none;
+  scroll-margin-top: 24px;
+  font-size: 1.35em;
 }
 
 .markdown-panel :deep(.markdown-body h2:first-child) {
   margin-top: 0;
-  padding-top: 0;
-  border-top: none;
 }
 
 .markdown-panel :deep(.markdown-body h3) {
-  margin-top: 24px;
-  scroll-margin-top: 20px;
-  font-size: 15px;
-  color: #334155;
+  margin-top: 28px;
+  scroll-margin-top: 24px;
+  font-size: 1.1em;
+  color: var(--text-primary);
 }
 
 .markdown-panel :deep(.markdown-body p) {
-  margin: 10px 0;
-  max-width: none;
+  margin: 12px 0;
 }
 
 .markdown-panel :deep(.markdown-body) {
   width: 100%;
+  max-width: 820px;
 }
 
 .markdown-panel :deep(.markdown-body table) {
-  background: #F8FAFC;
-  border: 1px solid #E2E8F0;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-light);
   border-radius: 10px;
   margin: 16px 0;
 }
 
 .markdown-panel :deep(.markdown-body th) {
-  background: #EFF6FF;
-  color: #1E40AF;
+  background: var(--el-color-primary-light);
+  color: var(--sidebar-accent);
 }
 
 .markdown-panel :deep(.markdown-body ul) {
@@ -1293,36 +1541,41 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   font-size: 14px;
 }
 
-.reference-rows {
+.reference-cards {
   display: flex;
   flex-direction: column;
+  gap: 10px;
 }
 
-.reference-row {
+.reference-card {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 14px 0;
-  border-bottom: 1px solid #F1F5F9;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-lighter);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
 }
 
-.reference-row:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
+.reference-card-index {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--academic-primary);
+  line-height: 1.6;
 }
 
-.reference-main {
+.reference-card-body {
+  flex: 1;
   min-width: 0;
 }
-
-.reference-row h4,
 .reference-citation {
   margin: 0 0 10px;
   font-size: 14px;
   font-weight: 600;
   line-height: 1.6;
-  color: #0F172A;
+  color: var(--text-heading);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1332,7 +1585,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   flex-wrap: wrap;
   gap: 8px;
   margin: 6px 0;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-size: 12px;
 }
 
@@ -1342,7 +1595,7 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 
 .reference-raw {
   margin-top: 8px;
-  color: #64748B;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -1359,8 +1612,8 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   flex: 0 0 auto;
   border: none;
   border-radius: 8px;
-  background: #EFF6FF;
-  color: #1D4ED8;
+  background: var(--el-color-primary-light);
+  color: var(--el-color-primary-hover);
   padding: 7px 12px;
   font-size: 12px;
   font-weight: 600;
@@ -1369,12 +1622,12 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 }
 
 .reference-link-btn:hover {
-  background: #DBEAFE;
+  background: #e8ddd0;
 }
 
 .reference-empty {
   flex: 0 0 auto;
-  color: #94A3B8;
+  color: var(--text-tertiary);
   font-size: 12px;
 }
 
@@ -1385,14 +1638,14 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
   align-items: center;
   justify-content: center;
   min-height: 320px;
-  color: #94A3B8;
+  color: var(--text-tertiary);
 }
 
 .report-empty-main h3 {
   margin: 0 0 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #64748B;
+  color: var(--text-secondary);
 }
 
 .report-empty-main p {
@@ -1401,32 +1654,21 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
 }
 
 @media (max-width: 980px) {
+  .report-toolbar-float {
+    top: 12px;
+    right: 12px;
+  }
+
   .report-reading {
-    flex-direction: column;
+    padding: 52px 16px 32px;
   }
 
-  .report-toc {
-    width: 100%;
-    max-height: 120px;
-    border-right: none;
-    border-bottom: 1px solid #E2E8F0;
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 6px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 10px 16px;
+  .report-cover-title {
+    font-size: 24px;
   }
 
-  .toc-label {
-    display: none;
-  }
-
-  .toc-item {
-    flex: 0 0 auto;
-    width: auto;
-    white-space: nowrap;
-    margin-bottom: 0;
+  .toc-drawer {
+    width: min(280px, 88vw);
   }
 
   .toc-item.sub {
@@ -1442,14 +1684,8 @@ async function downloadReport(format: 'md' | 'docx' | 'pdf') {
     display: none;
   }
 
-  .reference-row,
-  .report-header {
+  .reference-card {
     flex-direction: column;
-    align-items: stretch;
-  }
-
-  .report-header-actions {
-    justify-content: flex-start;
   }
 }
 </style>

@@ -17,12 +17,13 @@ from app.modules.audit_logs.router import router as audit_router
 from app.modules.vector_store.router import router as vector_router
 from app.modules.system.router import router as system_router
 from app.modules.analytics.router import router as analytics_router
+from app.modules.dashboard.router import router as dashboard_router
 
 api_router = APIRouter()
 router_list = [
     auth_router, users_router, papers_router, qa_router, reports_router, comparisons_router, kg_router,exp_router,
     learning_router, paper_notes_router, formula_router, admin_router, model_router, tasks_router, audit_router, vector_router,system_router,
-    analytics_router
+    analytics_router, dashboard_router
 ]
 for router in router_list:
     api_router.include_router(router)

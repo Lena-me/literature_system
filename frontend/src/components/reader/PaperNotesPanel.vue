@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { notesApi } from '@/api/notes'
@@ -249,12 +249,12 @@ defineExpose({ scrollToNote, flashNote })
 
 .note-card:hover {
   border-color: #93C5FD;
-  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.08);
+  box-shadow: 0 4px 14px rgba(166, 124, 82, 0.08);
 }
 
 .note-card--flash {
   border-color: #3B82F6;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.22);
+  box-shadow: 0 0 0 3px rgba(166, 124, 82, 0.22);
   animation: noteFlash 1.2s ease-in-out 1;
 }
 
@@ -279,7 +279,7 @@ defineExpose({ scrollToNote, flashNote })
   margin: 0 0 6px;
   font-size: 13px;
   line-height: 1.55;
-  color: #334155;
+  color: var(--text-primary);
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -290,7 +290,7 @@ defineExpose({ scrollToNote, flashNote })
   margin: 0 0 8px;
   font-size: 13px;
   line-height: 1.6;
-  color: #475569;
+  color: var(--text-primary);
   white-space: pre-wrap;
 }
 
@@ -314,9 +314,9 @@ defineExpose({ scrollToNote, flashNote })
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.5;
-  color: #334155;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  color: var(--text-primary);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-light);
   border-radius: 6px;
   white-space: pre-wrap;
   word-break: break-word;

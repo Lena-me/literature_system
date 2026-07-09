@@ -157,8 +157,8 @@ onMounted(async () => {
 
     <div v-if="!notebook.activeSessionId" class="welcome-screen">
       <div class="welcome-spark">✦</div>
-      <h2>欢迎使用 AI 研读工作台</h2>
-      <p>在左侧选择一个会话开始探索，或者上传文献获得智能分析。</p>
+      <h2>欢迎使用探索中心</h2>
+      <p>在左侧选择一条研究记录开始探索，或者上传文献获得智能分析。</p>
     </div>
 
     <template v-else>
@@ -177,7 +177,11 @@ onMounted(async () => {
             <MessageList @source-click="onSourceClick" @visual-click="onVisualClick" />
           </template>
         </div>
-        <ChatInput class="chat-input-dock" @files-uploaded="onChatInputFilesUploaded" />
+        <ChatInput
+          class="chat-input-dock"
+          @files-uploaded="onChatInputFilesUploaded"
+          @paper-click="onChipClick"
+        />
       </div>
     </template>
 
@@ -198,7 +202,6 @@ onMounted(async () => {
   flex-direction: column;
   position: relative;
   overflow: hidden;
-  background: var(--academic-canvas);
 }
 
 .dnd-overlay {

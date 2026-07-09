@@ -72,40 +72,53 @@ function icon(item: QAToolArtifact): string {
 </template>
 
 <style scoped>
+/* ========================================
+   附件卡片重构 (ToolArtifacts.vue)
+   ======================================== */
 .tool-artifacts {
-  margin-top: 12px;
+  margin-top: 16px;
   width: 100%;
-  max-width: 800px;
 }
 
 .tool-artifacts-head {
   font-size: 12px;
-  color: var(--academic-text-muted);
+  color: var(--text-tertiary);
   margin-bottom: 8px;
+  text-transform: uppercase;
 }
 
 .artifact-card {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
-  padding: 12px 14px;
+  padding: 12px 16px;
   margin-bottom: 8px;
   border-radius: 12px;
-  border: 1px solid rgba(124, 58, 237, 0.25);
-  background: linear-gradient(135deg, rgba(124, 58, 237, 0.06), rgba(99, 102, 241, 0.04));
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-light);
   cursor: pointer;
   text-align: left;
-  transition: all 0.18s ease;
+  transition: all 0.2s ease;
 }
 
 .artifact-card:hover {
-  border-color: rgba(124, 58, 237, 0.45);
-  transform: translateX(3px);
+  background: var(--bg-surface);
+  border-color: rgba(196, 154, 108, 0.4);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
 }
 
 .artifact-icon {
   font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: #ffffff;
+  border-radius: 10px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
   flex-shrink: 0;
 }
 
@@ -120,7 +133,7 @@ function icon(item: QAToolArtifact): string {
 .artifact-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--academic-text-body);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -128,11 +141,17 @@ function icon(item: QAToolArtifact): string {
 
 .artifact-hint {
   font-size: 12px;
-  color: var(--academic-text-muted);
+  color: var(--text-secondary);
 }
 
 .artifact-arrow {
-  color: #7c3aed;
+  color: var(--text-tertiary);
   font-size: 16px;
+  transition: color 0.2s, transform 0.2s;
+}
+
+.artifact-card:hover .artifact-arrow {
+  color: var(--el-color-primary);
+  transform: translateX(4px);
 }
 </style>

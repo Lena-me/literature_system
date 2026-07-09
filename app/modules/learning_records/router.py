@@ -237,6 +237,15 @@ async def _analyze_knowledge_domains(db: AsyncSession, user_id: int, total_paper
         primary = row.primary_domain
         primary_freq_pre[primary] = primary_freq_pre.get(primary, 0) + row.paper_count
 
+    # 该 primary 下是否存在 secondary/tertiary 级 leaf
+    primaries_with_finer_leaves: set[str] = set()
+    for row in all_rows:
+        prim = row.primary_domain
+        if row.secondary_domain and row.secondary_domain != 'None' and str(row.secondary_domain).strip():
+            primaries_with_finer_leaves.add(prim)
+        elif row.tertiary_domain and row.tertiary_domain != 'None' and str(row.tertiary_domain).strip():
+            primaries_with_finer_leaves.add(prim)
+
     for row in all_rows:
         primary = row.primary_domain
         secondary = row.secondary_domain
@@ -254,10 +263,9 @@ async def _analyze_knowledge_domains(db: AsyncSession, user_id: int, total_paper
         else:
             leaf = primary
 
-        if leaf == primary:
-            domain_total = primary_freq_pre.get(primary, 0)
-            if domain_total > 2:
-                continue
+        # 仅当该 primary 已有更细粒度 leaf 时，才忽略 primary 级 leaf，避免与二级/三级重复
+        if leaf == primary and primary in primaries_with_finer_leaves:
+            continue
 
         if leaf not in primary_map[primary]:
             primary_map[primary][leaf] = {'_self': 0}
@@ -310,11 +318,14 @@ async def _analyze_knowledge_domains(db: AsyncSession, user_id: int, total_paper
         ):
             valid_tertiaries = {k: v for k, v in tertiaries.items() if k != '_self'}
             total_sec = sum(tertiaries.values())
+            paper_titles = sec_papers.get(secondary, [])
+            if not paper_titles:
+                paper_titles = leaf_papers.get(f"{primary} · {secondary}", leaf_papers.get(f"{primary} · {primary}", []))
             sub_domains.append({
                 'name': secondary,
                 'frequency': total_sec,
                 'tertiary_count': len(valid_tertiaries) if valid_tertiaries else 0,
-                'papers': sec_papers.get(secondary, [])[:5],
+                'papers': paper_titles[:5],
             })
             # 收集叶子节点用于跨学科星盘
             if valid_tertiaries:
@@ -332,8 +343,18 @@ async def _analyze_knowledge_domains(db: AsyncSession, user_id: int, total_paper
                     'origin_primary': primary,
                     'name': leaf_name,
                     'frequency': total_sec,
-                    'papers': leaf_papers.get(leaf_name, [])[:5],
+                    'papers': leaf_papers.get(leaf_name, leaf_papers.get(f"{primary} · {primary}", []))[:5],
                 })
+        # 兜底：有文献但无任何 leaf（历史数据或解析异常）
+        if not sub_domains and domain_total > 0:
+            leaf_key = f"{primary} · {primary}"
+            sub_domains.append({
+                'name': primary,
+                'frequency': domain_total,
+                'tertiary_count': 0,
+                'papers': leaf_papers.get(leaf_key, [])[:5],
+                'is_primary_only': True,
+            })
         # 判断大类阈值区分主领域/长尾跨学科
         domain_item = {
             'name': primary,
@@ -382,7 +403,7 @@ async def _analyze_knowledge_domains(db: AsyncSession, user_id: int, total_paper
             d.pop('_leaves', None)
 
         top_domains_list.append({
-            'name': '其他学科领域',
+            'name': '领域分布',
             'frequency': sum(d['frequency'] for d in small_domains),
             'sub_domains': interdisciplinary_sub_domains,
             'sub_domain_count': len(interdisciplinary_sub_domains),
@@ -498,159 +519,26 @@ async def overview(db: AsyncSession = Depends(get_db), user: User = Depends(get_
         },
         'keyword_evolution': keyword_evolution,
         'recommended_domain': recommended_domain,
-        'research_interests': [kw for kw, _ in sorted(keyword_cloud.items(), key=lambda x: -x[1])[:3]]
+        'research_interests': [kw for kw, _ in sorted(keyword_cloud.items(), key=lambda x: -x[1])[:3]],
     }
 
 
 @router.get('/monthly-report')
-async def monthly_report(month: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
-    """生成月度科研学习报告，聚合本月上传文献、报告、知识图谱、问答数据，调用LLM生成AI总结"""
-    from app.integrations.llm.openai_compatible import OpenAICompatibleLLM
+async def monthly_report(
+    month: str,
+    force: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """获取或生成月度科研学习报告，结果持久化到 learning_records。"""
+    from fastapi import HTTPException
+    from app.services.activity_report_service import get_or_generate_guidance
 
     try:
         year, m = map(int, month.split('-'))
+        if m < 1 or m > 12:
+            raise ValueError
     except ValueError:
-        from fastapi import HTTPException
         raise HTTPException(400, '月份格式错误，应为 YYYY-MM')
 
-    month_start = datetime(year, m, 1)
-    if m == 12:
-        month_end = datetime(year + 1, 1, 1)
-    else:
-        month_end = datetime(year, m + 1, 1)
-
-    # 1. 本月上传文献
-    papers = (await db.execute(
-        select(Paper).where(
-            Paper.user_id == user.id,
-            Paper.is_deleted == False,
-            Paper.upload_time >= month_start,
-            Paper.upload_time < month_end
-        ).order_by(Paper.upload_time.desc())
-    )).scalars().all()
-    paper_count = len(papers)
-
-    # 2. 本月研读报告
-    reports = (await db.execute(
-        select(Report).where(
-            Report.user_id == user.id,
-            Report.created_at >= month_start,
-            Report.created_at < month_end
-        ).order_by(Report.created_at.desc())
-    )).scalars().all()
-    report_count = len(reports)
-
-    # 3. 本月知识图谱
-    graph_count = (await db.execute(
-        select(func.count()).select_from(KnowledgeGraph).where(
-            KnowledgeGraph.user_id == user.id,
-            KnowledgeGraph.created_at >= month_start,
-            KnowledgeGraph.created_at < month_end
-        )
-    )).scalar_one()
-
-    # 4. 本月AI问答
-    qa_count = (await db.execute(
-        select(func.count()).select_from(QAMessage).join(
-            QASession, QAMessage.session_id == QASession.id
-        ).where(
-            QASession.user_id == user.id,
-            QAMessage.role == 'user',
-            QAMessage.created_at >= month_start,
-            QAMessage.created_at < month_end
-        )
-    )).scalar_one()
-
-    # 5. 本月对比分析
-    comparison_count = (await db.execute(
-        select(func.count()).select_from(ComparisonResult).where(
-            ComparisonResult.user_id == user.id,
-            ComparisonResult.created_at >= month_start,
-            ComparisonResult.created_at < month_end
-        )
-    )).scalar_one()
-
-    # 6. 专注时长
-    from app.models import LearningDuration
-    focus_minutes = (await db.execute(
-        select(func.coalesce(func.sum(LearningDuration.duration_minutes), 0))
-        .where(
-            LearningDuration.user_id == user.id,
-            LearningDuration.record_date >= month_start.date(),
-            LearningDuration.record_date < month_end.date()
-        )
-    )).scalar_one()
-
-    # 7. 文献关键词
-    keywords_by_year, keyword_cloud = _extract_keywords_from_papers(papers)
-    top_keywords = [kw for kw, _ in sorted(keyword_cloud.items(), key=lambda x: -x[1])[:8]]
-
-    # 8. 论文标题列表
-    paper_titles = [p.title for p in papers[:20] if p.title]
-
-    # 构建LLM请求数据
-    data_context = f"""本月数据概览（{month}）：
-- 上传文献：{paper_count} 篇
-- 研读报告：{report_count} 份
-- 知识图谱：{graph_count} 个
-- AI问答：{qa_count} 次
-- 对比分析：{comparison_count} 次
-- 专注学习时长：{focus_minutes} 分钟
-- 高频关键词：{', '.join(top_keywords) if top_keywords else '无'}
-- 文献列表：{', '.join(paper_titles[:10]) if paper_titles else '无'}"""
-
-    prompt = f"""角色：你是一位有10年经验的科研导师，擅长从学习数据中提炼洞察，风格是「数据驱动、温和鞭策」。
-
-## 用户本月学习数据
-
-{data_context}
-
-## 输出要求
-
-1. 结构：严格分三段，每段带小标题（使用 ## 格式）
-2. 长度：总字数 600-900 字，每段 200-300 字
-3. 语气：70% 客观分析 + 30% 鼓励，避免空洞表扬，具体指出进步点
-4. 必须引用具体数据（如「本月上传 {paper_count} 篇文献，其中 {report_count} 份已完成研读报告」），禁止泛泛而谈
-
-## 内容要求
-
-### 一、研究重心演进
-基于高频关键词和文献列表，梳理本月的研究主题变化，指出是否出现方向聚焦或发散。如果文献数量少于 3 篇，明确说明「文献数据不足，趋势分析仅供参考」。
-
-### 二、知识盲区与问答复盘
-基于问答次数和对比分析次数，评估知识掌握程度。如果问答次数少于 5 次，明确说明「问答数据不足，无法精准定位知识盲区」。结合关键词给出可能需要加强的方向。
-
-### 三、下月规划建议
-基于当前进度，给出 2-3 条具体可执行的文献研读建议，每条标注优先级（高/中）。建议要具体到领域方向，不要空泛。
-
-## 重要约束
-- 数据不足的部分必须明确说明，禁止编造数据
-- 所有结论必须有数据支撑
-- 鼓励要具体，不要用「你很棒」这种空话
-- 用第二人称「你」来称呼用户"""
-
-    try:
-        llm = OpenAICompatibleLLM(scenario='monthly_report')
-        generated = await llm.async_chat(
-            [
-                {'role': 'system', 'content': '你是一位有10年经验的科研导师，擅长从学习数据中提炼洞察，风格是「数据驱动、温和鞭策」。你只根据用户提供的真实数据进行分析，绝不编造不存在的信息。'},
-                {'role': 'user', 'content': prompt},
-            ],
-            temperature=0.3,
-            max_tokens=3000,
-        )
-        generated = generated.strip()
-    except Exception as e:
-        generated = f'AI 总结生成失败：{str(e)}，请稍后重试。'
-
-    return {
-        'month': month,
-        'paper_count': paper_count,
-        'report_count': report_count,
-        'graph_count': graph_count,
-        'qa_count': qa_count,
-        'comparison_count': comparison_count,
-        'focus_minutes': focus_minutes,
-        'paper_titles': paper_titles[:10],
-        'summary': generated,
-    }
+    return await get_or_generate_guidance(db, user, 'monthly', month, force=force)
